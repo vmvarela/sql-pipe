@@ -207,8 +207,14 @@ pub fn main() !void {
 
     var errmsg: [*c]u8 = null;
     if (c.sqlite3_exec(db, query_z, callback, null, &errmsg) != c.SQLITE_OK) {
-        std.debug.print("Query error: {s}\n", .{std.mem.span(errmsg)});
-        c.sqlite3_free(errmsg);
+        const msg = if (errmsg != null)
+            std.mem.span(errmsg)
+        else
+            std.mem.span(c.sqlite3_errmsg(db));
+        std.debug.print("Query error: {s}\n", .{msg});
+        if (errmsg != null) {
+            c.sqlite3_free(errmsg);
+        }
         std.process.exit(1);
     }
 }
