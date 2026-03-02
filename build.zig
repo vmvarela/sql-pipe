@@ -47,4 +47,16 @@ pub fn build(b: *std.Build) void {
     test_cmd.step.dependOn(b.getInstallStep());
     const test_step = b.step("test", "Run integration tests");
     test_step.dependOn(&test_cmd.step);
+
+    // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
+    const unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/csv.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_unit_tests = b.addRunArtifact(unit_tests);
+    const unit_test_step = b.step("unit-test", "Run CSV unit tests");
+    unit_test_step.dependOn(&run_unit_tests.step);
 }
