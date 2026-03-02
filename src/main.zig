@@ -82,13 +82,33 @@ fn parseHeader(
     }
 
     var cols: std.ArrayList([]const u8) = .{};
-    errdefer cols.deinit(allocator);
+    errdefer {
+        for (cols.items) |col| allocator.free(col);
+        cols.deinit(allocator);
+    }
 
-    // Loop invariant I: cols contains trimmed, non-empty names for record[0..i]
+    // seen: maps a column name to the number of times it has appeared so far.
+    // Pre:  seen is empty
+    // Post: seen[name] = count of occurrences in record[0..i]
+    var seen = std.StringHashMap(usize).init(allocator);
+    defer seen.deinit();
+
+    // Loop invariant I: cols contains trimmed, non-empty (possibly suffixed) names for record[0..i]
+    //                   seen maps each base name to its occurrence count up to i
+    //                   all items in cols are heap-allocated (owned by allocator)
     // Bounding function: record.len - i  (natural, decreasing, lower-bounded by 0)
     for (record) |field| {
-        const col = std.mem.trim(u8, field, " \t\r");
-        if (col.len == 0) return error.EmptyColumnName;
+        const base = std.mem.trim(u8, field, " \t\r");
+        if (base.len == 0) return error.EmptyColumnName;
+
+        const count = (seen.get(base) orelse 0) + 1;
+        try seen.put(base, count);
+
+        const col: []const u8 = if (count == 1)
+            try allocator.dupe(u8, base)
+        else
+            try std.fmt.allocPrint(allocator, "{s}_{d}", .{ base, count });
+
         try cols.append(allocator, col);
     }
 
@@ -129,6 +149,8 @@ fn createTable(
 
     var errmsg: [*c]u8 = null;
     if (c.sqlite3_exec(db, sql.items.ptr, null, null, &errmsg) != c.SQLITE_OK) {
+        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
+        std.debug.print("CREATE TABLE failed: {s}\n", .{msg});
         if (errmsg != null) c.sqlite3_free(errmsg);
         return error.CreateTableFailed;
     }
@@ -302,7 +324,10 @@ pub fn main() !void {
         }
         return;
     };
-    defer allocator.free(cols);
+    defer {
+        for (cols) |col| allocator.free(col);
+        allocator.free(cols);
+    }
     // {A3: cols is a non-empty list of trimmed, BOM-free column names}
 
     const num_cols = cols.len;
