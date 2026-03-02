@@ -497,7 +497,7 @@ change-title-escapes: '\<*_&'
 version-resolver:
   major:
     labels:
-      - "breaking"
+      - "type:breaking"
   minor:
     labels:
       - "type:feature"
