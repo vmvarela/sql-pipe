@@ -39,14 +39,33 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // Integration test: pipe a small CSV and check the output
-    const test_cmd = b.addSystemCommand(&.{
-        "sh", "-c",
-        \\printf 'name,age\nAlice,30\nBob,25\nCarol,35' | ./zig-out/bin/sql-pipe 'SELECT name FROM t WHERE CAST(age AS INT) > 27' | diff - <(printf 'Alice\nCarol\n')
+    // Integration test 1: type inference — numeric comparisons work without CAST
+    const test_infer = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\nBob,25\nCarol,35' | ./zig-out/bin/sql-pipe 'SELECT name FROM t WHERE age > 27' | diff - <(printf 'Alice\nCarol\n')
     });
-    test_cmd.step.dependOn(b.getInstallStep());
+    test_infer.step.dependOn(b.getInstallStep());
+
+    // Integration test 2: --no-type-inference preserves legacy TEXT behavior
+    // With TEXT comparison: "9" > "2" is true, but "10" > "2" is false (string: "1" < "2")
+    // So only Alice is returned, proving string comparison is used
+    const test_no_infer = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,val\nAlice,9\nBob,10\n' | ./zig-out/bin/sql-pipe --no-type-inference 'SELECT name FROM t WHERE val > 2 ORDER BY name' | diff - <(printf 'Alice\n')
+    });
+    test_no_infer.step.dependOn(b.getInstallStep());
+
+    // Integration test 3: max/min on REAL columns return numeric results
+    const test_real = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'item,price\nA,9.99\nB,3.00\nC,12.50\n' | ./zig-out/bin/sql-pipe 'SELECT max(price), min(price) FROM t' | diff - <(printf '12.5,3.0\n')
+    });
+    test_real.step.dependOn(b.getInstallStep());
+
     const test_step = b.step("test", "Run integration tests");
-    test_step.dependOn(&test_cmd.step);
+    test_step.dependOn(&test_infer.step);
+    test_step.dependOn(&test_no_infer.step);
+    test_step.dependOn(&test_real.step);
 
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{

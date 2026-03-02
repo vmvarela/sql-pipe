@@ -5,8 +5,11 @@ const c = @cImport({
 const csv = @import("csv.zig");
 
 // SQLITE_STATIC (null): SQLite assumes the memory is constant and won't free it.
-// Safe because sqlite3_step is called immediately after binding, before the row
-// buffer is freed.
+// Safety: sqlite3_step is called inside insertRowTyped immediately after all
+// bindings, returning SQLITE_DONE before the function returns. The caller's
+// row buffer is only freed after insertRowTyped returns, so the bound pointers
+// remain valid throughout the statement's execution. sqlite3_reset at the top
+// of the next call releases any prior references.
 const SQLITE_STATIC: c.sqlite3_destructor_type = null;
 
 // ─── Error types ─────────────────────────────────────────────────────────────
@@ -354,7 +357,8 @@ fn insertRowTyped(
 
         if (val.len == 0) {
             // Empty / NULL value → bind as SQL NULL regardless of column type
-            _ = c.sqlite3_bind_null(stmt, col_idx);
+            if (c.sqlite3_bind_null(stmt, col_idx) != c.SQLITE_OK)
+                return error.BindFailed;
         } else switch (col_type) {
             .INTEGER => {
                 if (std.fmt.parseInt(i64, val, 10)) |n| {
@@ -386,7 +390,8 @@ fn insertRowTyped(
     // Bind NULL for any trailing columns the row is short of
     // Loop invariant: params 1..col_idx-1 are bound; col_idx..param_count become NULL
     while (col_idx <= param_count) : (col_idx += 1) {
-        _ = c.sqlite3_bind_null(stmt, col_idx);
+        if (c.sqlite3_bind_null(stmt, col_idx) != c.SQLITE_OK)
+            return error.BindFailed;
     }
 
     if (c.sqlite3_step(stmt) != c.SQLITE_DONE) return error.StepFailed;
