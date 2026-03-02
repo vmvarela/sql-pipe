@@ -48,6 +48,9 @@ jobs:
       - name: Build
         run: zig build -Dbundle-sqlite=true -Doptimize=ReleaseSafe
 
+      - name: Unit tests (csv.zig)
+        run: zig build unit-test
+
       - name: Integration test (Unix)
         if: runner.os != 'Windows'
         run: |
