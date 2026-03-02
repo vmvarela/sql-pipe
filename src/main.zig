@@ -65,7 +65,20 @@ pub fn main() !void {
     defer cols.deinit(allocator);
     {
         var it = std.mem.splitScalar(u8, headers_str, ',');
-        while (it.next()) |col| try cols.append(allocator, col);
+        var valid_col_count: usize = 0;
+        while (it.next()) |col_raw| {
+            const col = std.mem.trim(u8, col_raw, " \t\r");
+            if (col.len == 0) {
+                std.debug.print("Error: empty column name in header\n", .{});
+                std.process.exit(1);
+            }
+            try cols.append(allocator, col);
+            valid_col_count += 1;
+        }
+        if (valid_col_count == 0) {
+            std.debug.print("Error: no valid column names in header\n", .{});
+            std.process.exit(1);
+        }
     }
     const num_cols = cols.items.len;
 
