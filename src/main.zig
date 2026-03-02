@@ -164,11 +164,22 @@ pub fn main() !void {
                 std.process.exit(1);
             }
         }
-        const rc_step = c.sqlite3_step(stmt);
-        if (rc_step != c.SQLITE_DONE) {
-            const err_msg = c.sqlite3_errmsg(db);
-            std.debug.print("sqlite3_step error while inserting row: {s}\n", .{std.mem.span(err_msg)});
-            std.process.exit(1);
+        _ = c.sqlite3_reset(stmt);
+        _ = c.sqlite3_clear_bindings(stmt);
+
+        const param_count: c_int = c.sqlite3_bind_parameter_count(stmt);
+        var col_idx: c_int = 1;
+        var it = std.mem.splitScalar(u8, row, ',');
+        while (it.next()) |val| : (col_idx += 1) {
+            if (col_idx > param_count) {
+                std.debug.print("Warning: CSV row has more fields than expected; extra fields will be ignored.\n", .{});
+                break;
+            }
+            _ = c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_TRANSIENT);
+        }
+        // Bind NULL for any remaining parameters if the row has fewer fields.
+        while (col_idx <= param_count) : (col_idx += 1) {
+            _ = c.sqlite3_bind_null(stmt, col_idx);
         }
     }
 
