@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  SQLITE_VERSION: "3490100"
+  SQLITE_YEAR: "2025"
+  ZIG_VERSION: "0.15.0"
+
+jobs:
+  build-and-test:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Download SQLite amalgamation
+        shell: bash
+        run: |
+          mkdir -p lib
+          curl -fsSL "https://www.sqlite.org/${{ env.SQLITE_YEAR }}/sqlite-amalgamation-${{ env.SQLITE_VERSION }}.zip" -o sqlite.zip
+          python3 -c "
+          import zipfile, os
+          os.makedirs('lib', exist_ok=True)
+          with zipfile.ZipFile('sqlite.zip') as z:
+              for f in z.namelist():
+                  if f.endswith(('sqlite3.c', 'sqlite3.h')):
+                      data = z.read(f)
+                      with open('lib/' + os.path.basename(f), 'wb') as out:
+                          out.write(data)
+          print('SQLite amalgamation ready')
+          "
+
+      - name: Build
+        run: zig build -Dbundle-sqlite=true -Doptimize=ReleaseSafe
+
+      - name: Integration test (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          result=$(printf 'name,age\nAlice,30\nBob,25\nCarol,35' | ./zig-out/bin/sql-pipe "SELECT name FROM t WHERE CAST(age AS INT) > 27")
+          expected=$'Alice\nCarol'
+          if [ "$result" != "$expected" ]; then
+            echo "FAIL: expected '$expected', got '$result'"
+            exit 1
+          fi
+          echo "PASS"
+
+      - name: Integration test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $result = "name,age`nAlice,30`nBob,25`nCarol,35" | .\zig-out\bin\sql-pipe.exe "SELECT name FROM t WHERE CAST(age AS INT) > 27"
+          $expected = @("Alice", "Carol")
+          $lines = $result -split "`n" | Where-Object { $_ -ne "" }
+          if ($lines.Count -ne 2 -or $lines[0].Trim() -ne "Alice" -or $lines[1].Trim() -ne "Carol") {
+            Write-Error "FAIL: unexpected output: $result"
+            exit 1
+          }
+          Write-Host "PASS"

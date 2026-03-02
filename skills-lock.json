@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "github-scrum": {
+      "source": "vmvarela/skills",
+      "sourceType": "github",
+      "computedHash": "bd3a54a4642636902b07068b63924052e5a7862a084e30793c67fee3152e3363"
+    },
+    "methodical-programming": {
+      "source": "vmvarela/skills",
+      "sourceType": "github",
+      "computedHash": "8b7e5a032daffae7b33aa801b60c6dff502b2c3ae5f00ba7b8939fd026a89572"
+    },
+    "pragmatic-docs": {
+      "source": "vmvarela/skills",
+      "sourceType": "github",
+      "computedHash": "dac6e01eb6fea09ac6e2c2ce8db56ac98b2d6023edcab8c8ec576c3d7bff0e38"
+    }
+  }
+}

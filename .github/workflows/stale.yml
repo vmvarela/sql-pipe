@@ -1,0 +1,24 @@
+name: Stale Issues
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Every Monday at 9:00 UTC
+
+permissions:
+  issues: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          stale-issue-message: >
+            This issue has been inactive for 30 days.
+            It will be reviewed in the next backlog refinement.
+            If it's still relevant, remove the `stale` label.
+          stale-issue-label: "stale"
+          days-before-stale: 30
+          days-before-close: -1 # Never auto-close
+          exempt-issue-labels: "status:in-progress,status:blocked,mvp,priority:critical,priority:high"
+          exempt-milestones: true # Don't mark sprint items as stale

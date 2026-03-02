@@ -1,0 +1,69 @@
+name: Backlog Item
+description: Add a new item to the Product Backlog
+title: "[BACKLOG] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: "## New Backlog Item"
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs to be done and why?
+      placeholder: "As a user, I want to... so that..."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Conditions that must be true for this to be Done
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+    validations:
+      required: true
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type
+      options:
+        - feature
+        - bug
+        - chore
+        - spike
+        - docs
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - critical
+        - high
+        - medium
+        - low
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Estimated Size
+      options:
+        - "xs (< 1 hour)"
+        - "s (1-4 hours)"
+        - "m (4-8 hours)"
+        - "l (1-2 days)"
+        - "xl (> 2 days — consider splitting)"
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Technical Notes
+      description: Dependencies, constraints, implementation ideas
+      placeholder: "Depends on #... / Blocked by... / Consider using..."
+    validations:
+      required: false
