@@ -1,0 +1,8 @@
+.{
+    .name = .sql_pipe,
+    .version = "0.1.0",
+    .fingerprint = 0xf649b9ac95d768ab,
+    .minimum_zig_version = "0.13.0",
+    .paths = .{"."},
+    .dependencies = .{},
+}
