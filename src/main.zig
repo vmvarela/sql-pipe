@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("sqlite3.h");
 });
+const csv = @import("csv.zig");
 
 // SQLITE_STATIC (null): SQLite assumes the memory is constant and won't free it.
 // Safe here because sqlite3_step is called immediately after binding,
@@ -49,47 +50,36 @@ pub fn main() !void {
 
     const stdin = std.fs.File.stdin().deprecatedReader();
 
-    // 3. Read header line and generate schema
-    const header_line = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 1024 * 1024) orelse {
+    // 3. Read header record and generate schema using RFC 4180 CSV parser
+    var csv_reader = csv.csvReader(stdin, allocator);
+
+    const header_record = (try csv_reader.nextRecord()) orelse {
         std.debug.print("Error: empty input\n", .{});
         std.process.exit(1);
     };
-    defer allocator.free(header_line);
+    defer csv_reader.freeRecord(header_record);
 
-    // Trim trailing \r (Windows line endings)
-    const headers_trimmed = if (header_line.len > 0 and header_line[header_line.len - 1] == '\r')
-        header_line[0 .. header_line.len - 1]
-    else
-        header_line;
-
-    // Strip UTF-8 BOM (\xEF\xBB\xBF) if present
+    // Strip UTF-8 BOM (\xEF\xBB\xBF) from the first field if present
     const bom = "\xEF\xBB\xBF";
-    const headers_str = if (std.mem.startsWith(u8, headers_trimmed, bom))
-        headers_trimmed[bom.len..]
-    else
-        headers_trimmed;
+    if (header_record.len > 0 and std.mem.startsWith(u8, header_record[0], bom)) {
+        const without_bom = header_record[0][bom.len..];
+        allocator.free(header_record[0]);
+        header_record[0] = try allocator.dupe(u8, without_bom);
+    }
 
-    // Parse column names
+    // Parse column names: trim whitespace (preserve existing behaviour for unquoted headers)
     var cols: std.ArrayList([]const u8) = .{};
     defer cols.deinit(allocator);
     {
-        var it = std.mem.splitScalar(u8, headers_str, ',');
-        var valid_col_count: usize = 0;
-        while (it.next()) |col_raw| {
-            const col_trimmed = std.mem.trim(u8, col_raw, " \t\r");
-            // Strip surrounding double quotes (CSV quoted fields)
-            const col = if (col_trimmed.len >= 2 and col_trimmed[0] == '"' and col_trimmed[col_trimmed.len - 1] == '"')
-                col_trimmed[1 .. col_trimmed.len - 1]
-            else
-                col_trimmed;
+        for (header_record) |field| {
+            const col = std.mem.trim(u8, field, " \t\r");
             if (col.len == 0) {
                 std.debug.print("Error: empty column name in header\n", .{});
                 std.process.exit(1);
             }
             try cols.append(allocator, col);
-            valid_col_count += 1;
         }
-        if (valid_col_count == 0) {
+        if (cols.items.len == 0) {
             std.debug.print("Error: no valid column names in header\n", .{});
             std.process.exit(1);
         }
@@ -166,41 +156,32 @@ pub fn main() !void {
     }
     defer _ = c.sqlite3_finalize(stmt);
 
-    // 5. Read and insert data rows
+    // 5. Read and insert data rows using the RFC 4180 CSV reader
     while (true) {
-        const line = try stdin.readUntilDelimiterOrEofAlloc(allocator, '\n', 1024 * 1024) orelse break;
-        defer allocator.free(line);
+        const record = (try csv_reader.nextRecord()) orelse break;
+        defer csv_reader.freeRecord(record);
 
-        const row = if (line.len > 0 and line[line.len - 1] == '\r')
-            line[0 .. line.len - 1]
-        else
-            line;
-        if (row.len == 0) continue;
+        if (record.len == 0) continue;
 
         _ = c.sqlite3_reset(stmt);
         _ = c.sqlite3_clear_bindings(stmt);
 
         const param_count: c_int = c.sqlite3_bind_parameter_count(stmt);
         var col_idx: c_int = 1;
-        var it = std.mem.splitScalar(u8, row, ',');
-        while (it.next()) |val_raw| : (col_idx += 1) {
+        for (record) |val| {
             if (col_idx > param_count) {
                 std.debug.print("Warning: CSV row has more fields than expected; extra fields will be ignored.\n", .{});
                 break;
             }
-            // Strip surrounding double quotes (CSV quoted fields)
-            const val = if (val_raw.len >= 2 and val_raw[0] == '"' and val_raw[val_raw.len - 1] == '"')
-                val_raw[1 .. val_raw.len - 1]
-            else
-                val_raw;
             const rc_bind = c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_STATIC);
             if (rc_bind != c.SQLITE_OK) {
                 const err_msg = c.sqlite3_errmsg(db);
                 std.debug.print("sqlite3_bind_text error (param {d}): {s}\n", .{ col_idx, std.mem.span(err_msg) });
                 std.process.exit(1);
             }
+            col_idx += 1;
         }
-        // Bind NULL for any remaining parameters if the row has fewer fields.
+        // Bind NULL for any columns the row is short of.
         while (col_idx <= param_count) : (col_idx += 1) {
             _ = c.sqlite3_bind_null(stmt, col_idx);
         }
