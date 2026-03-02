@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+env:
+  SQLITE_VERSION: "3490100"
+  SQLITE_YEAR: "2025"
+  ZIG_VERSION: "0.15.0"
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux — statically linked via musl, no system dependencies
+          - target: x86_64-linux-musl
+            asset: sql-pipe-x86_64-linux
+            ext: ""
+          - target: aarch64-linux-musl
+            asset: sql-pipe-aarch64-linux
+            ext: ""
+          - target: arm-linux-musleabihf
+            asset: sql-pipe-armv7-linux
+            ext: ""
+          - target: riscv64-linux-musl
+            asset: sql-pipe-riscv64-linux
+            ext: ""
+          - target: x86-linux-musl
+            asset: sql-pipe-x86-linux
+            ext: ""
+          # macOS — Zig bundles the macOS SDK for cross-compilation
+          - target: x86_64-macos
+            asset: sql-pipe-x86_64-macos
+            ext: ""
+          - target: aarch64-macos
+            asset: sql-pipe-aarch64-macos
+            ext: ""
+          # Windows — MinGW ABI, no MSVC required
+          - target: x86_64-windows-gnu
+            asset: sql-pipe-x86_64-windows
+            ext: ".exe"
+          - target: aarch64-windows-gnu
+            asset: sql-pipe-aarch64-windows
+            ext: ".exe"
+          - target: x86-windows-gnu
+            asset: sql-pipe-x86-windows
+            ext: ".exe"
+          # FreeBSD — Zig bundles libc headers for cross-compilation
+          - target: x86_64-freebsd
+            asset: sql-pipe-x86_64-freebsd
+            ext: ""
+          - target: aarch64-freebsd
+            asset: sql-pipe-aarch64-freebsd
+            ext: ""
+          # NetBSD
+          - target: x86_64-netbsd
+            asset: sql-pipe-x86_64-netbsd
+            ext: ""
+          - target: aarch64-netbsd
+            asset: sql-pipe-aarch64-netbsd
+            ext: ""
+          # OpenBSD
+          - target: x86_64-openbsd
+            asset: sql-pipe-x86_64-openbsd
+            ext: ""
+          # DragonFly BSD
+          - target: x86_64-dragonfly
+            asset: sql-pipe-x86_64-dragonfly
+            ext: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Download SQLite amalgamation
+        run: |
+          mkdir -p lib
+          curl -fsSL "https://www.sqlite.org/${{ env.SQLITE_YEAR }}/sqlite-amalgamation-${{ env.SQLITE_VERSION }}.zip" -o sqlite.zip
+          unzip -j sqlite.zip "*/sqlite3.c" "*/sqlite3.h" -d lib/
+          echo "SQLite $(grep -m1 SQLITE_VERSION lib/sqlite3.h | awk '{print $3}')"
+
+      - name: Build
+        run: |
+          zig build \
+            -Dbundle-sqlite=true \
+            -Dtarget=${{ matrix.target }} \
+            -Doptimize=ReleaseSafe
+
+      - name: Stage artifact
+        run: |
+          mkdir -p dist
+          cp zig-out/bin/sql-pipe${{ matrix.ext }} dist/${{ matrix.asset }}${{ matrix.ext }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  release:
+    name: Attach assets to release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        working-directory: artifacts
+        run: sha256sum * | tee sha256sums.txt
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" artifacts/* \
+            --repo "${{ github.repository }}" \
+            --clobber

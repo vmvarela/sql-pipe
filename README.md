@@ -19,12 +19,16 @@ Pre-built binaries for Linux, macOS (Intel + Apple Silicon), and Windows are ava
 
 ### Build from source
 
-Requires [Zig 0.15+](https://ziglang.org/download/) and `libsqlite3` (usually pre-installed on macOS; `apt install libsqlite3-dev` on Debian/Ubuntu).
+Requires [Zig 0.15+](https://ziglang.org/download/). SQLite is compiled from the official amalgamation so there are no system dependencies.
 
 ```sh
 git clone https://github.com/vmvarela/sql-pipe
 cd sql-pipe
-zig build -Doptimize=ReleaseSafe
+# Download the SQLite amalgamation (one-time setup)
+mkdir -p lib
+curl -fsSL https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip -o sqlite.zip
+unzip -j sqlite.zip '*/sqlite3.c' '*/sqlite3.h' -d lib/
+zig build -Dbundle-sqlite=true -Doptimize=ReleaseSafe
 # binary is at ./zig-out/bin/sql-pipe
 ```
 
@@ -100,7 +104,6 @@ Because the database never touches disk, it vanishes the moment the process exit
 - **No RFC 4180 quoted fields yet.** Fields containing commas or embedded newlines will be parsed incorrectly ([#3](https://github.com/vmvarela/sql-pipe/issues/3)).
 - **Single table per invocation.** For multi-table joins, chain with a second `sql-pipe` or use a `WITH` CTE that re-expresses the logic.
 - **No output header row.** The result is raw data rows only ([#10](https://github.com/vmvarela/sql-pipe/issues/10)).
-- **Requires system `libsqlite3`.** SQLite is not bundled; it must be present on the target machine.
 
 ## Related
 
