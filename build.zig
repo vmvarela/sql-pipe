@@ -40,11 +40,11 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     // Integration test: pipe a small CSV and check the output
-    const test_cmd = b.addSystemCommand(&.{"sh", "-c",
+    const test_cmd = b.addSystemCommand(&.{
+        "sh", "-c",
         \\printf 'name,age\nAlice,30\nBob,25\nCarol,35' | ./zig-out/bin/sql-pipe 'SELECT name FROM t WHERE CAST(age AS INT) > 27' | diff - <(printf 'Alice\nCarol\n')
     });
     test_cmd.step.dependOn(b.getInstallStep());
     const test_step = b.step("test", "Run integration tests");
     test_step.dependOn(&test_cmd.step);
 }
-

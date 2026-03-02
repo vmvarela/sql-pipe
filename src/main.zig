@@ -57,10 +57,17 @@ pub fn main() !void {
     defer allocator.free(header_line);
 
     // Trim trailing \r (Windows line endings)
-    const headers_str = if (header_line.len > 0 and header_line[header_line.len - 1] == '\r')
+    const headers_trimmed = if (header_line.len > 0 and header_line[header_line.len - 1] == '\r')
         header_line[0 .. header_line.len - 1]
     else
         header_line;
+
+    // Strip UTF-8 BOM (\xEF\xBB\xBF) if present
+    const bom = "\xEF\xBB\xBF";
+    const headers_str = if (std.mem.startsWith(u8, headers_trimmed, bom))
+        headers_trimmed[bom.len..]
+    else
+        headers_trimmed;
 
     // Parse column names
     var cols: std.ArrayList([]const u8) = .{};
@@ -69,7 +76,12 @@ pub fn main() !void {
         var it = std.mem.splitScalar(u8, headers_str, ',');
         var valid_col_count: usize = 0;
         while (it.next()) |col_raw| {
-            const col = std.mem.trim(u8, col_raw, " \t\r");
+            const col_trimmed = std.mem.trim(u8, col_raw, " \t\r");
+            // Strip surrounding double quotes (CSV quoted fields)
+            const col = if (col_trimmed.len >= 2 and col_trimmed[0] == '"' and col_trimmed[col_trimmed.len - 1] == '"')
+                col_trimmed[1 .. col_trimmed.len - 1]
+            else
+                col_trimmed;
             if (col.len == 0) {
                 std.debug.print("Error: empty column name in header\n", .{});
                 std.process.exit(1);
@@ -171,11 +183,16 @@ pub fn main() !void {
         const param_count: c_int = c.sqlite3_bind_parameter_count(stmt);
         var col_idx: c_int = 1;
         var it = std.mem.splitScalar(u8, row, ',');
-        while (it.next()) |val| : (col_idx += 1) {
+        while (it.next()) |val_raw| : (col_idx += 1) {
             if (col_idx > param_count) {
                 std.debug.print("Warning: CSV row has more fields than expected; extra fields will be ignored.\n", .{});
                 break;
             }
+            // Strip surrounding double quotes (CSV quoted fields)
+            const val = if (val_raw.len >= 2 and val_raw[0] == '"' and val_raw[val_raw.len - 1] == '"')
+                val_raw[1 .. val_raw.len - 1]
+            else
+                val_raw;
             const rc_bind = c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_STATIC);
             if (rc_bind != c.SQLITE_OK) {
                 const err_msg = c.sqlite3_errmsg(db);
@@ -227,6 +244,19 @@ pub fn main() !void {
         if (errmsg != null) {
             c.sqlite3_free(errmsg);
         }
+        // Print detected columns to help diagnose name/encoding mismatches
+        std.debug.print("Detected columns ({d}):", .{cols.items.len});
+        for (cols.items, 0..) |col, i| {
+            if (i > 0) std.debug.print(",", .{});
+            std.debug.print(" \"{s}\"", .{col});
+            // Print hex bytes for non-ASCII characters
+            for (col) |ch| {
+                if (ch > 127 or ch < 32) {
+                    std.debug.print("[0x{x:0>2}]", .{ch});
+                }
+            }
+        }
+        std.debug.print("\n", .{});
         std.process.exit(1);
     }
 }
