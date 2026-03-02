@@ -93,7 +93,22 @@ pub fn main() !void {
     // 4. Begin transaction for batched inserts
     {
         var errmsg: [*c]u8 = null;
-        _ = c.sqlite3_exec(db, "BEGIN TRANSACTION", null, null, &errmsg);
+        const rc = c.sqlite3_exec(db, "BEGIN TRANSACTION", null, null, &errmsg);
+        if (rc != c.SQLITE_OK) {
+            if (errmsg != null) {
+                std.debug.print("BEGIN TRANSACTION failed: {s}\n", .{std.mem.span(errmsg)});
+                c.sqlite3_free(errmsg);
+            } else {
+                std.debug.print("BEGIN TRANSACTION failed with code {d}\n", .{rc});
+            }
+            // Attempt to rollback any partial transaction state
+            var rb_errmsg: [*c]u8 = null;
+            _ = c.sqlite3_exec(db, "ROLLBACK", null, null, &rb_errmsg);
+            if (rb_errmsg != null) {
+                c.sqlite3_free(rb_errmsg);
+            }
+            std.process.exit(1);
+        }
     }
 
     // Prepare INSERT statement once
