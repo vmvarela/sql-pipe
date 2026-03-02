@@ -3,8 +3,10 @@ const c = @cImport({
     @cInclude("sqlite3.h");
 });
 
-// SQLITE_TRANSIENT: SQLite copies the value immediately, so the buffer can be reused.
-const SQLITE_TRANSIENT: c.sqlite3_destructor_type = @ptrFromInt(std.math.maxInt(usize));
+// SQLITE_STATIC (null): SQLite assumes the memory is constant and won't free it.
+// Safe here because sqlite3_step is called immediately after binding,
+// before the row buffer is freed by the deferred allocator.free.
+const SQLITE_STATIC: c.sqlite3_destructor_type = null;
 
 fn callback(data: ?*anyopaque, argc: c_int, argv: [*c][*c]u8, col_names: [*c][*c]u8) callconv(.c) c_int {
     _ = data;
@@ -89,7 +91,13 @@ pub fn main() !void {
         try sql.appendSlice(allocator, "CREATE TABLE t (");
         for (cols.items, 0..) |col, i| {
             if (i > 0) try sql.appendSlice(allocator, ", ");
-            try sql.appendSlice(allocator, col);
+            // Quote identifier with double quotes; escape embedded double quotes by doubling them
+            try sql.append(allocator, '"');
+            for (col) |ch| {
+                if (ch == '"') try sql.append(allocator, '"');
+                try sql.append(allocator, ch);
+            }
+            try sql.append(allocator, '"');
             try sql.appendSlice(allocator, " TEXT");
         }
         try sql.appendSlice(allocator, ")");
@@ -97,8 +105,12 @@ pub fn main() !void {
 
         var errmsg: [*c]u8 = null;
         if (c.sqlite3_exec(db, sql.items.ptr, null, null, &errmsg) != c.SQLITE_OK) {
-            std.debug.print("CREATE TABLE failed: {s}\n", .{std.mem.span(errmsg)});
-            c.sqlite3_free(errmsg);
+            const msg = if (errmsg != null)
+                std.mem.span(errmsg)
+            else
+                std.mem.span(c.sqlite3_errmsg(db));
+            std.debug.print("CREATE TABLE failed: {s}\n", .{msg});
+            if (errmsg != null) c.sqlite3_free(errmsg);
             std.process.exit(1);
         }
     }
@@ -154,17 +166,6 @@ pub fn main() !void {
         if (row.len == 0) continue;
 
         _ = c.sqlite3_reset(stmt);
-        var col_idx: c_int = 1;
-        var it = std.mem.splitScalar(u8, row, ',');
-        while (it.next()) |val| : (col_idx += 1) {
-            const rc_bind = c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_TRANSIENT);
-            if (rc_bind != c.SQLITE_OK) {
-                const err_msg = c.sqlite3_errmsg(db);
-                std.debug.print("sqlite3_bind_text error (param {d}): {s}\n", .{ col_idx, std.mem.span(err_msg) });
-                std.process.exit(1);
-            }
-        }
-        _ = c.sqlite3_reset(stmt);
         _ = c.sqlite3_clear_bindings(stmt);
 
         const param_count: c_int = c.sqlite3_bind_parameter_count(stmt);
@@ -175,11 +176,22 @@ pub fn main() !void {
                 std.debug.print("Warning: CSV row has more fields than expected; extra fields will be ignored.\n", .{});
                 break;
             }
-            _ = c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_TRANSIENT);
+            const rc_bind = c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_STATIC);
+            if (rc_bind != c.SQLITE_OK) {
+                const err_msg = c.sqlite3_errmsg(db);
+                std.debug.print("sqlite3_bind_text error (param {d}): {s}\n", .{ col_idx, std.mem.span(err_msg) });
+                std.process.exit(1);
+            }
         }
         // Bind NULL for any remaining parameters if the row has fewer fields.
         while (col_idx <= param_count) : (col_idx += 1) {
             _ = c.sqlite3_bind_null(stmt, col_idx);
+        }
+        const rc_step = c.sqlite3_step(stmt);
+        if (rc_step != c.SQLITE_DONE) {
+            const err_msg = c.sqlite3_errmsg(db);
+            std.debug.print("sqlite3_step error while inserting row: {s}\n", .{std.mem.span(err_msg)});
+            std.process.exit(1);
         }
     }
 
@@ -218,5 +230,3 @@ pub fn main() !void {
         std.process.exit(1);
     }
 }
-
-
