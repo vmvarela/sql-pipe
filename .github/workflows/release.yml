@@ -65,14 +65,6 @@ jobs:
           - target: aarch64-netbsd
             asset: sql-pipe-aarch64-netbsd
             ext: ""
-          # OpenBSD
-          - target: x86_64-openbsd
-            asset: sql-pipe-x86_64-openbsd
-            ext: ""
-          # DragonFly BSD
-          - target: x86_64-dragonfly
-            asset: sql-pipe-x86_64-dragonfly
-            ext: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -111,6 +103,7 @@ jobs:
   release:
     name: Attach assets to release
     needs: build
+    if: ${{ always() && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
