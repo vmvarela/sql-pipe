@@ -39,10 +39,10 @@ Bob,25
 Carol,35
 ```
 
-All columns are loaded as `TEXT`. Cast explicitly when you need numeric behavior:
+Columns are auto-detected as `INTEGER`, `REAL`, or `TEXT` based on the first 100 rows. Use `--no-type-inference` to force all columns to `TEXT`:
 
 ```sh
-$ cat orders.csv | sql-pipe 'SELECT COUNT(*), AVG(CAST(amount AS REAL)) FROM t WHERE status = "paid"'
+$ cat orders.csv | sql-pipe 'SELECT COUNT(*), AVG(amount) FROM t WHERE status = "paid"'
 142,87.35
 ```
 
@@ -57,8 +57,27 @@ Chain queries by piping back in — useful for two-pass aggregations:
 ```sh
 $ cat events.csv \
   | sql-pipe 'SELECT user_id, COUNT(*) as n FROM t GROUP BY user_id' \
-  | sql-pipe 'SELECT * FROM t WHERE CAST(n AS INT) > 100'
+  | sql-pipe 'SELECT * FROM t WHERE n > 100'
 ```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
+| `-h`, `--help` | Show usage help and exit |
+| `-V`, `--version` | Print version and exit |
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Usage error (missing query, bad arguments) |
+| `2` | CSV parse error (with row number) |
+| `3` | SQL error (with sqlite3 error message) |
+
+All error messages are prefixed with `error:` and written to stderr.
 
 ## How it works
 
@@ -68,8 +87,6 @@ The database never touches disk and vanishes when the process exits. No state, n
 
 ## Limitations
 
-- **All columns are `TEXT`.** Use `CAST(col AS INT)` or `CAST(col AS REAL)` when sorting or comparing numbers. Type inference is planned ([#4](https://github.com/vmvarela/sql-pipe/issues/4)).
-- **No RFC 4180 quoted fields.** Fields containing commas or embedded newlines will be parsed incorrectly ([#3](https://github.com/vmvarela/sql-pipe/issues/3)).
 - **No output header row.** Results are raw data only ([#10](https://github.com/vmvarela/sql-pipe/issues/10)).
 - **Single table per invocation.** For joins, use chained `sql-pipe` calls or a `WITH` CTE.
 

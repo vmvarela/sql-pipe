@@ -8,6 +8,9 @@ pub fn build(b: *std.Build) void {
     // linking the system library. Required for cross-compilation.
     const bundle_sqlite = b.option(bool, "bundle-sqlite", "Compile SQLite from lib/sqlite3.c (enables cross-compilation)") orelse false;
 
+    // Version injected at build time from build.zig.zon
+    const version = "0.1.0";
+
     const exe = b.addExecutable(.{
         .name = "sql-pipe",
         .root_module = b.createModule(.{
@@ -17,6 +20,11 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+
+    // Inject version string as a compile-time option accessible via @import("build_options")
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", version);
+    exe.root_module.addOptions("build_options", build_options);
 
     if (bundle_sqlite) {
         exe.addIncludePath(b.path("lib"));
@@ -66,6 +74,38 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_infer.step);
     test_step.dependOn(&test_no_infer.step);
     test_step.dependOn(&test_real.step);
+
+    // Integration test 4: --help flag prints usage to stderr and exits 0
+    const test_help = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --help 2>&1 >/dev/null | grep -q 'Usage: sql-pipe'
+    });
+    test_help.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_help.step);
+
+    // Integration test 5: --version flag prints version to stderr and exits 0
+    const test_version = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --version 2>&1 >/dev/null | grep -q 'sql-pipe'
+    });
+    test_version.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_version.step);
+
+    // Integration test 6: missing query exits with code 1
+    const test_missing_query = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe 2>/dev/null; test $? -eq 1
+    });
+    test_missing_query.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_missing_query.step);
+
+    // Integration test 7: SQL error exits with code 3 and prefixes with "error:"
+    const test_sql_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe 'SELECT * FROM nonexistent' 2>&1 >/dev/null; echo "EXIT:$?"); echo "$msg" | grep -q '^error:' && echo "$msg" | grep -q 'EXIT:3'
+    });
+    test_sql_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_error.step);
 
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
