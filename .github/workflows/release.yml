@@ -1,8 +1,9 @@
 name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*.*.*"
 
 env:
   SQLITE_VERSION: "3490100"
@@ -125,10 +126,20 @@ jobs:
         working-directory: artifacts
         run: sha256sum * | tee sha256sums.txt
 
-      - name: Upload assets to release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.ref_name }}" artifacts/* \
-            --repo "${{ github.repository }}" \
-            --clobber
+          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
+            gh release edit "${{ github.ref_name }}" --draft=false \
+              --repo "${{ github.repository }}"
+            gh release upload "${{ github.ref_name }}" artifacts/* \
+              --repo "${{ github.repository }}" \
+              --clobber
+          else
+            gh release create "${{ github.ref_name }}" \
+              --title "${{ github.ref_name }}" \
+              --generate-notes \
+              --repo "${{ github.repository }}" \
+              artifacts/*
+          fi
