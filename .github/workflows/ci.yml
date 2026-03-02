@@ -28,6 +28,15 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
+      - name: Cache Zig
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/zig
+            ~/AppData/Local/zig
+          key: zig-cache-${{ matrix.os }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: zig-cache-${{ matrix.os }}-
+
       - name: Download SQLite amalgamation
         shell: bash
         run: |
@@ -50,6 +59,10 @@ jobs:
 
       - name: Unit tests (csv.zig)
         run: zig build unit-test
+
+      - name: Integration tests (build.zig)
+        if: runner.os != 'Windows'
+        run: zig build test
 
       - name: Integration test (Unix)
         if: runner.os != 'Windows'
