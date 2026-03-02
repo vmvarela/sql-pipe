@@ -186,7 +186,19 @@ pub fn main() !void {
     // Commit transaction
     {
         var errmsg: [*c]u8 = null;
-        _ = c.sqlite3_exec(db, "COMMIT", null, null, &errmsg);
+        const rc = c.sqlite3_exec(db, "COMMIT", null, null, &errmsg);
+        if (rc != c.SQLITE_OK) {
+            if (errmsg != null) {
+                std.debug.print("Commit error: {s}\n", .{std.mem.span(errmsg)});
+                c.sqlite3_free(errmsg);
+            } else {
+                std.debug.print("Commit error with no message. SQLite error code: {d}\n", .{rc});
+            }
+            std.process.exit(1);
+        }
+        if (errmsg != null) {
+            c.sqlite3_free(errmsg);
+        }
     }
 
     // 6. Execute user query and print results
