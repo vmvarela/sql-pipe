@@ -112,7 +112,8 @@ fn isInteger(val: []const u8) bool {
 /// isReal(val) → bool
 /// Pre:  val is a valid UTF-8 slice
 /// Post: result = val is parseable as a 64-bit floating-point number
-///       AND is not an integer (otherwise isInteger should be used)
+/// Note: returns true for integers too; callers should check isInteger first
+///       for finer classification.
 fn isReal(val: []const u8) bool {
     if (val.len == 0) return false;
     _ = std.fmt.parseFloat(f64, val) catch return false;
@@ -271,12 +272,11 @@ fn createTable(
             try sql.append(allocator, ch);
         }
         try sql.append(allocator, '"');
-        const type_str: []const u8 = if (i < types.len) switch (types[i]) {
+        try sql.appendSlice(allocator, switch (types[i]) {
             .INTEGER => " INTEGER",
             .REAL => " REAL",
             .TEXT => " TEXT",
-        } else " TEXT";
-        try sql.appendSlice(allocator, type_str);
+        });
     }
     try sql.appendSlice(allocator, ")");
     try sql.append(allocator, 0); // null-terminate for the C API
