@@ -18,6 +18,13 @@ pub const CsvError = error{
 
 // ─── State machine ────────────────────────────────────────────────────────────
 
+/// Representation invariant of the parser automaton:
+///   field_start  ↔  we are at the start of a new field; `field` is empty
+///   unquoted     ↔  we are inside an unquoted field; `field` holds bytes read so far
+///   quoted       ↔  we are inside a quoted field (after the opening '"');
+///                   `field` holds decoded bytes (excluding the opening quote)
+///   quote_saw    ↔  we just read a '"' while in `quoted`;
+///                   the quote is either an escape prefix ("") or the closing quote
 const State = enum {
     /// Beginning of a new field (no bytes consumed for it yet).
     field_start,
@@ -59,9 +66,15 @@ pub fn CsvReader(comptime ReaderType: type) type {
 
         /// Read the next CSV record.
         ///
-        /// Returns a heap-allocated `[][]u8` (slice of field strings), or `null`
-        /// when there are no more records.  The caller MUST free the result with
-        /// `freeRecord`.
+        /// Pre:  self.done = false  (otherwise returns null immediately)
+        ///       self.reader is positioned at the start of the next record
+        ///       self.allocator is valid
+        /// Post: result = null  ⟺  no more records exist in the input
+        ///       result = fields  ⟺  fields is a heap-allocated [][]u8 where
+        ///           fields[i] is the UTF-8 content of the i-th field of the record,
+        ///           decoded according to RFC 4180 ("" → ", embedded newlines preserved)
+        ///       On error.UnterminatedQuotedField: input ended inside a quoted field
+        ///       All returned memory must be freed with freeRecord.
         pub fn nextRecord(self: *Self) !?[][]u8 {
             if (self.done) return null;
 
@@ -77,6 +90,14 @@ pub fn CsvReader(comptime ReaderType: type) type {
             var state: State = .field_start;
             var has_data = false;
 
+            // Loop invariant I:
+            //   `state` satisfies the representation invariant of the automaton.
+            //   `field` contains the decoded bytes of the field currently being parsed.
+            //   `fields` contains the completed, heap-allocated fields of this record.
+            //   All bytes read from `reader` so far have been processed exactly once.
+            // Bounding function:
+            //   Number of bytes remaining in `reader` (finite input; decreases by 1
+            //   each iteration except on the EOF branch which exits immediately).
             while (true) {
                 const byte = self.reader.readByte() catch |err| switch (err) {
                     error.EndOfStream => {
@@ -186,6 +207,11 @@ pub fn CsvReader(comptime ReaderType: type) type {
         }
 
         /// Release a record previously returned by `nextRecord`.
+        ///
+        /// Pre:  record was returned by nextRecord on this CsvReader instance
+        ///       (same allocator); not yet freed.
+        /// Post: every field string in record and the record slice itself are freed;
+        ///       no further access to record or its elements is valid.
         pub fn freeRecord(self: *Self, record: [][]u8) void {
             for (record) |f| self.allocator.free(f);
             self.allocator.free(record);
