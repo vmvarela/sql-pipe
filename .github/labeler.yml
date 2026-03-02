@@ -1,0 +1,20 @@
+"type:docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "LICENSE*"
+          - "CHANGELOG*"
+
+"type:chore":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "build.zig"
+          - "build.zig.zon"
+          - ".gitignore"
+          - ".editorconfig"
+
+"type:feature":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**"

@@ -1,0 +1,50 @@
+name: Bug Report
+description: Report something that isn't working correctly
+title: "[BUG] "
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description of the bug
+      placeholder: "When I do X, Y happens instead of Z"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the bug
+      placeholder: |
+        1. Pipe this CSV: ...
+        2. Run: sql-pipe 'SELECT ...'
+        3. See error...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Environment / Context
+      description: OS, sql-pipe version, Zig version (if built from source)
+      placeholder: "macOS 15, sql-pipe v0.1.0"
+    validations:
+      required: false
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Severity
+      options:
+        - "critical — app crashes or data loss"
+        - "high — major feature broken, no workaround"
+        - "medium — feature broken but workaround exists"
+        - "low — cosmetic or minor annoyance"
+    validations:
+      required: true

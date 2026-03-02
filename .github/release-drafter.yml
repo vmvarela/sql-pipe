@@ -1,0 +1,40 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+categories:
+  - title: "🚀 Features"
+    labels:
+      - "type:feature"
+  - title: "🐛 Bug Fixes"
+    labels:
+      - "type:bug"
+  - title: "🧰 Maintenance"
+    labels:
+      - "type:chore"
+      - "tech-debt"
+  - title: "📝 Documentation"
+    labels:
+      - "type:docs"
+  - title: "🔬 Spikes & Research"
+    labels:
+      - "type:spike"
+change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
+change-title-escapes: '\<*_&'
+version-resolver:
+  major:
+    labels:
+      - "breaking"
+  minor:
+    labels:
+      - "type:feature"
+  patch:
+    labels:
+      - "type:bug"
+      - "type:chore"
+      - "type:docs"
+  default: patch
