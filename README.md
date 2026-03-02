@@ -1,6 +1,7 @@
 # sql-pipe
 
 [![CI](https://github.com/vmvarela/sql-pipe/actions/workflows/ci.yml/badge.svg)](https://github.com/vmvarela/sql-pipe/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/vmvarela/sql-pipe)](https://github.com/vmvarela/sql-pipe/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 `sql-pipe` reads CSV from stdin, loads it into an in-memory SQLite database, runs a SQL query, and prints the results as CSV. No server, no schema files, no setup.
@@ -71,13 +72,51 @@ $ cat events.csv \
 ### Exit Codes
 
 | Code | Meaning |
-|------|---------|
+|------|----------|
 | `0` | Success |
 | `1` | Usage error (missing query, bad arguments) |
 | `2` | CSV parse error (with row number) |
 | `3` | SQL error (with sqlite3 error message) |
 
 All error messages are prefixed with `error:` and written to stderr.
+
+## Recipes
+
+**Top N rows by a column:**
+
+```sh
+$ cat sales.csv | sql-pipe 'SELECT product, revenue FROM t ORDER BY revenue DESC LIMIT 10'
+```
+
+**Deduplicate rows:**
+
+```sh
+$ cat contacts.csv | sql-pipe 'SELECT DISTINCT email FROM t'
+```
+
+**Find rows with missing values:**
+
+```sh
+$ cat users.csv | sql-pipe 'SELECT * FROM t WHERE email = "" OR email IS NULL'
+```
+
+**Date range filter (dates stored as text):**
+
+```sh
+$ cat logs.csv | sql-pipe 'SELECT * FROM t WHERE ts >= "2024-01-01" AND ts < "2024-02-01"'
+```
+
+**Compute a derived column:**
+
+```sh
+$ cat products.csv | sql-pipe 'SELECT name, price, ROUND(price * 0.9, 2) as discounted FROM t'
+```
+
+**Pivot-like aggregation with conditional sums:**
+
+```sh
+$ cat orders.csv | sql-pipe 'SELECT region, SUM(CASE WHEN status="paid" THEN amount ELSE 0 END) as paid, SUM(CASE WHEN status="refunded" THEN amount ELSE 0 END) as refunded FROM t GROUP BY region'
+```
 
 ## How it works
 
@@ -95,4 +134,3 @@ The database never touches disk and vanishes when the process exits. No state, n
 - **[q](https://harelba.github.io/q/)** — similar concept in Python; handles quoted CSV fields and more formats. Better if you're already in a Python environment.
 - **[trdsql](https://github.com/noborus/trdsql)** — Go alternative with multi-format support (JSON, LTSV) and output formatting. Better if you need non-CSV inputs.
 - **[sqlite-utils](https://sqlite-utils.datasette.io/)** — better if you need persistent databases, schema management, or Python scripting.
-
