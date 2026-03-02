@@ -157,9 +157,19 @@ pub fn main() !void {
         var col_idx: c_int = 1;
         var it = std.mem.splitScalar(u8, row, ',');
         while (it.next()) |val| : (col_idx += 1) {
-            _ = c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_TRANSIENT);
+            const rc_bind = c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_TRANSIENT);
+            if (rc_bind != c.SQLITE_OK) {
+                const err_msg = c.sqlite3_errmsg(db);
+                std.debug.print("sqlite3_bind_text error (param {d}): {s}\n", .{ col_idx, std.mem.span(err_msg) });
+                std.process.exit(1);
+            }
         }
-        _ = c.sqlite3_step(stmt);
+        const rc_step = c.sqlite3_step(stmt);
+        if (rc_step != c.SQLITE_DONE) {
+            const err_msg = c.sqlite3_errmsg(db);
+            std.debug.print("sqlite3_step error while inserting row: {s}\n", .{std.mem.span(err_msg)});
+            std.process.exit(1);
+        }
     }
 
     // Commit transaction
