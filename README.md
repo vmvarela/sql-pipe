@@ -16,6 +16,14 @@ $ curl -s https://example.com/data.csv | sql-pipe 'SELECT region, SUM(revenue) F
 
 Pre-built binaries for Linux, macOS (Intel + Apple Silicon), and Windows are on the [Releases page](https://github.com/vmvarela/sql-pipe/releases).
 
+**Arch Linux (AUR):** install with your preferred AUR helper:
+
+```sh
+yay -S sql-pipe
+# or
+paru -S sql-pipe
+```
+
 To build from source (requires [Zig 0.15+](https://ziglang.org/download/)):
 
 ```sh
