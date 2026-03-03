@@ -229,7 +229,7 @@ jobs:
           echo "==> Generated formula for sql-pipe ${VERSION}:"
           cat sql-pipe.rb
 
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/vmvarela/homebrew-tap.git" tap
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/vmvarela/homebrew-sql-pipe.git" tap
           mkdir -p tap/Formula
           cp sql-pipe.rb tap/Formula/sql-pipe.rb
           cd tap

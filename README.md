@@ -116,6 +116,7 @@ $ cat events.csv \
 | `-d`, `--delimiter <char>` | Input field delimiter (single character, default `,`) |
 | `--tsv` | Alias for `--delimiter '\t'` |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
+| `-H`, `--header` | Print column names as the first output row |
 | `-h`, `--help` | Show usage help and exit |
 | `-V`, `--version` | Print version and exit |
 
@@ -176,7 +177,6 @@ The database never touches disk and vanishes when the process exits. No state, n
 
 ## Limitations
 
-- **No output header row.** Results are raw data only ([#10](https://github.com/vmvarela/sql-pipe/issues/10)).
 - **Single table per invocation.** For joins, use chained `sql-pipe` calls or a `WITH` CTE.
 
 ## Related
