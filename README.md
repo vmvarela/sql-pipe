@@ -14,7 +14,14 @@ $ curl -s https://example.com/data.csv | sql-pipe 'SELECT region, SUM(revenue) F
 
 ## Quick Start
 
-Pre-built binaries for Linux, macOS (Intel + Apple Silicon), and Windows are on the [Releases page](https://github.com/vmvarela/sql-pipe/releases).
+**macOS / Linux via Homebrew:**
+
+```sh
+brew tap vmvarela/sql-pipe
+brew install sql-pipe
+```
+
+**Pre-built binaries** for Linux, macOS (Intel + Apple Silicon), and Windows are also available on the [Releases page](https://github.com/vmvarela/sql-pipe/releases).
 
 **Arch Linux (AUR):** install with your preferred AUR helper:
 
