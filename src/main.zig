@@ -62,6 +62,8 @@ const ParsedArgs = struct {
     type_inference: bool,
     /// Input field delimiter for CSV parsing.
     delimiter: u8,
+    /// When true, print a header row with column names before data rows.
+    header: bool,
 };
 
 /// Result of argument parsing — either parsed arguments or a special action.
@@ -90,6 +92,7 @@ fn printUsage(writer: anytype) !void {
         \\  -d, --delimiter <char>  Input field delimiter (default: ,)
         \\  --tsv                   Alias for --delimiter '\\t'
         \\  --no-type-inference  Treat all columns as TEXT (skip auto-detection)
+        \\  -H, --header         Print column names as the first output row
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
         \\
@@ -129,11 +132,13 @@ fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
     var delimiter: u8 = ',';
+    var header = false;
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
     //   type_inference reflects the presence of --no-type-inference;
-    //   delimiter reflects -d/--delimiter/--tsv if present
+    //   delimiter reflects -d/--delimiter/--tsv if present;
+    //   header reflects the presence of --header/-H
     // Bounding function: args.len - i
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -154,6 +159,8 @@ fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
             delimiter = try parseDelimiter(arg["-d=".len..]);
         } else if (std.mem.eql(u8, arg, "--no-type-inference")) {
             type_inference = false;
+        } else if (std.mem.eql(u8, arg, "--header") or std.mem.eql(u8, arg, "-H")) {
+            header = true;
         } else {
             if (query == null) query = arg;
         }
@@ -162,6 +169,7 @@ fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
         .query = query orelse return error.MissingQuery,
         .type_inference = type_inference,
         .delimiter = delimiter,
+        .header = header,
     } };
 }
 
@@ -516,11 +524,62 @@ fn printRow(
     try writer.writeByte('\n');
 }
 
-/// execQuery(db, query, allocator, writer) → !void
+/// writeField(writer, value) → !void
+/// Pre:  writer is a valid writer, value is a valid UTF-8 slice
+/// Post: value is written to writer as a single CSV field:
+///       if value contains comma, double-quote, or newline, it is enclosed
+///       in double-quotes with internal quotes escaped as "" (RFC 4180);
+///       otherwise it is written verbatim
+fn writeField(writer: anytype, value: []const u8) !void {
+    var needs_quoting = false;
+    for (value) |ch| {
+        if (ch == ',' or ch == '"' or ch == '\n' or ch == '\r') {
+            needs_quoting = true;
+            break;
+        }
+    }
+    if (needs_quoting) {
+        try writer.writeByte('"');
+        for (value) |ch| {
+            if (ch == '"') try writer.writeByte('"');
+            try writer.writeByte(ch);
+        }
+        try writer.writeByte('"');
+    } else {
+        try writer.writeAll(value);
+    }
+}
+
+/// printHeaderRow(stmt, col_count, writer) → !void
+/// Pre:  stmt is a prepared statement, col_count > 0
+/// Post: one CSV line with col_count column names written to writer;
+///       names are obtained from sqlite3_column_name (alias or original);
+///       fields are RFC 4180 quoted when they contain special characters
+fn printHeaderRow(
+    stmt: *c.sqlite3_stmt,
+    col_count: c_int,
+    writer: anytype,
+) !void {
+    // Loop invariant I: columns 0..i-1 names have been written, separated by commas
+    // Bounding function: col_count - i
+    var i: c_int = 0;
+    while (i < col_count) : (i += 1) {
+        if (i > 0) try writer.writeByte(',');
+        const name_ptr = c.sqlite3_column_name(stmt, i);
+        if (name_ptr != null) {
+            const name = std.mem.span(@as([*:0]const u8, @ptrCast(name_ptr)));
+            try writeField(writer, name);
+        }
+    }
+    try writer.writeByte('\n');
+}
+
+/// execQuery(db, query, allocator, writer, header) → !void
 /// Pre:  db is open with table `t` populated
 ///       query is a valid SQL string (not null-terminated)
 ///       allocator is valid
-/// Post: all result rows written to writer as CSV lines via printRow
+/// Post: if header = true, column names are written as the first CSV row
+///       all result rows written to writer as CSV lines via printRow
 ///       error.PrepareQueryFailed when sqlite3_prepare_v2 returns non-SQLITE_OK
 ///       propagates any writer I/O error
 fn execQuery(
@@ -528,6 +587,7 @@ fn execQuery(
     query: []const u8,
     allocator: std.mem.Allocator,
     writer: anytype,
+    header: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || @TypeOf(writer).Error)!void {
     const query_z = try allocator.dupeZ(u8, query);
     defer allocator.free(query_z);
@@ -538,6 +598,11 @@ fn execQuery(
     defer _ = c.sqlite3_finalize(stmt);
 
     const col_count = c.sqlite3_column_count(stmt);
+
+    // When header is requested, print column names before data rows
+    if (header and col_count > 0) {
+        try printHeaderRow(stmt.?, col_count, writer);
+    }
 
     // Loop invariant I: all SQLITE_ROW results returned so far have been printed
     // Bounding function: number of remaining rows in the result set (finite)
@@ -719,7 +784,7 @@ fn run(
     }
     // {A9: transaction committed; t holds all input rows, no active transaction}
 
-    execQuery(db, query, allocator, stdout_writer) catch |err| {
+    execQuery(db, query, allocator, stdout_writer, parsed.header) catch |err| {
         switch (err) {
             error.PrepareQueryFailed => {
                 fatal(stderr_writer, .sql_error, "{s}", .{std.mem.span(c.sqlite3_errmsg(db))});

@@ -40,6 +40,12 @@ OPTIONS
 		TEXT affinity for all columns in the SQLite table. This can improve
 		performance on very large datasets if type inference is not needed.
 
+	*-H, --header*
+		Print a header row with column names as the first line of output. Column
+		names are taken from the SQL column alias or original name. The output
+		remains valid CSV that can be piped back into sql-pipe. Header output is
+		off by default.
+
 	*-h, --help*
 		Print the help message and exit with code 0.
 
@@ -62,6 +68,14 @@ EXAMPLES
 	Filter rows where age is greater than 25:
 
 		$ sql-pipe 'SELECT name FROM t WHERE age > 25' < data.csv
+
+	Include a header row in the output:
+
+		$ cat data.csv | sql-pipe --header 'SELECT name, age FROM t'
+
+	Pipe output with header back into sql-pipe:
+
+		$ cat data.csv | sql-pipe -H 'SELECT \* FROM t' | sql-pipe 'SELECT name FROM t'
 
 	Process data with type inference disabled:
 
