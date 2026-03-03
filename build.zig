@@ -38,6 +38,24 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // Generate man page from scdoc source if scdoc (and gzip) are available (optional dependencies)
+    const man_step = b.step("man", "Generate man page with scdoc (optional)");
+
+    // Portable alternative: use a simple shell command that checks for scdoc/gzip availability
+    // The build step itself is lightweight and depends only on bash (standard on CI/Unix systems)
+    const build_man = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\if command -v scdoc >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1; then
+        \\  mkdir -p zig-out/share/man/man1
+        \\  scdoc < docs/sql-pipe.1.scd | gzip -c > zig-out/share/man/man1/sql-pipe.1.gz
+        \\  echo "✓ Generated man page: zig-out/share/man/man1/sql-pipe.1.gz"
+        \\else
+        \\  echo "⚠ scdoc and/or gzip not found. Install them to generate man page."
+        \\  echo "  Manual source: docs/sql-pipe.1.scd"
+        \\fi
+    });
+    man_step.dependOn(&build_man.step);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
