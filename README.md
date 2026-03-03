@@ -73,6 +73,15 @@ Column names with spaces work — quote them in SQL:
 $ cat report.csv | sql-pipe 'SELECT "first name", "last name" FROM t WHERE "dept id" = "42"'
 ```
 
+Use a custom input delimiter with `-d` / `--delimiter` (single character), or `--tsv` for tab-separated files:
+
+```sh
+$ cat data.psv | sql-pipe -d '|' 'SELECT * FROM t'
+$ cat data.tsv | sql-pipe --tsv 'SELECT * FROM t'
+# equivalent:
+$ cat data.tsv | sql-pipe --delimiter '\t' 'SELECT * FROM t'
+```
+
 Chain queries by piping back in — useful for two-pass aggregations:
 
 ```sh
@@ -85,6 +94,8 @@ $ cat events.csv \
 
 | Flag | Description |
 |------|-------------|
+| `-d`, `--delimiter <char>` | Input field delimiter (single character, default `,`) |
+| `--tsv` | Alias for `--delimiter '\t'` |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
 | `-h`, `--help` | Show usage help and exit |
 | `-V`, `--version` | Print version and exit |

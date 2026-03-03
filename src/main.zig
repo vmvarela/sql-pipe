@@ -20,6 +20,7 @@ const SQLITE_STATIC: c.sqlite3_destructor_type = null;
 
 const SqlPipeError = error{
     MissingQuery,
+    InvalidDelimiter,
     OpenDbFailed,
     EmptyInput,
     EmptyColumnName,
@@ -59,6 +60,8 @@ const ParsedArgs = struct {
     query: []const u8,
     /// When false, skip type inference and use TEXT for every column (pure TEXT mode).
     type_inference: bool,
+    /// Input field delimiter for CSV parsing.
+    delimiter: u8,
 };
 
 /// Result of argument parsing — either parsed arguments or a special action.
@@ -84,6 +87,8 @@ fn printUsage(writer: anytype) !void {
         \\runs <query>, and prints results as CSV to stdout.
         \\
         \\Options:
+        \\  -d, --delimiter <char>  Input field delimiter (default: ,)
+        \\  --tsv                   Alias for --delimiter '\\t'
         \\  --no-type-inference  Treat all columns as TEXT (skip auto-detection)
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
@@ -96,9 +101,21 @@ fn printUsage(writer: anytype) !void {
         \\
         \\Examples:
         \\  echo 'name,age\nAlice,30' | sql-pipe 'SELECT * FROM t'
+        \\  cat data.tsv | sql-pipe --tsv 'SELECT * FROM t'
+        \\  cat data.psv | sql-pipe -d '|' 'SELECT * FROM t'
         \\  cat data.csv | sql-pipe 'SELECT region, SUM(revenue) FROM t GROUP BY region'
         \\
     );
+}
+
+/// parseDelimiter(value) → u8
+/// Pre:  value is the delimiter token provided by the user
+/// Post: result is a single-byte delimiter, or '\t' when value = "\\t"
+///       error.InvalidDelimiter when value is empty or has more than one char
+fn parseDelimiter(value: []const u8) SqlPipeError!u8 {
+    if (std.mem.eql(u8, value, "\\t")) return '\t';
+    if (value.len != 1) return error.InvalidDelimiter;
+    return value[0];
 }
 
 /// parseArgs(args) → ArgsResult
@@ -111,16 +128,30 @@ fn printUsage(writer: anytype) !void {
 fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
+    var delimiter: u8 = ',';
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
-    //   type_inference reflects the presence of --no-type-inference
+    //   type_inference reflects the presence of --no-type-inference;
+    //   delimiter reflects -d/--delimiter/--tsv if present
     // Bounding function: args.len - i
-    for (args[1..]) |arg| {
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return .help;
         } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) {
             return .version;
+        } else if (std.mem.eql(u8, arg, "--tsv")) {
+            delimiter = '\t';
+        } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--delimiter")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidDelimiter;
+            delimiter = try parseDelimiter(args[i]);
+        } else if (std.mem.startsWith(u8, arg, "--delimiter=")) {
+            delimiter = try parseDelimiter(arg["--delimiter=".len..]);
+        } else if (std.mem.startsWith(u8, arg, "-d=")) {
+            delimiter = try parseDelimiter(arg["-d=".len..]);
         } else if (std.mem.eql(u8, arg, "--no-type-inference")) {
             type_inference = false;
         } else {
@@ -130,6 +161,7 @@ fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
     return .{ .parsed = ParsedArgs{
         .query = query orelse return error.MissingQuery,
         .type_inference = type_inference,
+        .delimiter = delimiter,
     } };
 }
 
@@ -578,7 +610,7 @@ fn run(
     // {A2: db is an open, empty in-memory SQLite database}
 
     const stdin = std.fs.File.stdin().deprecatedReader();
-    var csv_reader = csv.csvReader(stdin, allocator);
+    var csv_reader = csv.csvReaderWithDelimiter(stdin, allocator, parsed.delimiter);
 
     const header_record = csv_reader.nextRecord() catch |err| switch (err) {
         error.UnterminatedQuotedField => fatal(stderr_writer, .csv_error, "row 1: unterminated quoted field", .{}),
