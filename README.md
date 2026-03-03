@@ -23,6 +23,18 @@ brew install sql-pipe
 
 **Pre-built binaries** for Linux, macOS (Intel + Apple Silicon), and Windows are also available on the [Releases page](https://github.com/vmvarela/sql-pipe/releases).
 
+**Shell installer (Linux/macOS):**
+
+```sh
+curl -sSL https://raw.githubusercontent.com/vmvarela/sql-pipe/master/install.sh | sh
+```
+
+By default it installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
+
+```sh
+curl -sSL https://raw.githubusercontent.com/vmvarela/sql-pipe/master/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
+```
+
 **Arch Linux (AUR):** install with your preferred AUR helper:
 
 ```sh
