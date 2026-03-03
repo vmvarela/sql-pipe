@@ -19,10 +19,22 @@ DESCRIPTION
 	from the first 100 rows of data. Use *--no-type-inference* to disable this
 	behavior and treat all columns as TEXT.
 
+	By default, input fields are parsed as comma-separated values. Use
+	*--delimiter* (or *-d*) to parse other single-character delimiters, or *--tsv*
+	for tab-separated input.
+
 	Exit codes follow a structured convention for scripting integration (see EXIT CODES
 	section).
 
 OPTIONS
+	*-d, --delimiter* <char>
+		Use a custom single-character input field delimiter instead of comma.
+		Examples: *-d '|'* for pipe-separated files, *--delimiter '\\t'* for
+		tab-separated files.
+
+	*--tsv*
+		Alias for *--delimiter '\\t'*. Parses tab-separated input.
+
 	*--no-type-inference*
 		Treat all columns as TEXT. Skips automatic type detection and uses plain
 		TEXT affinity for all columns in the SQLite table. This can improve
@@ -35,16 +47,13 @@ OPTIONS
 		Print the version number and exit with code 0.
 
 EXAMPLES
-	Select all rows. Use a comma-separated list of columns or asterisk for all:
+	Select all rows:
 
-		$ cat <<'EOF' | sql-pipe 'SELECT name, age FROM t'
-		name,age
-		Alice,30
-		Bob,25
-		EOF
-		name,age
-		Alice,30
-		Bob,25
+		$ cat people.csv | sql-pipe 'SELECT name, age FROM t'
+
+	Output:++
+	Alice,30++
+	Bob,25
 
 	Group data by region and sum revenue:
 
@@ -57,6 +66,14 @@ EXAMPLES
 	Process data with type inference disabled:
 
 		$ cat numbers.csv | sql-pipe --no-type-inference 'SELECT name, id FROM t WHERE id = "001"'
+
+	Process pipe-separated input:
+
+		$ cat data.psv | sql-pipe -d '|' 'SELECT \* FROM t'
+
+	Process tab-separated input (TSV):
+
+		$ cat data.tsv | sql-pipe --tsv 'SELECT \* FROM t'
 
 EXIT CODES
 	*0*

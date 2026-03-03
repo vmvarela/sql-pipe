@@ -3,7 +3,7 @@
 //! No full-input buffering: every byte is processed exactly once.
 //! Supports:
 //!   - Quoted fields enclosed in double-quotes
-//!   - Embedded commas inside quoted fields
+//!   - Embedded delimiters inside quoted fields
 //!   - Escaped double-quotes ("") inside quoted fields → decoded to "
 //!   - Embedded newlines (\n, \r\n) inside quoted fields → multi-line value
 //!   - Both \r\n and \n record terminators (outside quoted fields)
@@ -56,12 +56,13 @@ pub fn CsvReader(comptime ReaderType: type) type {
     return struct {
         reader: ReaderType,
         allocator: std.mem.Allocator,
+        delimiter: u8,
         done: bool = false,
 
         const Self = @This();
 
-        pub fn init(reader: ReaderType, allocator: std.mem.Allocator) Self {
-            return .{ .reader = reader, .allocator = allocator };
+        pub fn init(reader: ReaderType, allocator: std.mem.Allocator, delimiter: u8) Self {
+            return .{ .reader = reader, .allocator = allocator, .delimiter = delimiter };
         }
 
         /// Read the next CSV record.
@@ -125,44 +126,46 @@ pub fn CsvReader(comptime ReaderType: type) type {
                 has_data = true;
 
                 switch (state) {
-                    .field_start => switch (byte) {
-                        '"' => {
-                            state = .quoted;
-                        },
-                        ',' => {
+                    .field_start => {
+                        if (byte == self.delimiter) {
                             // Empty unquoted field before delimiter.
                             try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
                             state = .field_start;
-                        },
-                        '\r' => {
-                            // Part of \r\n; ignore, \n will terminate the record.
-                        },
-                        '\n' => {
-                            // End of record — last field is empty.
-                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                            return try fields.toOwnedSlice(self.allocator);
-                        },
-                        else => {
-                            try field.append(self.allocator, byte);
-                            state = .unquoted;
-                        },
+                        } else switch (byte) {
+                            '"' => {
+                                state = .quoted;
+                            },
+                            '\r' => {
+                                // Part of \r\n; ignore, \n will terminate the record.
+                            },
+                            '\n' => {
+                                // End of record — last field is empty.
+                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                                return try fields.toOwnedSlice(self.allocator);
+                            },
+                            else => {
+                                try field.append(self.allocator, byte);
+                                state = .unquoted;
+                            },
+                        }
                     },
 
-                    .unquoted => switch (byte) {
-                        ',' => {
+                    .unquoted => {
+                        if (byte == self.delimiter) {
                             try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
                             state = .field_start;
-                        },
-                        '\r' => {
-                            // Strip \r before the \n record terminator.
-                        },
-                        '\n' => {
-                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                            return try fields.toOwnedSlice(self.allocator);
-                        },
-                        else => {
-                            try field.append(self.allocator, byte);
-                        },
+                        } else switch (byte) {
+                            '\r' => {
+                                // Strip \r before the \n record terminator.
+                            },
+                            '\n' => {
+                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                                return try fields.toOwnedSlice(self.allocator);
+                            },
+                            else => {
+                                try field.append(self.allocator, byte);
+                            },
+                        }
                     },
 
                     .quoted => switch (byte) {
@@ -176,31 +179,32 @@ pub fn CsvReader(comptime ReaderType: type) type {
                         },
                     },
 
-                    .quote_saw => switch (byte) {
-                        '"' => {
-                            // Escaped double-quote: "" → single "
-                            try field.append(self.allocator, '"');
-                            state = .quoted;
-                        },
-                        ',' => {
+                    .quote_saw => {
+                        if (byte == self.delimiter) {
                             // Closing quote followed by field delimiter.
                             try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
                             state = .field_start;
-                        },
-                        '\r' => {
-                            // Skip \r before \n record terminator.
-                        },
-                        '\n' => {
-                            // Closing quote followed by record terminator.
-                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                            return try fields.toOwnedSlice(self.allocator);
-                        },
-                        else => {
-                            // Non-standard content after closing quote; treat as
-                            // continuation of the field in unquoted mode.
-                            try field.append(self.allocator, byte);
-                            state = .unquoted;
-                        },
+                        } else switch (byte) {
+                            '"' => {
+                                // Escaped double-quote: "" → single "
+                                try field.append(self.allocator, '"');
+                                state = .quoted;
+                            },
+                            '\r' => {
+                                // Skip \r before \n record terminator.
+                            },
+                            '\n' => {
+                                // Closing quote followed by record terminator.
+                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                                return try fields.toOwnedSlice(self.allocator);
+                            },
+                            else => {
+                                // Non-standard content after closing quote; treat as
+                                // continuation of the field in unquoted mode.
+                                try field.append(self.allocator, byte);
+                                state = .unquoted;
+                            },
+                        }
                     },
                 }
             }
@@ -221,7 +225,12 @@ pub fn CsvReader(comptime ReaderType: type) type {
 
 /// Convenience constructor — infers `ReaderType` from the argument.
 pub fn csvReader(reader: anytype, allocator: std.mem.Allocator) CsvReader(@TypeOf(reader)) {
-    return CsvReader(@TypeOf(reader)).init(reader, allocator);
+    return csvReaderWithDelimiter(reader, allocator, ',');
+}
+
+/// Convenience constructor with custom input delimiter.
+pub fn csvReaderWithDelimiter(reader: anytype, allocator: std.mem.Allocator, delimiter: u8) CsvReader(@TypeOf(reader)) {
+    return CsvReader(@TypeOf(reader)).init(reader, allocator, delimiter);
 }
 
 // ─── Unit Tests ───────────────────────────────────────────────────────────────
@@ -363,4 +372,42 @@ test "entirely empty input returns null" {
     var csv = csvReader(stream.reader(), std.testing.allocator);
 
     try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
+}
+
+test "custom pipe delimiter" {
+    const input = "a|b|c\n1|2|3\n";
+    var stream = std.io.fixedBufferStream(input);
+    var csv = csvReaderWithDelimiter(stream.reader(), std.testing.allocator, '|');
+
+    const r1 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r1);
+    try std.testing.expectEqual(@as(usize, 3), r1.len);
+    try std.testing.expectEqualStrings("a", r1[0]);
+    try std.testing.expectEqualStrings("b", r1[1]);
+    try std.testing.expectEqualStrings("c", r1[2]);
+
+    const r2 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r2);
+    try std.testing.expectEqual(@as(usize, 3), r2.len);
+    try std.testing.expectEqualStrings("1", r2[0]);
+    try std.testing.expectEqualStrings("2", r2[1]);
+    try std.testing.expectEqualStrings("3", r2[2]);
+}
+
+test "custom tab delimiter" {
+    const input = "name\tage\nAlice\t30\n";
+    var stream = std.io.fixedBufferStream(input);
+    var csv = csvReaderWithDelimiter(stream.reader(), std.testing.allocator, '\t');
+
+    const r1 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r1);
+    try std.testing.expectEqual(@as(usize, 2), r1.len);
+    try std.testing.expectEqualStrings("name", r1[0]);
+    try std.testing.expectEqualStrings("age", r1[1]);
+
+    const r2 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r2);
+    try std.testing.expectEqual(@as(usize, 2), r2.len);
+    try std.testing.expectEqualStrings("Alice", r2[0]);
+    try std.testing.expectEqualStrings("30", r2[1]);
 }
