@@ -74,6 +74,11 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
+      - name: Install scdoc (to generate man page)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y scdoc
+
       - name: Download SQLite amalgamation
         run: |
           mkdir -p lib
@@ -88,16 +93,23 @@ jobs:
             -Dtarget=${{ matrix.target }} \
             -Doptimize=ReleaseSafe
 
+      - name: Generate man page
+        run: zig build man
+
       - name: Stage artifact
         run: |
           mkdir -p dist
           cp zig-out/bin/sql-pipe${{ matrix.ext }} dist/${{ matrix.asset }}${{ matrix.ext }}
+          # Include man page (generated the same way for all targets)
+          if [ -f zig-out/share/man/man1/sql-pipe.1.gz ]; then
+            cp zig-out/share/man/man1/sql-pipe.1.gz dist/sql-pipe.1.gz
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}${{ matrix.ext }}
+          path: dist/
           if-no-files-found: error
 
   release:
