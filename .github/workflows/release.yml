@@ -88,10 +88,12 @@ jobs:
 
       - name: Build
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           zig build \
             -Dbundle-sqlite=true \
             -Dtarget=${{ matrix.target }} \
-            -Doptimize=ReleaseSafe
+            -Doptimize=ReleaseSafe \
+            -Dversion="$VERSION"
 
       - name: Generate man page
         run: zig build man
@@ -148,3 +150,166 @@ jobs:
               --repo "${{ github.repository }}" \
               artifacts/*
           fi
+
+  # ── Update Homebrew tap ─────────────────────────────────────────────
+  # Requires:
+  #   1. Repository: vmvarela/homebrew-tap (with a Formula/ directory)
+  #   2. Secret: HOMEBREW_TAP_TOKEN (PAT with contents:write on the tap repo)
+  update-homebrew:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate formula and push to tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          SHA_MACOS_ARM64=$(sha256sum artifacts/sql-pipe-aarch64-macos | awk '{print $1}')
+          SHA_MACOS_X64=$(sha256sum artifacts/sql-pipe-x86_64-macos   | awk '{print $1}')
+          SHA_LINUX_ARM64=$(sha256sum artifacts/sql-pipe-aarch64-linux | awk '{print $1}')
+          SHA_LINUX_X64=$(sha256sum artifacts/sql-pipe-x86_64-linux   | awk '{print $1}')
+
+          cat > sql-pipe.rb <<'FORMULA'
+          class SqlPipe < Formula
+            desc "Read CSV from stdin, query with SQL, write CSV to stdout"
+            homepage "https://github.com/vmvarela/sql-pipe"
+            version "__VERSION__"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/vmvarela/sql-pipe/releases/download/v__VERSION__/sql-pipe-aarch64-macos"
+                sha256 "__SHA_MACOS_ARM64__"
+              end
+              on_intel do
+                url "https://github.com/vmvarela/sql-pipe/releases/download/v__VERSION__/sql-pipe-x86_64-macos"
+                sha256 "__SHA_MACOS_X64__"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/vmvarela/sql-pipe/releases/download/v__VERSION__/sql-pipe-aarch64-linux"
+                sha256 "__SHA_LINUX_ARM64__"
+              end
+              on_intel do
+                url "https://github.com/vmvarela/sql-pipe/releases/download/v__VERSION__/sql-pipe-x86_64-linux"
+                sha256 "__SHA_LINUX_X64__"
+              end
+            end
+
+            def install
+              bin.install Dir["sql-pipe*"].first => "sql-pipe"
+            end
+
+            test do
+              assert_match "sql-pipe", shell_output("#{bin}/sql-pipe --version 2>&1")
+            end
+          end
+          FORMULA
+
+          # Strip leading whitespace from heredoc (was indented for readability)
+          sed -i 's/^          //' sql-pipe.rb
+
+          # Substitute placeholders with actual values
+          sed -i "s/__VERSION__/${VERSION}/g"               sql-pipe.rb
+          sed -i "s/__SHA_MACOS_ARM64__/${SHA_MACOS_ARM64}/g" sql-pipe.rb
+          sed -i "s/__SHA_MACOS_X64__/${SHA_MACOS_X64}/g"     sql-pipe.rb
+          sed -i "s/__SHA_LINUX_ARM64__/${SHA_LINUX_ARM64}/g" sql-pipe.rb
+          sed -i "s/__SHA_LINUX_X64__/${SHA_LINUX_X64}/g"     sql-pipe.rb
+
+          echo "==> Generated formula for sql-pipe ${VERSION}:"
+          cat sql-pipe.rb
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/vmvarela/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp sql-pipe.rb tap/Formula/sql-pipe.rb
+          cd tap
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/sql-pipe.rb
+          git diff --cached --quiet || git commit -m "sql-pipe ${VERSION}"
+          git push
+
+  # ── Update AUR package ──────────────────────────────────────────────
+  # Requires:
+  #   1. AUR package registered: https://aur.archlinux.org/packages/sql-pipe
+  #   2. Secret: AUR_SSH_KEY (SSH private key authorized on AUR)
+  update-aur:
+    name: Update AUR package
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate PKGBUILD
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          SHA_X86_64=$(sha256sum artifacts/sql-pipe-x86_64-linux  | awk '{print $1}')
+          SHA_AARCH64=$(sha256sum artifacts/sql-pipe-aarch64-linux | awk '{print $1}')
+
+          # Download LICENSE to compute its hash
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${GITHUB_REF_NAME}/LICENSE" -o LICENSE
+          SHA_LICENSE=$(sha256sum LICENSE | awk '{print $1}')
+
+          cat > PKGBUILD <<'PKGEOF'
+          # Maintainer: vmvarela <vmvarela@gmail.com>
+          pkgname=sql-pipe
+          pkgver=__VERSION__
+          pkgrel=1
+          pkgdesc="Read CSV via stdin, run SQL, emit CSV via stdout"
+          arch=('x86_64' 'aarch64')
+          url="https://github.com/vmvarela/sql-pipe"
+          license=('MIT')
+          provides=("${pkgname}")
+          conflicts=("${pkgname}")
+
+          source=("LICENSE::https://raw.githubusercontent.com/vmvarela/sql-pipe/v${pkgver}/LICENSE")
+          sha256sums=('__SHA_LICENSE__')
+
+          source_x86_64=("${pkgname}-${pkgver}-x86_64::https://github.com/vmvarela/sql-pipe/releases/download/v${pkgver}/sql-pipe-x86_64-linux")
+          sha256sums_x86_64=('__SHA_X86_64__')
+
+          source_aarch64=("${pkgname}-${pkgver}-aarch64::https://github.com/vmvarela/sql-pipe/releases/download/v${pkgver}/sql-pipe-aarch64-linux")
+          sha256sums_aarch64=('__SHA_AARCH64__')
+
+          package() {
+              install -Dm755 "${pkgname}-${pkgver}-${CARCH}" "${pkgdir}/usr/bin/${pkgname}"
+              install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+          }
+          PKGEOF
+
+          # Strip leading whitespace from heredoc
+          sed -i 's/^          //' PKGBUILD
+
+          # Substitute placeholders
+          sed -i "s/__VERSION__/${VERSION}/g"         PKGBUILD
+          sed -i "s/__SHA_LICENSE__/${SHA_LICENSE}/g"  PKGBUILD
+          sed -i "s/__SHA_X86_64__/${SHA_X86_64}/g"   PKGBUILD
+          sed -i "s/__SHA_AARCH64__/${SHA_AARCH64}/g" PKGBUILD
+
+          echo "==> Generated PKGBUILD for sql-pipe ${VERSION}:"
+          cat PKGBUILD
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
+        with:
+          pkgname: sql-pipe
+          pkgbuild: ./PKGBUILD
+          commit_username: vmvarela
+          commit_email: vmvarela@gmail.com
+          ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
+          commit_message: "Update to ${{ github.ref_name }}"

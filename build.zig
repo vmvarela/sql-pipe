@@ -8,8 +8,8 @@ pub fn build(b: *std.Build) void {
     // linking the system library. Required for cross-compilation.
     const bundle_sqlite = b.option(bool, "bundle-sqlite", "Compile SQLite from lib/sqlite3.c (enables cross-compilation)") orelse false;
 
-    // Version injected at build time from build.zig.zon
-    const version = "0.1.0";
+    // Version: release CI injects from git tag with -Dversion=X.Y.Z
+    const version = b.option([]const u8, "version", "Override version string (default: from build.zig.zon)") orelse "0.1.0";
 
     const exe = b.addExecutable(.{
         .name = "sql-pipe",
