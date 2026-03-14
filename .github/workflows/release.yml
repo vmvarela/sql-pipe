@@ -212,9 +212,6 @@ jobs:
           end
           FORMULA
 
-          # Strip leading whitespace from heredoc (was indented for readability)
-          sed -i 's/^          //' sql-pipe.rb
-
           # Substitute placeholders with actual values
           sed -i "s/__VERSION__/${VERSION}/g"               sql-pipe.rb
           sed -i "s/__SHA_MACOS_ARM64__/${SHA_MACOS_ARM64}/g" sql-pipe.rb
