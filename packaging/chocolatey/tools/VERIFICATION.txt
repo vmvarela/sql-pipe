@@ -1,0 +1,21 @@
+VERIFICATION
+
+sql-pipe is an open-source project licensed under the MIT license.
+Source code: https://github.com/vmvarela/sql-pipe
+
+To verify the binaries included in or downloaded by this package:
+
+1. Go to the GitHub Releases page:
+   https://github.com/vmvarela/sql-pipe/releases
+
+2. Download the sha256sums.txt file for the release version.
+
+3. Compare the SHA256 hash of the downloaded binary against the
+   checksums listed in sha256sums.txt:
+   - sql-pipe-x86-windows.exe    (32-bit)
+   - sql-pipe-x86_64-windows.exe (64-bit)
+
+4. The checksums are also embedded in chocolateyInstall.ps1 and
+   verified automatically by Chocolatey during installation.
+
+License: https://github.com/vmvarela/sql-pipe/blob/master/LICENSE

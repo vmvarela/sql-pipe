@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chocolatey package manifest for sql-pipe.
+     VERSION is replaced at build time by the CI workflow. -->
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>sql-pipe</id>
+    <version>__VERSION__</version>
+    <title>sql-pipe</title>
+    <authors>vmvarela</authors>
+    <owners>vmvarela</owners>
+    <summary>Read CSV from stdin, query with SQL, write CSV to stdout</summary>
+    <description><![CDATA[sql-pipe reads CSV from stdin, loads it into an in-memory SQLite database, runs a SQL query, and prints the results as CSV.
+
+No server, no schema files, no setup. If you know SQL and work with CSV in the terminal, this is the tool you've been reaching for.
+
+## Usage
+
+```
+curl -s https://example.com/data.csv | sql-pipe "SELECT region, SUM(revenue) FROM t GROUP BY region ORDER BY 2 DESC"
+```
+
+Columns are auto-detected as INTEGER, REAL, or TEXT. Use `--no-type-inference` to force TEXT.
+]]></description>
+    <projectUrl>https://github.com/vmvarela/sql-pipe</projectUrl>
+    <tags>csv sql sqlite cli pipe terminal data</tags>
+    <license type="expression">MIT</license>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/vmvarela/sql-pipe</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/vmvarela/sql-pipe/issues</bugTrackerUrl>
+    <releaseNotes>https://github.com/vmvarela/sql-pipe/releases/tag/v__VERSION__</releaseNotes>
+  </metadata>
+</package>
