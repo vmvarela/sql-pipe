@@ -16,7 +16,7 @@ pub const CsvError = error{
     UnterminatedQuotedField,
 };
 
-// ─── State machine ────────────────────────────────────────────────────────────
+// ─── State machine ────────────────────────────────────
 
 /// Representation invariant of the parser automaton:
 ///   field_start  ↔  we are at the start of a new field; `field` is empty
@@ -36,7 +36,7 @@ const State = enum {
     quote_saw,
 };
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── Public API ───────────────────────────────────────
 
 /// Streaming RFC 4180 CSV record iterator.
 ///
@@ -224,21 +224,21 @@ pub fn CsvReader(comptime ReaderType: type) type {
 }
 
 /// Convenience constructor — infers `ReaderType` from the argument.
-pub fn csvReader(reader: anytype, allocator: std.mem.Allocator) CsvReader(@TypeOf(reader)) {
-    return csvReaderWithDelimiter(reader, allocator, ',');
+pub fn csvReader(allocator: std.mem.Allocator, reader: anytype) CsvReader(@TypeOf(reader)) {
+    return csvReaderWithDelimiter(allocator, reader, ',');
 }
 
 /// Convenience constructor with custom input delimiter.
-pub fn csvReaderWithDelimiter(reader: anytype, allocator: std.mem.Allocator, delimiter: u8) CsvReader(@TypeOf(reader)) {
+pub fn csvReaderWithDelimiter(allocator: std.mem.Allocator, reader: anytype, delimiter: u8) CsvReader(@TypeOf(reader)) {
     return CsvReader(@TypeOf(reader)).init(reader, allocator, delimiter);
 }
 
-// ─── Unit Tests ───────────────────────────────────────────────────────────────
+// ─── Unit Tests ───────────────────────────────────────
 
 test "simple unquoted fields, two records" {
     const input = "a,b,c\n1,2,3\n";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
@@ -260,7 +260,7 @@ test "simple unquoted fields, two records" {
 test "quoted field with embedded comma" {
     const input = "\"hello, world\",42\n";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
@@ -272,7 +272,7 @@ test "quoted field with embedded comma" {
 test "escaped double-quote inside quoted field" {
     const input = "\"say \"\"hello\"\"\",done\n";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
@@ -284,7 +284,7 @@ test "escaped double-quote inside quoted field" {
 test "quoted field with embedded newline (multi-line record)" {
     const input = "id,text\n1,\"line one\nline two\"\n";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
@@ -303,7 +303,7 @@ test "quoted field with embedded newline (multi-line record)" {
 test "crlf line endings outside quoted fields" {
     const input = "a,b\r\n1,2\r\n";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
@@ -319,7 +319,7 @@ test "crlf line endings outside quoted fields" {
 test "empty fields are preserved" {
     const input = ",middle,\n";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
@@ -332,7 +332,7 @@ test "empty fields are preserved" {
 test "no trailing newline at EOF" {
     const input = "x,y";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
@@ -346,7 +346,7 @@ test "no trailing newline at EOF" {
 test "quoted field ending at EOF without trailing newline" {
     const input = "\"value\"";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
@@ -357,7 +357,7 @@ test "quoted field ending at EOF without trailing newline" {
 test "empty quoted field" {
     const input = "\"\",b\n";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
@@ -369,7 +369,7 @@ test "empty quoted field" {
 test "entirely empty input returns null" {
     const input = "";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReader(stream.reader(), std.testing.allocator);
+    var csv = csvReader(std.testing.allocator, stream.reader());
 
     try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
 }
@@ -377,7 +377,7 @@ test "entirely empty input returns null" {
 test "custom pipe delimiter" {
     const input = "a|b|c\n1|2|3\n";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReaderWithDelimiter(stream.reader(), std.testing.allocator, '|');
+    var csv = csvReaderWithDelimiter(std.testing.allocator, stream.reader(), '|');
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
@@ -397,7 +397,7 @@ test "custom pipe delimiter" {
 test "custom tab delimiter" {
     const input = "name\tage\nAlice\t30\n";
     var stream = std.io.fixedBufferStream(input);
-    var csv = csvReaderWithDelimiter(stream.reader(), std.testing.allocator, '\t');
+    var csv = csvReaderWithDelimiter(std.testing.allocator, stream.reader(), '\t');
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);

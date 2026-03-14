@@ -1,39 +1,38 @@
-# Agent Guidelines
-
-This file defines how AI coding agents should operate in this repository.
+# Agent Instructions
 
 ## Skills
 
-Skills are located in `.agents/skills/` and must be loaded with the full instructions from their `SKILL.md` before performing related tasks.
+Load the appropriate skill before starting work based on context. Skills live in `.agents/skills/` (repo-local) and `~/.agents/skills/` (global).
 
-### Project Management → `github-scrum`
+| When... | Load skill |
+|---------|-----------|
+| Reading or writing any `.zig` file | `zig-best-practices` |
+| Managing issues, milestones, sprints, labels, or PRs on GitHub | `github-scrum` (`.agents/skills/github-scrum`) |
+| Writing or improving documentation (`.md` files, `docs/`, README, CONTRIBUTING) | `pragmatic-docs` (`.agents/skills/pragmatic-docs`) |
+| Designing algorithms, deriving programs from specifications, or formal verification | `methodical-programming` (`.agents/skills/methodical-programming`) |
 
-Use the `.agents/skills/github-scrum/SKILL.md` skill for all project management tasks:
+### Notes
 
-- Planning and prioritizing features or fixes
-- Managing the Product Backlog as GitHub Issues
-- Running Sprints as GitHub Milestones
-- Tracking progress and closing completed work
+- `zig-best-practices` applies to **all Zig work** in this repo: implementation, tests, refactors, and code review.
+- `github-scrum` defines the label system, milestone conventions, and sprint workflow used in this project — consult it before creating or updating any GitHub artifact.
+- When multiple skills apply (e.g. writing a Go algorithm with formal derivation), load both.
 
-### Code Development → `methodical-programming`
+## Pre-commit checklist
 
-Use the `.agents/skills/methodical-programming/SKILL.md` skill for all code development tasks:
+Run **both** of the following before every commit. Fix all failures before committing.
 
-- Implementing new features or fixing bugs
-- Deriving correct implementations from specifications
-- Reasoning about correctness, invariants, and edge cases
-- Refactoring and reviewing existing code
+```bash
+# 1. Unit tests (using std.testing.allocator for leak detection)
+zig build test
 
-### Documentation → `pragmatic-docs`
+# 2. Linter
+ziglint src build.zig
+```
 
-Use the `.agents/skills/pragmatic-docs/SKILL.md` skill for all documentation tasks:
+## Conventions
 
-- Writing or improving `README.md`
-- Creating guides, module docs, or `CONTRIBUTING.md`
-- Structuring any project documentation
-
-## General Rules
-
-- Always read the relevant skill's `SKILL.md` before starting a task in its domain.
-- Keep changes focused and incremental.
-- Prefer clarity and correctness over cleverness.
+- Branch names: `issue-{number}/{short-description}`
+- Commits: [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `ci:`, `chore:`, `docs:`, etc.)
+- PRs: squash merge, delete branch after merge
+- Labels follow the Scrum label system (`type:*`, `priority:*`, `size:*`, `status:*`) — see `github-scrum` skill for details
+- When closing/merging a PR, remove the `status:*` label from the linked issue (status labels are transient workflow state, not permanent metadata)

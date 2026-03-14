@@ -1,0 +1,7 @@
+.{
+    .paths = .{ "src", "build.zig" },
+    .rules = .{
+        // build.zig shell multiline strings cannot be wrapped
+        .Z024 = .{ .max_length = 200 },
+    },
+}

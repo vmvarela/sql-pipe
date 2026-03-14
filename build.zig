@@ -6,10 +6,18 @@ pub fn build(b: *std.Build) void {
 
     // Use -Dbundle-sqlite=true to compile sqlite3.c from lib/ instead of
     // linking the system library. Required for cross-compilation.
-    const bundle_sqlite = b.option(bool, "bundle-sqlite", "Compile SQLite from lib/sqlite3.c (enables cross-compilation)") orelse false;
+    const bundle_sqlite = b.option(
+        bool,
+        "bundle-sqlite",
+        "Compile SQLite from lib/sqlite3.c (enables cross-compilation)",
+    ) orelse false;
 
     // Version: release CI injects from git tag with -Dversion=X.Y.Z
-    const version = b.option([]const u8, "version", "Override version string (default: from build.zig.zon)") orelse "0.2.0";
+    const version = b.option(
+        []const u8,
+        "version",
+        "Override version string (default: from build.zig.zon)",
+    ) orelse "0.2.0";
 
     const exe = b.addExecutable(.{
         .name = "sql-pipe",
