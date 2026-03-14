@@ -72,6 +72,13 @@ choco install sql-pipe
 winget install vmvarela.sql-pipe
 ```
 
+**Windows (Scoop):**
+
+```powershell
+scoop bucket add sql-pipe https://github.com/vmvarela/scoop-sql-pipe
+scoop install sql-pipe
+```
+
 To build from source (requires [Zig 0.15+](https://ziglang.org/download/)):
 
 ```sh
