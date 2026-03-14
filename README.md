@@ -44,6 +44,14 @@ sudo dpkg -i sql-pipe_VERSION_amd64.deb
 
 Replace `VERSION` with the release version (e.g. `0.2.0`) and `amd64` with your architecture (`arm64`, `armhf`, or `386`).
 
+**Fedora / RHEL / openSUSE (.rpm package):**
+
+```sh
+sudo rpm -i https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe-VERSION-1.x86_64.rpm
+```
+
+Replace `VERSION` with the release version (e.g. `0.2.0`) and `x86_64` with your architecture (`aarch64`).
+
 **Arch Linux (AUR):** install with your preferred AUR helper:
 
 ```sh
