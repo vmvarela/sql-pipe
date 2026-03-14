@@ -454,6 +454,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      HAS_CHOCO_KEY: ${{ secrets.CHOCOLATEY_API_KEY != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -506,7 +508,7 @@ jobs:
             --clobber
 
       - name: Push to Chocolatey Community Repository
-        if: ${{ env.CHOCOLATEY_API_KEY != '' }}
+        if: ${{ env.HAS_CHOCO_KEY == 'true' }}
         shell: pwsh
         env:
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
