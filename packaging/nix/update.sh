@@ -1,5 +1,5 @@
 #!/usr/bin/env nix-shell
-#!nix-shell -i bash -p curl jq common-updater-scripts
+#!nix-shell -i bash -p curl jq
 # Regenerates versions.json with the latest sql-pipe release.
 # Used by nixpkgs' r-ryantm bot via passthru.updateScript, and can
 # also be run manually:  ./update.sh

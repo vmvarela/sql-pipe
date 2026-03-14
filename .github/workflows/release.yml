@@ -612,9 +612,6 @@ jobs:
           }
           MANIFEST
 
-          # Strip leading whitespace from heredoc (was indented for readability)
-          sed -i 's/^          //' sql-pipe.json
-
           echo "==> Generated Scoop manifest for sql-pipe ${VERSION}:"
           cat sql-pipe.json
 
@@ -723,8 +720,6 @@ jobs:
             }
           }
           EOF
-
-          sed -i 's/^          //' packaging/nix/versions.json
 
           echo "==> Updated Nix versions.json for sql-pipe ${VERSION}:"
           cat packaging/nix/versions.json

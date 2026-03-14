@@ -70,7 +70,7 @@ nix run github:vmvarela/sql-pipe -- 'SELECT * FROM t'
 nix profile install github:vmvarela/sql-pipe
 
 # Non-flake
-nix-env -iA sql-pipe -f https://github.com/vmvarela/sql-pipe/archive/master.tar.gz
+nix-env -if https://github.com/vmvarela/sql-pipe/archive/master.tar.gz
 ```
 
 **Windows (Chocolatey):**
