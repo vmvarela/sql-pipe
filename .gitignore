@@ -3,3 +3,5 @@ zig-out/
 # SQLite amalgamation — generated during build setup, not committed
 lib/
 sqlite.zip
+# Nix build output symlink
+result

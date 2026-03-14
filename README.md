@@ -60,6 +60,19 @@ yay -S sql-pipe
 paru -S sql-pipe
 ```
 
+**Nix / NixOS:**
+
+```sh
+# Run without installing
+nix run github:vmvarela/sql-pipe -- 'SELECT * FROM t'
+
+# Install to profile
+nix profile install github:vmvarela/sql-pipe
+
+# Non-flake
+nix-env -iA sql-pipe -f https://github.com/vmvarela/sql-pipe/archive/master.tar.gz
+```
+
 **Windows (Chocolatey):**
 
 ```powershell

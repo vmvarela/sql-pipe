@@ -1,0 +1,22 @@
+{
+  "x86_64-linux": {
+    "url": "https://github.com/vmvarela/sql-pipe/releases/download/v0.2.0/sql-pipe-x86_64-linux",
+    "sha256": "f3a3235e33aba0aa0c42741c0aa207738405a40ee88a52985d4280059c4989ff",
+    "version": "0.2.0"
+  },
+  "aarch64-linux": {
+    "url": "https://github.com/vmvarela/sql-pipe/releases/download/v0.2.0/sql-pipe-aarch64-linux",
+    "sha256": "f4acf74d56cf7f882c6eca1507ad2d30ff07ee81715b6d33f1c43ba074c42a96",
+    "version": "0.2.0"
+  },
+  "x86_64-darwin": {
+    "url": "https://github.com/vmvarela/sql-pipe/releases/download/v0.2.0/sql-pipe-x86_64-macos",
+    "sha256": "09d407faa63ff291c1e72e64f379ffcd1fa684f366a94dc513001a35dfe5449c",
+    "version": "0.2.0"
+  },
+  "aarch64-darwin": {
+    "url": "https://github.com/vmvarela/sql-pipe/releases/download/v0.2.0/sql-pipe-aarch64-macos",
+    "sha256": "f5f8c6357c74e67b3ef73d09fbd33cf30a0e6e12ef2d66e8abeaa89afb1a0ab8",
+    "version": "0.2.0"
+  }
+}
