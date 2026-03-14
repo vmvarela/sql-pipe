@@ -60,6 +60,12 @@ yay -S sql-pipe
 paru -S sql-pipe
 ```
 
+**Windows (Chocolatey):**
+
+```powershell
+choco install sql-pipe
+```
+
 To build from source (requires [Zig 0.15+](https://ziglang.org/download/)):
 
 ```sh

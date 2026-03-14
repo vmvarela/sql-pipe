@@ -444,17 +444,88 @@ jobs:
             --repo "${{ github.repository }}" \
             --clobber
 
+  # ── Build and upload Chocolatey package ────────────────────────────
+  # Creates a .nupkg for Windows (x86 + x86_64) and uploads it to the
+  # GitHub Release. If CHOCOLATEY_API_KEY is set, also pushes to the
+  # Chocolatey Community Repository.
+  package-choco:
+    name: Package Chocolatey
+    needs: release
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Build .nupkg
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+
+          # Compute checksums from the downloaded artifacts
+          $checksumX86 = (Get-FileHash artifacts/sql-pipe-x86-windows.exe -Algorithm SHA256).Hash.ToLower()
+          $checksumX64 = (Get-FileHash artifacts/sql-pipe-x86_64-windows.exe -Algorithm SHA256).Hash.ToLower()
+
+          # Prepare working directory with package files
+          $pkgDir = "choco-pkg"
+          Copy-Item -Recurse packaging/chocolatey $pkgDir
+
+          # Substitute version in .nuspec
+          $nuspec = Join-Path $pkgDir "sql-pipe.nuspec"
+          (Get-Content $nuspec -Raw) -replace '__VERSION__', $version | Set-Content $nuspec
+
+          # Inject checksums into install script
+          $install = Join-Path $pkgDir "tools/chocolateyInstall.ps1"
+          (Get-Content $install -Raw) `
+            -replace '\$env:CHECKSUM_X86', "'$checksumX86'" `
+            -replace '\$env:CHECKSUM_X64', "'$checksumX64'" |
+            Set-Content $install
+
+          # Build the package
+          choco pack $nuspec --outputdirectory $pkgDir
+          Write-Host "==> Built package:"
+          Get-ChildItem "$pkgDir/*.nupkg"
+
+      - name: Upload .nupkg to GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $nupkg = Get-ChildItem "choco-pkg/*.nupkg" | Select-Object -First 1
+          gh release upload "${{ github.ref_name }}" $nupkg.FullName `
+            --repo "${{ github.repository }}" `
+            --clobber
+
+      - name: Push to Chocolatey Community Repository
+        if: ${{ env.CHOCOLATEY_API_KEY != '' }}
+        shell: pwsh
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          $nupkg = Get-ChildItem "choco-pkg/*.nupkg" | Select-Object -First 1
+          choco push $nupkg.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
+
   # ── Generate final SHA256 checksums ────────────────────────────────
-  # Runs after release, package-deb and package-rpm so sha256sums.txt
-  # covers all assets: binaries, man page, .deb AND .rpm packages.
+  # Runs after all packaging jobs so sha256sums.txt covers all assets:
+  # binaries, man page, .deb, .rpm AND .nupkg packages.
   checksums:
     name: Generate SHA256 checksums
-    needs: [release, package-deb, package-rpm]
+    needs: [release, package-deb, package-rpm, package-choco]
     if: >-
       always()
       && needs.release.result == 'success'
       && (needs.package-deb.result == 'success' || needs.package-deb.result == 'skipped')
       && (needs.package-rpm.result == 'success' || needs.package-rpm.result == 'skipped')
+      && (needs.package-choco.result == 'success' || needs.package-choco.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
