@@ -340,7 +340,7 @@ jobs:
         run: |
           NFPM_VERSION=2.45.1
           curl -sfL -o /tmp/nfpm.tar.gz \
-            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_linux_amd64.tar.gz"
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
           tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
 
       - name: Stage files for packaging
@@ -405,7 +405,7 @@ jobs:
         run: |
           NFPM_VERSION=2.45.1
           curl -sfL -o /tmp/nfpm.tar.gz \
-            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_linux_amd64.tar.gz"
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
           tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
 
       - name: Stage files for packaging
