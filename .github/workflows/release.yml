@@ -345,27 +345,22 @@ jobs:
 
       - name: Stage files for packaging
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          ARCH="${{ matrix.goarch }}"
+          mkdir -p pkg-work
+          cp artifacts/${{ matrix.asset }}  pkg-work/sql-pipe
+          chmod +x pkg-work/sql-pipe
+          cp artifacts/sql-pipe.1.gz        pkg-work/sql-pipe.1.gz
+          cp LICENSE                         pkg-work/LICENSE
 
-          # Map Go arch names to Zig binary suffixes
-          case "$ARCH" in
-            amd64) ZIG_ARCH="x86_64"  ;;
-            arm64) ZIG_ARCH="aarch64" ;;
-            arm7)  ZIG_ARCH="arm"     ;;
-            386)   ZIG_ARCH="x86"     ;;
-          esac
-
-          mkdir -p staging
-          cp "artifacts/sql-pipe-${ZIG_ARCH}-linux" staging/sql-pipe
-          chmod +x staging/sql-pipe
-
-      - name: Build .deb package
+      - name: Build .deb
+        working-directory: pkg-work
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          ARCH="${{ matrix.goarch }}"
-
-          nfpm package -p deb \
+          VERSION="${VERSION#v}"
+          mkdir -p dist
+          VERSION="$VERSION" GOARCH="$GOARCH" \
+            nfpm package -p deb \
               -f "$GITHUB_WORKSPACE/packaging/nfpm.yaml" \
               -t dist/
 
