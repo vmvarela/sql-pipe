@@ -6,7 +6,7 @@
 #   GOARCH   — nfpm architecture token:
 #                amd64   → x86_64 binaries  (deb: amd64,   rpm: x86_64)
 #                arm64   → aarch64 binaries (deb: arm64,   rpm: aarch64)
-#                arm7    → armv7 binaries   (deb: armhf,   rpm: armhfp)
+#                arm7    → armv7 binaries   (deb: armhf,   rpm: armv7hl)
 #                386     → x86 binaries     (deb: i386,    rpm: i686)
 #
 # Invocation (from the CI working directory that contains the staged files):

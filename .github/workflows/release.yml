@@ -450,7 +450,11 @@ jobs:
   checksums:
     name: Generate SHA256 checksums
     needs: [release, package-deb, package-rpm]
-    if: ${{ always() && needs.release.result == 'success' }}
+    if: >-
+      always()
+      && needs.release.result == 'success'
+      && (needs.package-deb.result == 'success' || needs.package-deb.result == 'skipped')
+      && (needs.package-rpm.result == 'success' || needs.package-rpm.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
