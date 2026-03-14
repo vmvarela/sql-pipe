@@ -538,6 +538,95 @@ jobs:
           installers-regex: 'sql-pipe-.*-windows\.exe$'
           token: ${{ secrets.WINGET_GITHUB_TOKEN }}
 
+  # ── Update Scoop bucket ──────────────────────────────────────────────
+  # Pushes an updated Scoop manifest to the vmvarela/scoop-sql-pipe
+  # bucket repository so Windows users can install via:
+  #   scoop bucket add sql-pipe https://github.com/vmvarela/scoop-sql-pipe
+  #   scoop install sql-pipe
+  # Requires:
+  #   1. Repository: vmvarela/scoop-sql-pipe (with sql-pipe.json at root)
+  #   2. Secret: SCOOP_BUCKET_TOKEN (PAT with contents:write on the bucket repo)
+  update-scoop:
+    name: Update Scoop bucket
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      HAS_SCOOP_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN != '' }}
+    steps:
+      - name: Download Windows artifacts
+        if: ${{ env.HAS_SCOOP_TOKEN == 'true' }}
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate manifest and push to bucket
+        if: ${{ env.HAS_SCOOP_TOKEN == 'true' }}
+        env:
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          SHA_X64=$(sha256sum artifacts/sql-pipe-x86_64-windows.exe   | awk '{print $1}')
+          SHA_X86=$(sha256sum artifacts/sql-pipe-x86-windows.exe      | awk '{print $1}')
+          SHA_ARM64=$(sha256sum artifacts/sql-pipe-aarch64-windows.exe | awk '{print $1}')
+
+          cat > sql-pipe.json <<MANIFEST
+          {
+              "version": "${VERSION}",
+              "description": "Read CSV from stdin, query with SQL, write CSV to stdout",
+              "homepage": "https://github.com/vmvarela/sql-pipe",
+              "license": "MIT",
+              "architecture": {
+                  "64bit": {
+                      "url": "https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/sql-pipe-x86_64-windows.exe#/sql-pipe.exe",
+                      "hash": "${SHA_X64}"
+                  },
+                  "32bit": {
+                      "url": "https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/sql-pipe-x86-windows.exe#/sql-pipe.exe",
+                      "hash": "${SHA_X86}"
+                  },
+                  "arm64": {
+                      "url": "https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/sql-pipe-aarch64-windows.exe#/sql-pipe.exe",
+                      "hash": "${SHA_ARM64}"
+                  }
+              },
+              "bin": "sql-pipe.exe",
+              "checkver": "github",
+              "autoupdate": {
+                  "architecture": {
+                      "64bit": {
+                          "url": "https://github.com/vmvarela/sql-pipe/releases/download/v\$version/sql-pipe-x86_64-windows.exe#/sql-pipe.exe"
+                      },
+                      "32bit": {
+                          "url": "https://github.com/vmvarela/sql-pipe/releases/download/v\$version/sql-pipe-x86-windows.exe#/sql-pipe.exe"
+                      },
+                      "arm64": {
+                          "url": "https://github.com/vmvarela/sql-pipe/releases/download/v\$version/sql-pipe-aarch64-windows.exe#/sql-pipe.exe"
+                      }
+                  },
+                  "hash": {
+                      "url": "https://github.com/vmvarela/sql-pipe/releases/download/v\$version/sha256sums.txt"
+                  }
+              }
+          }
+          MANIFEST
+
+          # Strip leading whitespace from heredoc (was indented for readability)
+          sed -i 's/^          //' sql-pipe.json
+
+          echo "==> Generated Scoop manifest for sql-pipe ${VERSION}:"
+          cat sql-pipe.json
+
+          git clone "https://x-access-token:${SCOOP_BUCKET_TOKEN}@github.com/vmvarela/scoop-sql-pipe.git" bucket
+          cp sql-pipe.json bucket/sql-pipe.json
+          cd bucket
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sql-pipe.json
+          git diff --cached --quiet || git commit -m "sql-pipe ${VERSION}"
+          git push
+
   # ── Generate final SHA256 checksums ────────────────────────────────
   # Runs after all packaging jobs so sha256sums.txt covers all assets:
   # binaries, man page, .deb, .rpm AND .nupkg packages.
