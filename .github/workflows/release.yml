@@ -518,69 +518,25 @@ jobs:
 
   # ── Update WinGet manifest ────────────────────────────────────────
   # Submits a PR to microsoft/winget-pkgs with updated manifest files.
-  # Requires: WINGET_GITHUB_TOKEN secret (PAT with public_repo scope).
+  # Requires:
+  #   1. At least one version already in microsoft/winget-pkgs (initial
+  #      submission must be done manually via wingetcreate or PR)
+  #   2. Fork of microsoft/winget-pkgs under the vmvarela account
+  #   3. Secret: WINGET_GITHUB_TOKEN (classic PAT with public_repo scope)
   update-winget:
     name: Update WinGet manifest
     needs: release
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     env:
       HAS_WINGET_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: artifacts/
-          merge-multiple: true
-
-      - name: Generate and submit WinGet manifest
+      - name: Submit WinGet manifest
         if: ${{ env.HAS_WINGET_TOKEN == 'true' }}
-        shell: pwsh
-        env:
-          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
-        run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
-
-          # Compute SHA256 checksums for all Windows binaries
-          $sha256X64   = (Get-FileHash artifacts/sql-pipe-x86_64-windows.exe  -Algorithm SHA256).Hash
-          $sha256X86   = (Get-FileHash artifacts/sql-pipe-x86-windows.exe     -Algorithm SHA256).Hash
-          $sha256Arm64 = (Get-FileHash artifacts/sql-pipe-aarch64-windows.exe -Algorithm SHA256).Hash
-
-          # Populate manifest templates
-          $pkgDir = "winget-manifests"
-          New-Item -ItemType Directory -Path $pkgDir -Force | Out-Null
-
-          foreach ($file in Get-ChildItem packaging/winget/*.yaml) {
-              $content = Get-Content $file -Raw
-              $content = $content -replace '__VERSION__',     $version
-              $content = $content -replace '__SHA256_X64__',  $sha256X64
-              $content = $content -replace '__SHA256_X86__',  $sha256X86
-              $content = $content -replace '__SHA256_ARM64__', $sha256Arm64
-              Set-Content (Join-Path $pkgDir $file.Name) $content
-          }
-
-          Write-Host "==> Generated manifests:"
-          Get-ChildItem $pkgDir | ForEach-Object {
-              Write-Host "--- $($_.Name) ---"
-              Get-Content $_.FullName
-          }
-
-          # Install wingetcreate
-          Invoke-WebRequest -Uri "https://aka.ms/wingetcreate/latest" -OutFile wingetcreate.exe
-
-          # Submit PR to microsoft/winget-pkgs
-          $urls = @(
-              "https://github.com/vmvarela/sql-pipe/releases/download/v${version}/sql-pipe-x86_64-windows.exe",
-              "https://github.com/vmvarela/sql-pipe/releases/download/v${version}/sql-pipe-x86-windows.exe",
-              "https://github.com/vmvarela/sql-pipe/releases/download/v${version}/sql-pipe-aarch64-windows.exe"
-          )
-
-          ./wingetcreate.exe update vmvarela.sql-pipe `
-              --version $version `
-              --urls $urls `
-              --submit `
-              --token $env:WINGET_GITHUB_TOKEN
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: vmvarela.sql-pipe
+          installers-regex: 'sql-pipe-.*-windows\.exe$'
+          token: ${{ secrets.WINGET_GITHUB_TOKEN }}
 
   # ── Generate final SHA256 checksums ────────────────────────────────
   # Runs after all packaging jobs so sha256sums.txt covers all assets:
