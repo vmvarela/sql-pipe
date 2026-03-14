@@ -288,9 +288,6 @@ jobs:
           }
           PKGEOF
 
-          # Strip leading whitespace from heredoc
-          sed -i 's/^          //' PKGBUILD
-
           # Substitute placeholders
           sed -i "s/__VERSION__/${VERSION}/g"         PKGBUILD
           sed -i "s/__SHA_LICENSE__/${SHA_LICENSE}/g"  PKGBUILD
