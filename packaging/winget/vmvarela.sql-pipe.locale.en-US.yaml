@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+# WinGet locale manifest template for sql-pipe.
+# __VERSION__ is replaced at build time by the CI workflow.
+
+PackageIdentifier: vmvarela.sql-pipe
+PackageVersion: __VERSION__
+PackageLocale: en-US
+Publisher: vmvarela
+PublisherUrl: https://github.com/vmvarela
+PackageName: sql-pipe
+PackageUrl: https://github.com/vmvarela/sql-pipe
+License: MIT
+LicenseUrl: https://github.com/vmvarela/sql-pipe/blob/master/LICENSE
+ShortDescription: Read CSV from stdin, query with SQL, write CSV to stdout
+Description: >-
+  sql-pipe reads CSV from stdin, loads it into an in-memory SQLite database,
+  runs a SQL query, and prints the results as CSV. No server, no schema files,
+  no setup. If you know SQL and work with CSV in the terminal, this is the tool
+  you have been reaching for.
+Tags:
+  - csv
+  - sql
+  - sqlite
+  - cli
+  - pipe
+  - data
+ReleaseNotesUrl: https://github.com/vmvarela/sql-pipe/releases/tag/v__VERSION__
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0

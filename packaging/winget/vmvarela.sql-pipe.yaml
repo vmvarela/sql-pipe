@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json
+# WinGet version manifest template for sql-pipe.
+# __VERSION__ is replaced at build time by the CI workflow.
+
+PackageIdentifier: vmvarela.sql-pipe
+PackageVersion: __VERSION__
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.9.0

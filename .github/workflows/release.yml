@@ -516,6 +516,28 @@ jobs:
           $nupkg = Get-ChildItem "choco-pkg/*.nupkg" | Select-Object -First 1
           choco push $nupkg.FullName --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
 
+  # ── Update WinGet manifest ────────────────────────────────────────
+  # Submits a PR to microsoft/winget-pkgs with updated manifest files.
+  # Requires:
+  #   1. At least one version already in microsoft/winget-pkgs (initial
+  #      submission must be done manually via wingetcreate or PR)
+  #   2. Fork of microsoft/winget-pkgs under the vmvarela account
+  #   3. Secret: WINGET_GITHUB_TOKEN (classic PAT with public_repo scope)
+  update-winget:
+    name: Update WinGet manifest
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      HAS_WINGET_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN != '' }}
+    steps:
+      - name: Submit WinGet manifest
+        if: ${{ env.HAS_WINGET_TOKEN == 'true' }}
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: vmvarela.sql-pipe
+          installers-regex: 'sql-pipe-.*-windows\.exe$'
+          token: ${{ secrets.WINGET_GITHUB_TOKEN }}
+
   # ── Generate final SHA256 checksums ────────────────────────────────
   # Runs after all packaging jobs so sha256sums.txt covers all assets:
   # binaries, man page, .deb, .rpm AND .nupkg packages.

@@ -66,6 +66,12 @@ paru -S sql-pipe
 choco install sql-pipe
 ```
 
+**Windows (WinGet):**
+
+```powershell
+winget install vmvarela.sql-pipe
+```
+
 To build from source (requires [Zig 0.15+](https://ziglang.org/download/)):
 
 ```sh
