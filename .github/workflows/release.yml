@@ -129,10 +129,6 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      - name: Generate SHA256 checksums
-        working-directory: artifacts
-        run: sha256sum * | tee sha256sums.txt
-
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -380,5 +376,40 @@ jobs:
         working-directory: pkg-work
         run: |
           gh release upload "${{ github.ref_name }}" dist/*.deb \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+  # ── Generate final SHA256 checksums ────────────────────────────────
+  # Runs after both release and package-deb so sha256sums.txt covers
+  # all assets: binaries, man page AND .deb packages.
+  checksums:
+    name: Generate SHA256 checksums
+    needs: [release, package-deb]
+    if: ${{ always() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p assets
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --dir assets
+
+      - name: Generate SHA256 checksums
+        working-directory: assets
+        run: |
+          # Exclude any pre-existing sha256sums.txt to avoid self-referencing
+          sha256sum $(ls | grep -v sha256sums.txt) | tee sha256sums.txt
+
+      - name: Upload sha256sums.txt to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" assets/sha256sums.txt \
             --repo "${{ github.repository }}" \
             --clobber
