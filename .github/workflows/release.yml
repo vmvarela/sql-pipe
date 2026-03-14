@@ -129,10 +129,6 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      - name: Generate SHA256 checksums
-        working-directory: artifacts
-        run: sha256sum * | tee sha256sums.txt
-
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -313,3 +309,107 @@ jobs:
           commit_email: vmvarela@gmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
           commit_message: "Update to ${{ github.ref_name }}"
+
+  # ── Build and upload .deb packages ─────────────────────────────────
+  # Generates Debian packages for amd64, arm64, arm7 and 386 using nfpm.
+  # Each arch is independent — one failing arch does not block the others.
+  package-deb:
+    name: Package DEB (${{ matrix.goarch }})
+    needs: release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            asset: sql-pipe-x86_64-linux
+          - goarch: arm64
+            asset: sql-pipe-aarch64-linux
+          - goarch: arm7
+            asset: sql-pipe-armv7-linux
+          - goarch: "386"
+            asset: sql-pipe-x86-linux
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Install nfpm
+        run: |
+          NFPM_VERSION=2.45.1
+          curl -sfL -o /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
+
+      - name: Stage files for packaging
+        run: |
+          mkdir -p pkg-work
+          cp artifacts/${{ matrix.asset }}  pkg-work/sql-pipe
+          chmod +x pkg-work/sql-pipe
+          cp artifacts/sql-pipe.1.gz        pkg-work/sql-pipe.1.gz
+          cp LICENSE                         pkg-work/LICENSE
+
+      - name: Build .deb
+        working-directory: pkg-work
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${VERSION#v}"
+          mkdir -p dist
+          VERSION="$VERSION" GOARCH="$GOARCH" \
+            nfpm package -p deb \
+              -f "$GITHUB_WORKSPACE/packaging/nfpm.yaml" \
+              -t dist/
+
+      - name: Upload .deb to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: pkg-work
+        run: |
+          gh release upload "${{ github.ref_name }}" dist/*.deb \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+  # ── Generate final SHA256 checksums ────────────────────────────────
+  # Runs after both release and package-deb so sha256sums.txt covers
+  # all assets: binaries, man page AND .deb packages.
+  checksums:
+    name: Generate SHA256 checksums
+    needs: [release, package-deb]
+    if: ${{ always() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p assets
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --dir assets
+
+      - name: Generate SHA256 checksums
+        working-directory: assets
+        run: |
+          # Exclude any pre-existing sha256sums.txt to avoid self-referencing
+          sha256sum $(ls | grep -v sha256sums.txt) | tee sha256sums.txt
+
+      - name: Upload sha256sums.txt to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" assets/sha256sums.txt \
+            --repo "${{ github.repository }}" \
+            --clobber

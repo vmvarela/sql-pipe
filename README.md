@@ -35,17 +35,14 @@ By default it installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
 curl -sSL https://raw.githubusercontent.com/vmvarela/sql-pipe/master/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
-**Shell installer (Linux/macOS):**
+**Debian / Ubuntu (.deb package):**
 
 ```sh
-curl -sSL https://raw.githubusercontent.com/vmvarela/sql-pipe/master/install.sh | sh
+wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERSION_amd64.deb
+sudo dpkg -i sql-pipe_VERSION_amd64.deb
 ```
 
-By default it installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
-
-```sh
-curl -sSL https://raw.githubusercontent.com/vmvarela/sql-pipe/master/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
-```
+Replace `VERSION` with the release version (e.g. `0.2.0`) and `amd64` with your architecture (`arm64`, `armhf`, or `386`).
 
 **Arch Linux (AUR):** install with your preferred AUR helper:
 
