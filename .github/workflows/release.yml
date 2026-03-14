@@ -340,27 +340,32 @@ jobs:
         run: |
           NFPM_VERSION=2.45.1
           curl -sfL -o /tmp/nfpm.tar.gz \
-            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_linux_amd64.tar.gz"
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
           tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
 
       - name: Stage files for packaging
         run: |
-          mkdir -p pkg-work
-          cp artifacts/${{ matrix.asset }}  pkg-work/sql-pipe
-          chmod +x pkg-work/sql-pipe
-          cp artifacts/sql-pipe.1.gz        pkg-work/sql-pipe.1.gz
-          cp LICENSE                         pkg-work/LICENSE
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCH="${{ matrix.goarch }}"
 
-      - name: Build .deb
-        working-directory: pkg-work
-        env:
-          VERSION: ${{ github.ref_name }}
-          GOARCH: ${{ matrix.goarch }}
+          # Map Go arch names to Zig binary suffixes
+          case "$ARCH" in
+            amd64) ZIG_ARCH="x86_64"  ;;
+            arm64) ZIG_ARCH="aarch64" ;;
+            arm7)  ZIG_ARCH="arm"     ;;
+            386)   ZIG_ARCH="x86"     ;;
+          esac
+
+          mkdir -p staging
+          cp "artifacts/sql-pipe-${ZIG_ARCH}-linux" staging/sql-pipe
+          chmod +x staging/sql-pipe
+
+      - name: Build .deb package
         run: |
-          VERSION="${VERSION#v}"
-          mkdir -p dist
-          VERSION="$VERSION" GOARCH="$GOARCH" \
-            nfpm package -p deb \
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCH="${{ matrix.goarch }}"
+
+          nfpm package -p deb \
               -f "$GITHUB_WORKSPACE/packaging/nfpm.yaml" \
               -t dist/
 
@@ -405,7 +410,7 @@ jobs:
         run: |
           NFPM_VERSION=2.45.1
           curl -sfL -o /tmp/nfpm.tar.gz \
-            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_linux_amd64.tar.gz"
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
           tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
 
       - name: Stage files for packaging
