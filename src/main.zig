@@ -8,15 +8,15 @@ const build_options = @import("build_options");
 /// Version string injected at build time from build.zig.zon via build.zig.
 const VERSION: []const u8 = build_options.version;
 
-// SQLITE_STATIC (null): SQLite assumes the memory is constant and won't free it.
+// sqlite_static (null): SQLite assumes the memory is constant and won't free it.
 // Safety: sqlite3_step is called inside insertRowTyped immediately after all
 // bindings, returning SQLITE_DONE before the function returns. The caller's
 // row buffer is only freed after insertRowTyped returns, so the bound pointers
 // remain valid throughout the statement's execution. sqlite3_reset at the top
 // of the next call releases any prior references.
-const SQLITE_STATIC: c.sqlite3_destructor_type = null;
+const sqlite_static: c.sqlite3_destructor_type = null;
 
-// ─── Error types ─────────────────────────────────────────────────────────────
+// ─── Error types ─────────────────────────────────────
 
 const SqlPipeError = error{
     MissingQuery,
@@ -34,13 +34,13 @@ const SqlPipeError = error{
     PrepareQueryFailed,
 };
 
-// ─── Column type inference ────────────────────────────────────────────────────
+// ─── Column type inference ────────────────────────────
 
 /// Inferred SQLite affinity for a CSV column.
 const ColumnType = enum { TEXT, INTEGER, REAL };
 
 /// Number of rows buffered from stdin to infer column types.
-const INFERENCE_BUFFER_SIZE: usize = 100;
+const inference_buffer_size: usize = 100;
 
 /// Structured exit codes for scripting.
 ///   0 = success
@@ -76,7 +76,7 @@ const ArgsResult = union(enum) {
     version,
 };
 
-// ─── Extracted functions ──────────────────────────────────────────────────────
+// ─── Extracted functions ──────────────────────────────
 
 /// printUsage(writer) → void
 /// Pre:  writer is a valid stderr writer
@@ -233,9 +233,9 @@ fn isReal(val: []const u8) bool {
 ///       result[j] = TEXT     ⟺  at least one non-empty value is non-numeric,
 ///                                OR no non-empty values exist
 fn inferTypes(
+    allocator: std.mem.Allocator,
     buffer: []const [][]u8,
     num_cols: usize,
-    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error![]ColumnType {
     const types = try allocator.alloc(ColumnType, num_cols);
     errdefer allocator.free(types);
@@ -297,8 +297,8 @@ fn inferTypes(
 ///       error.EmptyColumnName when any trimmed name is empty
 ///       error.NoColumns when record is empty
 fn parseHeader(
-    record: [][]u8,
     allocator: std.mem.Allocator,
+    record: [][]u8,
 ) (SqlPipeError || std.mem.Allocator.Error)![][]const u8 {
     if (record.len == 0) return error.NoColumns;
 
@@ -355,10 +355,10 @@ fn parseHeader(
 ///       column identifiers are double-quote escaped per SQL syntax
 ///       error.CreateTableFailed when sqlite3_exec returns non-SQLITE_OK
 fn createTable(
+    allocator: std.mem.Allocator,
     db: *c.sqlite3,
     cols: []const []const u8,
     types: []const ColumnType,
-    allocator: std.mem.Allocator,
 ) (SqlPipeError || std.mem.Allocator.Error)!void {
     var sql: std.ArrayList(u8) = .{};
     defer sql.deinit(allocator);
@@ -397,9 +397,9 @@ fn createTable(
 /// Post: result is a prepared `INSERT INTO t VALUES (?,…,?)` with n parameters
 ///       error.PrepareInsertFailed when sqlite3_prepare_v2 returns non-SQLITE_OK
 fn prepareInsert(
+    allocator: std.mem.Allocator,
     db: *c.sqlite3,
     n: usize,
-    allocator: std.mem.Allocator,
 ) (SqlPipeError || std.mem.Allocator.Error)!*c.sqlite3_stmt {
     var sql: std.ArrayList(u8) = .{};
     defer sql.deinit(allocator);
@@ -464,7 +464,7 @@ fn insertRowTyped(
                         return error.BindFailed;
                 } else |_| {
                     // Parse failure: fall back to text binding
-                    if (c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_STATIC) != c.SQLITE_OK)
+                    if (c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), sqlite_static) != c.SQLITE_OK)
                         return error.BindFailed;
                 }
             },
@@ -473,12 +473,12 @@ fn insertRowTyped(
                     if (c.sqlite3_bind_double(stmt, col_idx, f) != c.SQLITE_OK)
                         return error.BindFailed;
                 } else |_| {
-                    if (c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_STATIC) != c.SQLITE_OK)
+                    if (c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), sqlite_static) != c.SQLITE_OK)
                         return error.BindFailed;
                 }
             },
             .TEXT => {
-                if (c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), SQLITE_STATIC) != c.SQLITE_OK)
+                if (c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), sqlite_static) != c.SQLITE_OK)
                     return error.BindFailed;
             },
         }
@@ -583,9 +583,9 @@ fn printHeaderRow(
 ///       error.PrepareQueryFailed when sqlite3_prepare_v2 returns non-SQLITE_OK
 ///       propagates any writer I/O error
 fn execQuery(
+    allocator: std.mem.Allocator,
     db: *c.sqlite3,
     query: []const u8,
-    allocator: std.mem.Allocator,
     writer: anytype,
     header: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || @TypeOf(writer).Error)!void {
@@ -611,18 +611,20 @@ fn execQuery(
     }
 }
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
+// ─── Entry point ──────────────────────────────────────
 
 /// fatal(writer, code, comptime fmt, args) → noreturn
 /// Pre:  writer is stderr, code is non-zero ExitCode
 /// Post: "error: <message>\n" written to stderr, process exits with code
-fn fatal(writer: anytype, code: ExitCode, comptime fmt: []const u8, args: anytype) noreturn {
-    writer.print("error: " ++ fmt ++ "\n", args) catch {};
+fn fatal(comptime fmt: []const u8, writer: anytype, code: ExitCode, args: anytype) noreturn {
+    writer.print("error: " ++ fmt ++ "\n", args) catch |err| {
+        std.log.err("failed to write error message: {}", .{err});
+    };
     std.process.exit(@intFromEnum(code));
 }
 
 pub fn main() void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -632,21 +634,27 @@ pub fn main() void {
 
     // {A0: process argv is accessible, allocator is valid}
     const args = std.process.argsAlloc(allocator) catch
-        fatal(stderr_writer, .usage, "failed to read process arguments", .{});
+        fatal("failed to read process arguments", stderr_writer, .usage, .{});
     defer std.process.argsFree(allocator, args);
 
     const args_result = parseArgs(args) catch {
-        printUsage(stderr_writer) catch {};
+        printUsage(stderr_writer) catch |err| {
+            std.log.err("failed to write usage: {}", .{err});
+        };
         std.process.exit(@intFromEnum(ExitCode.usage));
     };
 
     switch (args_result) {
         .help => {
-            printUsage(stderr_writer) catch {};
+            printUsage(stderr_writer) catch |err| {
+                std.log.err("failed to write usage: {}", .{err});
+            };
             std.process.exit(@intFromEnum(ExitCode.success));
         },
         .version => {
-            stderr_writer.print("sql-pipe {s}\n", .{VERSION}) catch {};
+            stderr_writer.print("sql-pipe {s}\n", .{VERSION}) catch |err| {
+                std.log.err("failed to write version: {}", .{err});
+            };
             std.process.exit(@intFromEnum(ExitCode.success));
         },
         .parsed => |parsed| {
@@ -670,24 +678,24 @@ fn run(
     // {A1: query is the SQL string; parsed.type_inference indicates buffer-first mode}
 
     const db = openDb() catch
-        fatal(stderr_writer, .sql_error, "failed to open in-memory database", .{});
+        fatal("failed to open in-memory database", stderr_writer, .sql_error, .{});
     defer _ = c.sqlite3_close(db);
     // {A2: db is an open, empty in-memory SQLite database}
 
     const stdin = std.fs.File.stdin().deprecatedReader();
-    var csv_reader = csv.csvReaderWithDelimiter(stdin, allocator, parsed.delimiter);
+    var csv_reader = csv.csvReaderWithDelimiter(allocator, stdin, parsed.delimiter);
 
     const header_record = csv_reader.nextRecord() catch |err| switch (err) {
-        error.UnterminatedQuotedField => fatal(stderr_writer, .csv_error, "row 1: unterminated quoted field", .{}),
-        else => fatal(stderr_writer, .csv_error, "row 1: failed to parse CSV header", .{}),
-    } orelse fatal(stderr_writer, .csv_error, "empty input (no header row)", .{});
+        error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),
+        else => fatal("row 1: failed to parse CSV header", stderr_writer, .csv_error, .{}),
+    } orelse fatal("empty input (no header row)", stderr_writer, .csv_error, .{});
     defer csv_reader.freeRecord(header_record);
 
-    const cols = parseHeader(header_record, allocator) catch |err| {
+    const cols = parseHeader(allocator, header_record) catch |err| {
         switch (err) {
-            error.EmptyColumnName => fatal(stderr_writer, .csv_error, "row 1: empty column name in header", .{}),
-            error.NoColumns => fatal(stderr_writer, .csv_error, "row 1: no columns found in header", .{}),
-            else => fatal(stderr_writer, .csv_error, "row 1: failed to parse header", .{}),
+            error.EmptyColumnName => fatal("row 1: empty column name in header", stderr_writer, .csv_error, .{}),
+            error.NoColumns => fatal("row 1: no columns found in header", stderr_writer, .csv_error, .{}),
+            else => fatal("row 1: failed to parse header", stderr_writer, .csv_error, .{}),
         }
     };
     defer {
@@ -708,10 +716,20 @@ fn run(
     var csv_row_count: usize = 1; // 1 = header already read
 
     const types: []ColumnType = if (parsed.type_inference) blk: {
-        while (row_buffer.items.len < INFERENCE_BUFFER_SIZE) {
+        while (row_buffer.items.len < inference_buffer_size) {
             const rec = csv_reader.nextRecord() catch |err| switch (err) {
-                error.UnterminatedQuotedField => fatal(stderr_writer, .csv_error, "row {d}: unterminated quoted field", .{csv_row_count + 1}),
-                else => fatal(stderr_writer, .csv_error, "row {d}: failed to parse CSV", .{csv_row_count + 1}),
+                error.UnterminatedQuotedField => fatal(
+                    "row {d}: unterminated quoted field",
+                    stderr_writer,
+                    .csv_error,
+                    .{csv_row_count + 1},
+                ),
+                else => fatal(
+                    "row {d}: failed to parse CSV",
+                    stderr_writer,
+                    .csv_error,
+                    .{csv_row_count + 1},
+                ),
             } orelse break;
             csv_row_count += 1;
             if (rec.len == 0) {
@@ -719,13 +737,13 @@ fn run(
                 continue;
             }
             row_buffer.append(allocator, rec) catch
-                fatal(stderr_writer, .csv_error, "out of memory while buffering rows", .{});
+                fatal("out of memory while buffering rows", stderr_writer, .csv_error, .{});
         }
-        break :blk inferTypes(row_buffer.items, num_cols, allocator) catch
-            fatal(stderr_writer, .csv_error, "out of memory during type inference", .{});
+        break :blk inferTypes(allocator, row_buffer.items, num_cols) catch
+            fatal("out of memory during type inference", stderr_writer, .csv_error, .{});
     } else blk: {
         const t = allocator.alloc(ColumnType, num_cols) catch
-            fatal(stderr_writer, .csv_error, "out of memory", .{});
+            fatal("out of memory", stderr_writer, .csv_error, .{});
         @memset(t, .TEXT);
         break :blk t;
     };
@@ -733,35 +751,45 @@ fn run(
 
     // ─── Phase 2: create table and insert rows ────────────────────────────────
 
-    createTable(db, cols, types, allocator) catch
-        fatal(stderr_writer, .sql_error, "{s}", .{std.mem.span(c.sqlite3_errmsg(db))});
+    createTable(allocator, db, cols, types) catch
+        fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     // {A5: table `t` exists in db with num_cols columns typed per `types`}
 
     {
         var errmsg: [*c]u8 = null;
         if (c.sqlite3_exec(db, "BEGIN TRANSACTION", null, null, &errmsg) != c.SQLITE_OK) {
             const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-            fatal(stderr_writer, .sql_error, "{s}", .{msg});
+            fatal("{s}", stderr_writer, .sql_error, .{msg});
         }
     }
     // {A6: an active transaction is open on db}
 
-    const stmt = prepareInsert(db, num_cols, allocator) catch
-        fatal(stderr_writer, .sql_error, "{s}", .{std.mem.span(c.sqlite3_errmsg(db))});
+    const stmt = prepareInsert(allocator, db, num_cols) catch
+        fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     defer _ = c.sqlite3_finalize(stmt);
 
     // Insert buffered rows
     for (row_buffer.items) |row| {
         insertRowTyped(stmt, db, row, types, @intCast(num_cols)) catch
-            fatal(stderr_writer, .sql_error, "{s}", .{std.mem.span(c.sqlite3_errmsg(db))});
+            fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
     // {A7: all buffered rows are in t}
 
     // Stream remaining rows from stdin
     while (true) {
         const record = csv_reader.nextRecord() catch |err| switch (err) {
-            error.UnterminatedQuotedField => fatal(stderr_writer, .csv_error, "row {d}: unterminated quoted field", .{csv_row_count + 1}),
-            else => fatal(stderr_writer, .csv_error, "row {d}: failed to parse CSV", .{csv_row_count + 1}),
+            error.UnterminatedQuotedField => fatal(
+                "row {d}: unterminated quoted field",
+                stderr_writer,
+                .csv_error,
+                .{csv_row_count + 1},
+            ),
+            else => fatal(
+                "row {d}: failed to parse CSV",
+                stderr_writer,
+                .csv_error,
+                .{csv_row_count + 1},
+            ),
         } orelse break;
         csv_row_count += 1;
         defer csv_reader.freeRecord(record);
@@ -769,7 +797,7 @@ fn run(
         if (record.len == 0) continue;
 
         insertRowTyped(stmt, db, record, types, @intCast(num_cols)) catch
-            fatal(stderr_writer, .sql_error, "{s}", .{std.mem.span(c.sqlite3_errmsg(db))});
+            fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
     // {A8: all stdin CSV rows are inserted into t; transaction is still active}
 
@@ -778,19 +806,19 @@ fn run(
         const rc = c.sqlite3_exec(db, "COMMIT", null, null, &errmsg);
         if (rc != c.SQLITE_OK) {
             const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-            fatal(stderr_writer, .sql_error, "{s}", .{msg});
+            fatal("{s}", stderr_writer, .sql_error, .{msg});
         }
         if (errmsg != null) c.sqlite3_free(errmsg);
     }
     // {A9: transaction committed; t holds all input rows, no active transaction}
 
-    execQuery(db, query, allocator, stdout_writer, parsed.header) catch |err| {
+    execQuery(allocator, db, query, stdout_writer, parsed.header) catch |err| {
         switch (err) {
             error.PrepareQueryFailed => {
-                fatal(stderr_writer, .sql_error, "{s}", .{std.mem.span(c.sqlite3_errmsg(db))});
+                fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
             },
             else => {
-                fatal(stderr_writer, .sql_error, "{s}", .{std.mem.span(c.sqlite3_errmsg(db))});
+                fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
             },
         }
     };
