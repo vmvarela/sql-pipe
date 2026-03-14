@@ -1,0 +1,38 @@
+# nfpm package configuration for sql-pipe
+# Used by the CI release workflow to generate .deb (and .rpm) packages.
+#
+# Variables injected by the CI environment before invoking nfpm:
+#   VERSION  — semver without leading "v" (e.g. "0.2.0")
+#   GOARCH   — nfpm architecture token:
+#                amd64   → x86_64 binaries
+#                arm64   → aarch64 binaries
+#                armhf   → armv7 binaries
+#                386     → x86 binaries
+#
+# Invocation (from the CI working directory that contains the staged files):
+#   VERSION=0.2.0 GOARCH=amd64 nfpm package -p deb -f packaging/nfpm.yaml -t dist/
+
+name: sql-pipe
+arch: "${GOARCH}"
+version: "${VERSION}"
+maintainer: vmvarela <vmvarela@gmail.com>
+description: Read CSV from stdin, query with SQL, write CSV to stdout
+homepage: https://github.com/vmvarela/sql-pipe
+license: MIT
+
+contents:
+  # Binary — installed into /usr/bin and made executable
+  - src: ./sql-pipe
+    dst: /usr/bin/sql-pipe
+    file_info:
+      mode: 0755
+
+  # Man page — Debian convention: gzipped under /usr/share/man/man1/
+  - src: ./sql-pipe.1.gz
+    dst: /usr/share/man/man1/sql-pipe.1.gz
+    packager: deb
+
+  # License — Debian policy requires the copyright file under /usr/share/doc/<pkg>/
+  - src: ./LICENSE
+    dst: /usr/share/doc/sql-pipe/copyright
+    packager: deb

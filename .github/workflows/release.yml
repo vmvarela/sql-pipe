@@ -313,3 +313,69 @@ jobs:
           commit_email: vmvarela@gmail.com
           ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
           commit_message: "Update to ${{ github.ref_name }}"
+
+  # ── Build and upload .deb packages ─────────────────────────────────
+  # Generates Debian packages for amd64, arm64, armhf and 386 using nfpm.
+  # Each arch is independent — one failing arch does not block the others.
+  package-deb:
+    name: Package DEB (${{ matrix.goarch }})
+    needs: release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            asset: sql-pipe-x86_64-linux
+          - goarch: arm64
+            asset: sql-pipe-aarch64-linux
+          - goarch: armhf
+            asset: sql-pipe-armv7-linux
+          - goarch: "386"
+            asset: sql-pipe-x86-linux
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Install nfpm
+        run: |
+          curl -sfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh \
+            | sh -s -- -b /usr/local/bin
+
+      - name: Stage files for packaging
+        run: |
+          mkdir -p pkg-work
+          cp artifacts/${{ matrix.asset }}  pkg-work/sql-pipe
+          cp artifacts/sql-pipe.1.gz        pkg-work/sql-pipe.1.gz
+          cp LICENSE                         pkg-work/LICENSE
+
+      - name: Build .deb
+        working-directory: pkg-work
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${VERSION#v}"
+          mkdir -p dist
+          VERSION="$VERSION" GOARCH="$GOARCH" \
+            nfpm package -p deb \
+              -f "$GITHUB_WORKSPACE/packaging/nfpm.yaml" \
+              -t dist/
+
+      - name: Upload .deb to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: pkg-work
+        run: |
+          gh release upload "${{ github.ref_name }}" dist/*.deb \
+            --repo "${{ github.repository }}" \
+            --clobber
