@@ -5,3 +5,7 @@ lib/
 sqlite.zip
 # Nix build output symlink
 result
+# Agent instructions and skills (local-only)
+AGENTS.md
+skills-lock.json
+.agents/
