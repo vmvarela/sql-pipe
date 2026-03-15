@@ -660,7 +660,7 @@ jobs:
 
   # ── Update Nix package versions ────────────────────────────────────
   # Updates packaging/nix/versions.json with the new release hashes and
-  # commits back to master so `nix run github:vmvarela/sql-pipe` always
+  # opens a Pull Request so `nix run github:vmvarela/sql-pipe` always
   # points to the latest version.
   update-nix:
     name: Update Nix package
@@ -668,6 +668,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -718,10 +719,21 @@ jobs:
           echo "==> Updated Nix versions.json for sql-pipe ${VERSION}:"
           cat packaging/nix/versions.json
 
-      - name: Commit and push
+      - name: Open Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          BRANCH="chore/nix-update-${{ github.ref_name }}"
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
           git add packaging/nix/versions.json
-          git diff --cached --quiet || git commit -m "chore(nix): update to ${{ github.ref_name }}"
-          git push
+          git diff --cached --quiet && echo "No changes to commit." && exit 0
+          git commit -m "chore(nix): update versions.json to ${{ github.ref_name }}"
+          git push origin "${BRANCH}"
+          gh pr create \
+            --base master \
+            --head "${BRANCH}" \
+            --title "chore(nix): update versions.json to ${{ github.ref_name }}" \
+            --body "Automated update of \`packaging/nix/versions.json\` hashes for release \`${{ github.ref_name }}\`." \
+            --label "type:chore"
