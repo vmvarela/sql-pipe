@@ -15,5 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: release-drafter/release-drafter@v7
+        with:
+          # On pull_request events, only apply auto-labels — do not update
+          # the draft release, as the PR merge commit is not a valid
+          # target_commitish for a release.
+          disable-releaser: ${{ github.event_name == 'pull_request' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
