@@ -438,6 +438,71 @@ jobs:
             --repo "${{ github.repository }}" \
             --clobber
 
+  # ── Build and upload .apk packages ────────────────────────────────
+  # Generates Alpine Linux packages for x86_64 and aarch64 using nfpm.
+  # Each arch is independent — one failing arch does not block the other.
+  package-apk:
+    name: Package APK (${{ matrix.goarch }})
+    needs: release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            asset: sql-pipe-x86_64-linux
+          - goarch: arm64
+            asset: sql-pipe-aarch64-linux
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Install nfpm
+        run: |
+          NFPM_VERSION=2.45.1
+          curl -sfL -o /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
+
+      - name: Stage files for packaging
+        run: |
+          mkdir -p pkg-work
+          cp artifacts/${{ matrix.asset }}  pkg-work/sql-pipe
+          chmod +x pkg-work/sql-pipe
+          cp artifacts/sql-pipe.1.gz        pkg-work/sql-pipe.1.gz
+          cp LICENSE                         pkg-work/LICENSE
+
+      - name: Build .apk
+        working-directory: pkg-work
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION="${VERSION#v}"
+          mkdir -p dist
+          VERSION="$VERSION" GOARCH="$GOARCH" \
+            nfpm package -p apk \
+              -f "$GITHUB_WORKSPACE/packaging/nfpm.yaml" \
+              -t dist/
+
+      - name: Upload .apk to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: pkg-work
+        run: |
+          gh release upload "${{ github.ref_name }}" dist/*.apk \
+            --repo "${{ github.repository }}" \
+            --clobber
+
   # ── Build and upload Chocolatey package ────────────────────────────
   # Creates a .nupkg for Windows (x86 + x86_64) and uploads it to the
   # GitHub Release. If CHOCOLATEY_API_KEY is set, also pushes to the
@@ -623,12 +688,13 @@ jobs:
   # binaries, man page, .deb, .rpm AND .nupkg packages.
   checksums:
     name: Generate SHA256 checksums
-    needs: [release, package-deb, package-rpm, package-choco]
+    needs: [release, package-deb, package-rpm, package-apk, package-choco]
     if: >-
       always()
       && needs.release.result == 'success'
       && (needs.package-deb.result == 'success' || needs.package-deb.result == 'skipped')
       && (needs.package-rpm.result == 'success' || needs.package-rpm.result == 'skipped')
+      && (needs.package-apk.result == 'success' || needs.package-apk.result == 'skipped')
       && (needs.package-choco.result == 'success' || needs.package-choco.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
