@@ -9,7 +9,7 @@ SYNOPSIS
 DESCRIPTION
 	sql-pipe reads CSV data from standard input, loads it into an in-memory SQLite
 	database table named *t*, executes the provided SQL query, and prints the results
-	as CSV to standard output.
+	as CSV (or JSON when *--json* is used) to standard output.
 
 	This tool is useful for quick data transformations, filtering, grouping, and
 	aggregations on CSV files without manual SQL database setup.
@@ -44,7 +44,13 @@ OPTIONS
 		Print a header row with column names as the first line of output. Column
 		names are taken from the SQL column alias or original name. The output
 		remains valid CSV that can be piped back into sql-pipe. Header output is
-		off by default.
+		off by default. Cannot be combined with *--json*.
+
+	*--json*
+		Output results as a JSON array of objects instead of CSV. Each row
+		becomes a JSON object with column names as keys and typed values (string,
+		number, or null). Mutually exclusive with *--delimiter*, *--tsv*, and
+		*--header*.
 
 	*-h, --help*
 		Print the help message and exit with code 0.
@@ -88,6 +94,13 @@ EXAMPLES
 	Process tab-separated input (TSV):
 
 		$ cat data.tsv | sql-pipe --tsv 'SELECT \* FROM t'
+
+	Output results as JSON:
+
+		$ printf 'name,age\nAlice,30\nBob,25' | sql-pipe --json 'SELECT \* FROM t'
+
+	Output:++
+	[{"name":"Alice","age":30},{"name":"Bob","age":25}]
 
 EXIT CODES
 	*0*

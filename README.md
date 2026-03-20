@@ -52,6 +52,15 @@ sudo rpm -i https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pi
 
 Replace `VERSION` with the release version (e.g. `0.2.0`) and `x86_64` with your architecture (`aarch64`).
 
+**Alpine Linux (.apk package):**
+
+```sh
+wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERSION_x86_64.apk
+sudo apk add --allow-untrusted sql-pipe_VERSION_x86_64.apk
+```
+
+Replace `VERSION` with the release version (e.g. `0.2.0`) and `x86_64` with your architecture (`aarch64`).
+
 **Arch Linux (AUR):** install with your preferred AUR helper:
 
 ```sh
@@ -138,6 +147,15 @@ $ cat data.tsv | sql-pipe --tsv 'SELECT * FROM t'
 $ cat data.tsv | sql-pipe --delimiter '\t' 'SELECT * FROM t'
 ```
 
+Output results as a JSON array of objects with `--json`:
+
+```sh
+$ printf 'name,age\nAlice,30\nBob,25' | sql-pipe --json 'SELECT * FROM t'
+[{"name":"Alice","age":30},{"name":"Bob","age":25}]
+```
+
+`--json` is mutually exclusive with `-d`/`--delimiter`, `--tsv`, and `-H`/`--header`.
+
 Chain queries by piping back in — useful for two-pass aggregations:
 
 ```sh
@@ -154,6 +172,7 @@ $ cat events.csv \
 | `--tsv` | Alias for `--delimiter '\t'` |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
 | `-H`, `--header` | Print column names as the first output row |
+| `--json` | Output results as a JSON array of objects (mutually exclusive with `-d`, `--tsv`, `-H`) |
 | `-h`, `--help` | Show usage help and exit |
 | `-V`, `--version` | Print version and exit |
 
