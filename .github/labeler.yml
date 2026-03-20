@@ -1,20 +1,50 @@
-"type:docs":
+# Labels are applied based on PR title prefix (Conventional Commits) first,
+# then fall back to changed-file globs. The title-based rules take precedence
+# because they are listed first and actions/labeler applies the first match.
+
+"type:feature":
+  - head-branch:
+      - "/^feat/"
+  - title:
+      - "/^feat(\\(.+\\))?:/i"
   - changed-files:
       - any-glob-to-any-file:
-          - "**/*.md"
-          - "LICENSE*"
-          - "CHANGELOG*"
+          - "src/**"
+
+"type:bug":
+  - head-branch:
+      - "/^fix/"
+  - title:
+      - "/^fix(\\(.+\\))?:/i"
 
 "type:chore":
+  - head-branch:
+      - "/^chore/"
+      - "/^ci/"
+      - "/^test/"
+      - "/^refactor/"
+      - "/^build/"
+  - title:
+      - "/^chore(\\(.+\\))?:/i"
+      - "/^ci(\\(.+\\))?:/i"
+      - "/^test(\\(.+\\))?:/i"
+      - "/^refactor(\\(.+\\))?:/i"
+      - "/^build(\\(.+\\))?:/i"
   - changed-files:
       - any-glob-to-any-file:
-          - ".github/**"
           - "build.zig"
           - "build.zig.zon"
           - ".gitignore"
           - ".editorconfig"
 
-"type:feature":
+"type:docs":
+  - head-branch:
+      - "/^docs/"
+  - title:
+      - "/^docs(\\(.+\\))?:/i"
   - changed-files:
       - any-glob-to-any-file:
-          - "src/**"
+          - "**/*.md"
+          - "docs/**"
+          - "LICENSE*"
+          - "CHANGELOG*"
