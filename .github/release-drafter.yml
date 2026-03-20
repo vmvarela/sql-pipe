@@ -6,25 +6,66 @@ template: |
   $CHANGES
 
   **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+autolabeler:
+  - label: "type:feature"
+    title:
+      - "/^feat(\\(.+\\))?:/i"
+  - label: "type:bug"
+    title:
+      - "/^fix(\\(.+\\))?:/i"
+  - label: "type:chore"
+    title:
+      - "/^chore(\\(.+\\))?:/i"
+      - "/^ci(\\(.+\\))?:/i"
+      - "/^test(\\(.+\\))?:/i"
+      - "/^refactor(\\(.+\\))?:/i"
+      - "/^build(\\(.+\\))?:/i"
+  - label: "type:docs"
+    title:
+      - "/^docs(\\(.+\\))?:/i"
+
 categories:
   - title: "🚀 Features"
     labels:
       - "type:feature"
+    exclude-labels:
+      - "type:bug"
+      - "type:chore"
+      - "type:docs"
+      - "type:spike"
   - title: "🐛 Bug Fixes"
     labels:
       - "type:bug"
+    exclude-labels:
+      - "type:feature"
+      - "type:chore"
+      - "type:docs"
+      - "type:spike"
   - title: "🧰 Maintenance"
     labels:
       - "type:chore"
       - "tech-debt"
+    exclude-labels:
+      - "type:feature"
+      - "type:bug"
+      - "type:docs"
+      - "type:spike"
   - title: "📝 Documentation"
     labels:
       - "type:docs"
+    exclude-labels:
+      - "type:feature"
+      - "type:bug"
+      - "type:chore"
+      - "type:spike"
   - title: "🔬 Spikes & Research"
     labels:
       - "type:spike"
+
 change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
 change-title-escapes: '\<*_&'
+
 version-resolver:
   major:
     labels:
