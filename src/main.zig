@@ -21,6 +21,7 @@ const sqlite_static: c.sqlite3_destructor_type = null;
 const SqlPipeError = error{
     MissingQuery,
     InvalidDelimiter,
+    IncompatibleFlags,
     OpenDbFailed,
     EmptyInput,
     EmptyColumnName,
@@ -64,6 +65,8 @@ const ParsedArgs = struct {
     delimiter: u8,
     /// When true, print a header row with column names before data rows.
     header: bool,
+    /// When true, emit results as a JSON array of objects instead of CSV.
+    json: bool,
 };
 
 /// Result of argument parsing — either parsed arguments or a special action.
@@ -90,9 +93,10 @@ fn printUsage(writer: anytype) !void {
         \\
         \\Options:
         \\  -d, --delimiter <char>  Input field delimiter (default: ,)
-        \\  --tsv                   Alias for --delimiter '\\t'
+        \\  --tsv                   Alias for --delimiter '\t'
         \\  --no-type-inference  Treat all columns as TEXT (skip auto-detection)
         \\  -H, --header         Print column names as the first output row
+        \\  --json               Output results as a JSON array of objects
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
         \\
@@ -107,6 +111,7 @@ fn printUsage(writer: anytype) !void {
         \\  cat data.tsv | sql-pipe --tsv 'SELECT * FROM t'
         \\  cat data.psv | sql-pipe -d '|' 'SELECT * FROM t'
         \\  cat data.csv | sql-pipe 'SELECT region, SUM(revenue) FROM t GROUP BY region'
+        \\  cat data.csv | sql-pipe --json 'SELECT * FROM t'
         \\
     );
 }
@@ -125,20 +130,26 @@ fn parseDelimiter(value: []const u8) SqlPipeError!u8 {
 /// Pre:  args is the full process argument slice; args[0] is the program name
 /// Post: result.parsed.query is the first non-flag argument
 ///       result.parsed.type_inference = false when "--no-type-inference" is present
+///       result.parsed.json = true when "--json" is present
 ///       result = .help when --help or -h is present
 ///       result = .version when --version or -V is present
 ///       error.MissingQuery when no non-flag argument is found
+///       error.IncompatibleFlags when --json is combined with --delimiter/--tsv/--header
 fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
     var delimiter: u8 = ',';
     var header = false;
+    var json = false;
+    var explicit_delimiter = false;
+    var explicit_tsv = false;
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
     //   type_inference reflects the presence of --no-type-inference;
     //   delimiter reflects -d/--delimiter/--tsv if present;
-    //   header reflects the presence of --header/-H
+    //   header reflects the presence of --header/-H;
+    //   json reflects the presence of --json
     // Bounding function: args.len - i
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -149,27 +160,39 @@ fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
             return .version;
         } else if (std.mem.eql(u8, arg, "--tsv")) {
             delimiter = '\t';
+            explicit_tsv = true;
         } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--delimiter")) {
             i += 1;
             if (i >= args.len) return error.InvalidDelimiter;
             delimiter = try parseDelimiter(args[i]);
+            explicit_delimiter = true;
         } else if (std.mem.startsWith(u8, arg, "--delimiter=")) {
             delimiter = try parseDelimiter(arg["--delimiter=".len..]);
+            explicit_delimiter = true;
         } else if (std.mem.startsWith(u8, arg, "-d=")) {
             delimiter = try parseDelimiter(arg["-d=".len..]);
+            explicit_delimiter = true;
         } else if (std.mem.eql(u8, arg, "--no-type-inference")) {
             type_inference = false;
         } else if (std.mem.eql(u8, arg, "--header") or std.mem.eql(u8, arg, "-H")) {
             header = true;
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            json = true;
         } else {
             if (query == null) query = arg;
         }
     }
+
+    // --json is mutually exclusive with --delimiter / --tsv / --header
+    if (json and (explicit_delimiter or explicit_tsv or header))
+        return error.IncompatibleFlags;
+
     return .{ .parsed = ParsedArgs{
         .query = query orelse return error.MissingQuery,
         .type_inference = type_inference,
         .delimiter = delimiter,
         .header = header,
+        .json = json,
     } };
 }
 
@@ -574,12 +597,89 @@ fn printHeaderRow(
     try writer.writeByte('\n');
 }
 
-/// execQuery(db, query, allocator, writer, header) → !void
+/// writeJsonString(writer, s) → !void
+/// Pre:  writer is valid, s is a UTF-8 slice
+/// Post: s is written as a JSON string literal (double-quoted, with special
+///       characters escaped per RFC 8259: \", \\, \/, \b, \f, \n, \r, \t,
+///       and \uXXXX for control characters 0x00–0x1F)
+fn writeJsonString(writer: anytype, s: []const u8) !void {
+    try writer.writeByte('"');
+    for (s) |ch| {
+        switch (ch) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '/' => try writer.writeAll("\\/"),
+            '\x08' => try writer.writeAll("\\b"),
+            '\x0C' => try writer.writeAll("\\f"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            0x00...0x07, 0x0B, 0x0E...0x1F => try writer.print("\\u{x:0>4}", .{ch}),
+            else => try writer.writeByte(ch),
+        }
+    }
+    try writer.writeByte('"');
+}
+
+/// printJsonRow(stmt, col_count, col_names, writer, is_first) → !void
+/// Pre:  sqlite3_step returned SQLITE_ROW for stmt
+///       col_count > 0; col_names.len = col_count
+///       is_first indicates whether this is the first row (no leading comma)
+/// Post: one JSON object written to writer as { "col": value, … }
+///       NULL cells are written as JSON null
+///       INTEGER / REAL columns written as JSON numbers
+///       TEXT columns written as JSON strings
+fn printJsonRow(
+    stmt: *c.sqlite3_stmt,
+    col_count: c_int,
+    col_names: []const [*:0]const u8,
+    writer: anytype,
+    is_first: bool,
+) !void {
+    if (!is_first) try writer.writeByte(',');
+    try writer.writeByte('{');
+    // Loop invariant I: columns 0..i-1 have been written as "name":value pairs
+    // Bounding function: col_count - i
+    var i: c_int = 0;
+    while (i < col_count) : (i += 1) {
+        if (i > 0) try writer.writeByte(',');
+        const name = std.mem.span(col_names[@intCast(i)]);
+        try writeJsonString(writer, name);
+        try writer.writeByte(':');
+        switch (c.sqlite3_column_type(stmt, i)) {
+            c.SQLITE_NULL => try writer.writeAll("null"),
+            c.SQLITE_INTEGER => try writer.print("{d}", .{c.sqlite3_column_int64(stmt, i)}),
+            c.SQLITE_FLOAT => {
+                const f = c.sqlite3_column_double(stmt, i);
+                // Emit as integer notation when value has no fractional part,
+                // otherwise use full precision float.
+                if (f == @trunc(f) and !std.math.isInf(f) and !std.math.isNan(f)) {
+                    try writer.print("{d}", .{@as(i64, @intFromFloat(f))});
+                } else {
+                    try writer.print("{d}", .{f});
+                }
+            },
+            else => { // SQLITE_TEXT and SQLITE_BLOB → emit as string
+                const ptr = c.sqlite3_column_text(stmt, i);
+                if (ptr != null) {
+                    try writeJsonString(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
+                } else {
+                    try writer.writeAll("null");
+                }
+            },
+        }
+    }
+    try writer.writeByte('}');
+}
+
+/// execQuery(db, query, allocator, writer, header, json) → !void
 /// Pre:  db is open with table `t` populated
 ///       query is a valid SQL string (not null-terminated)
 ///       allocator is valid
-/// Post: if header = true, column names are written as the first CSV row
-///       all result rows written to writer as CSV lines via printRow
+///       when json = true, header and delimiter flags must not be set (caller's responsibility)
+/// Post: if json = true, results are written as a JSON array of objects
+///       if header = true (and json = false), column names written as the first CSV row
+///       all result rows written to writer as CSV lines via printRow (when json = false)
 ///       error.PrepareQueryFailed when sqlite3_prepare_v2 returns non-SQLITE_OK
 ///       propagates any writer I/O error
 fn execQuery(
@@ -588,6 +688,7 @@ fn execQuery(
     query: []const u8,
     writer: anytype,
     header: bool,
+    json: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || @TypeOf(writer).Error)!void {
     const query_z = try allocator.dupeZ(u8, query);
     defer allocator.free(query_z);
@@ -599,15 +700,35 @@ fn execQuery(
 
     const col_count = c.sqlite3_column_count(stmt);
 
-    // When header is requested, print column names before data rows
-    if (header and col_count > 0) {
-        try printHeaderRow(stmt.?, col_count, writer);
-    }
+    if (json) {
+        // Collect column names before stepping (sqlite3_column_name is valid before step)
+        var col_names = try allocator.alloc([*:0]const u8, @intCast(col_count));
+        defer allocator.free(col_names);
+        var ci: c_int = 0;
+        while (ci < col_count) : (ci += 1) {
+            col_names[@intCast(ci)] = c.sqlite3_column_name(stmt, ci);
+        }
 
-    // Loop invariant I: all SQLITE_ROW results returned so far have been printed
-    // Bounding function: number of remaining rows in the result set (finite)
-    while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-        try printRow(stmt.?, col_count, writer);
+        try writer.writeByte('[');
+        var first = true;
+        // Loop invariant I: all SQLITE_ROW results returned so far have been printed as JSON objects
+        // Bounding function: number of remaining rows in the result set (finite)
+        while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+            try printJsonRow(stmt.?, col_count, col_names, writer, first);
+            first = false;
+        }
+        try writer.writeAll("]\n");
+    } else {
+        // When header is requested, print column names before data rows
+        if (header and col_count > 0) {
+            try printHeaderRow(stmt.?, col_count, writer);
+        }
+
+        // Loop invariant I: all SQLITE_ROW results returned so far have been printed
+        // Bounding function: number of remaining rows in the result set (finite)
+        while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+            try printRow(stmt.?, col_count, writer);
+        }
     }
 }
 
@@ -637,9 +758,18 @@ pub fn main() void {
         fatal("failed to read process arguments", stderr_writer, .usage, .{});
     defer std.process.argsFree(allocator, args);
 
-    const args_result = parseArgs(args) catch {
-        printUsage(stderr_writer) catch |err| {
-            std.log.err("failed to write usage: {}", .{err});
+    const args_result = parseArgs(args) catch |err| {
+        switch (err) {
+            error.IncompatibleFlags => {
+                stderr_writer.writeAll("error: --json cannot be combined with --delimiter, --tsv, or --header\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            else => {},
+        }
+        printUsage(stderr_writer) catch |werr| {
+            std.log.err("failed to write usage: {}", .{werr});
         };
         std.process.exit(@intFromEnum(ExitCode.usage));
     };
@@ -812,7 +942,7 @@ fn run(
     }
     // {A9: transaction committed; t holds all input rows, no active transaction}
 
-    execQuery(allocator, db, query, stdout_writer, parsed.header) catch |err| {
+    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.json) catch |err| {
         switch (err) {
             error.PrepareQueryFailed => {
                 fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});

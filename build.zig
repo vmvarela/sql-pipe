@@ -181,6 +181,39 @@ pub fn build(b: *std.Build) void {
     test_default_no_header.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_default_no_header.step);
 
+    // Integration test 14: --json emits a JSON array of objects
+    const test_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --json 'SELECT name, age FROM t ORDER BY age' | diff - <(printf '[{"name":"Bob","age":25},{"name":"Alice","age":30}]\n')
+    });
+    test_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json.step);
+
+    // Integration test 15: --json NULL values are rendered as JSON null
+    const test_json_null = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\exp='[{"name":"Alice","score":null},{"name":"Bob","score":9.5}]'
+        \\printf 'name,score\nAlice,\nBob,9.5\n' | ./zig-out/bin/sql-pipe --json 'SELECT name, score FROM t ORDER BY name' | diff - <(printf '%s\n' "$exp")
+    });
+    test_json_null.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_null.step);
+
+    // Integration test 16: --json empty result set produces []
+    const test_json_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\n' | ./zig-out/bin/sql-pipe --json 'SELECT * FROM t' | diff - <(printf '[]\n')
+    });
+    test_json_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_empty.step);
+
+    // Integration test 17: --json is mutually exclusive with --header (exits 1)
+    const test_json_incompatible = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --json --header 'SELECT * FROM t'; test $? -eq 1
+    });
+    test_json_incompatible.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_incompatible.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
