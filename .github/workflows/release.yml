@@ -210,7 +210,7 @@ jobs:
 
             def install
               bin.install Dir["sql-pipe*"].first => "sql-pipe"
-              resource("man").stage { man1.install "sql-pipe.1.gz" }
+              resource("man").stage { man1.install Dir["*"].first => "sql-pipe.1.gz" }
             end
 
             test do
