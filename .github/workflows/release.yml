@@ -172,6 +172,7 @@ jobs:
           SHA_MACOS_X64=$(sha256sum artifacts/sql-pipe-x86_64-macos   | awk '{print $1}')
           SHA_LINUX_ARM64=$(sha256sum artifacts/sql-pipe-aarch64-linux | awk '{print $1}')
           SHA_LINUX_X64=$(sha256sum artifacts/sql-pipe-x86_64-linux   | awk '{print $1}')
+          SHA_MAN=$(sha256sum artifacts/sql-pipe.1.gz                 | awk '{print $1}')
 
           cat > sql-pipe.rb <<'FORMULA'
           class SqlPipe < Formula
@@ -202,8 +203,14 @@ jobs:
               end
             end
 
+            resource "man" do
+              url "https://github.com/vmvarela/sql-pipe/releases/download/v__VERSION__/sql-pipe.1.gz"
+              sha256 "__SHA_MAN__"
+            end
+
             def install
               bin.install Dir["sql-pipe*"].first => "sql-pipe"
+              resource("man").stage { man1.install "sql-pipe.1.gz" }
             end
 
             test do
@@ -218,6 +225,7 @@ jobs:
           sed -i "s/__SHA_MACOS_X64__/${SHA_MACOS_X64}/g"     sql-pipe.rb
           sed -i "s/__SHA_LINUX_ARM64__/${SHA_LINUX_ARM64}/g" sql-pipe.rb
           sed -i "s/__SHA_LINUX_X64__/${SHA_LINUX_X64}/g"     sql-pipe.rb
+          sed -i "s/__SHA_MAN__/${SHA_MAN}/g"                 sql-pipe.rb
 
           echo "==> Generated formula for sql-pipe ${VERSION}:"
           cat sql-pipe.rb
