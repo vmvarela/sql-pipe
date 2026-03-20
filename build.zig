@@ -133,6 +133,54 @@ pub fn build(b: *std.Build) void {
     test_sql_error.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_sql_error.step);
 
+    // Integration test 8: --delimiter "|" reads pipe-separated input; output is always CSV
+    const test_delimiter_pipe = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name|age\nAlice|30\nBob|25\n' | ./zig-out/bin/sql-pipe --delimiter '|' 'SELECT name, age FROM t ORDER BY age' | diff - <(printf 'Bob,25\nAlice,30\n')
+    });
+    test_delimiter_pipe.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_delimiter_pipe.step);
+
+    // Integration test 9: --delimiter "\t" reads tab-separated input
+    const test_delimiter_tab = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name\tage\nAlice\t30\nBob\t25\n' | ./zig-out/bin/sql-pipe --delimiter '\t' 'SELECT name, age FROM t ORDER BY age' | diff - <(printf 'Bob,25\nAlice,30\n')
+    });
+    test_delimiter_tab.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_delimiter_tab.step);
+
+    // Integration test 10: --tsv is an alias for --delimiter "\t"
+    const test_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name\tage\nAlice\t30\nBob\t25\n' | ./zig-out/bin/sql-pipe --tsv 'SELECT name, age FROM t ORDER BY age' | diff - <(printf 'Bob,25\nAlice,30\n')
+    });
+    test_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_tsv.step);
+
+    // Integration test 11: --header includes column names as the first output row
+    const test_header = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --header 'SELECT name, age FROM t ORDER BY age' | diff - <(printf 'name,age\nBob,25\nAlice,30\n')
+    });
+    test_header.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_header.step);
+
+    // Integration test 12: --header combined with --delimiter (pipe-separated input, CSV output with header)
+    const test_header_delimiter = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name|age\nAlice|30\nBob|25\n' | ./zig-out/bin/sql-pipe --header --delimiter '|' 'SELECT name, age FROM t ORDER BY age' | diff - <(printf 'name,age\nBob,25\nAlice,30\n')
+    });
+    test_header_delimiter.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_header_delimiter.step);
+
+    // Integration test 13: default behavior (no flags) produces CSV without header
+    const test_default_no_header = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe 'SELECT name, age FROM t ORDER BY name' | diff - <(printf 'Alice,30\nBob,25\n')
+    });
+    test_default_no_header.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_default_no_header.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
