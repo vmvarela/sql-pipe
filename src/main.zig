@@ -312,16 +312,20 @@ fn inferTypes(
     return types;
 }
 
-/// parseHeader(record, allocator) → [][]const u8
+/// parseHeader(record, allocator, stderr_writer) → [][]const u8
 /// Pre:  record is a non-null CSV record (slice of owned UTF-8 field slices)
 ///       allocator is valid
+///       stderr_writer is a valid writer (warnings are best-effort; write errors ignored)
 /// Post: result is a non-empty slice of trimmed column names (leading/trailing
 ///       ASCII whitespace removed); UTF-8 BOM stripped from the first field
+///       duplicate names are suffixed (_2, _3, …) and a warning is written to
+///       stderr for each rename: `warning: duplicate column "<original>" renamed to "<new>"`
 ///       error.EmptyColumnName when any trimmed name is empty
 ///       error.NoColumns when record is empty
 fn parseHeader(
     allocator: std.mem.Allocator,
     record: [][]u8,
+    stderr_writer: anytype,
 ) (SqlPipeError || std.mem.Allocator.Error)![][]const u8 {
     if (record.len == 0) return error.NoColumns;
 
@@ -358,8 +362,14 @@ fn parseHeader(
 
         const col: []const u8 = if (count == 1)
             try allocator.dupe(u8, base)
-        else
-            try std.fmt.allocPrint(allocator, "{s}_{d}", .{ base, count });
+        else blk: {
+            const renamed = try std.fmt.allocPrint(allocator, "{s}_{d}", .{ base, count });
+            // Best-effort warning to stderr; write errors are silently ignored
+            stderr_writer.print("warning: duplicate column \"{s}\" renamed to \"{s}\"\n", .{ base, renamed }) catch |err| {
+                std.log.err("failed to write warning: {}", .{err});
+            };
+            break :blk renamed;
+        };
 
         try cols.append(allocator, col);
     }
@@ -821,7 +831,7 @@ fn run(
     } orelse fatal("empty input (no header row)", stderr_writer, .csv_error, .{});
     defer csv_reader.freeRecord(header_record);
 
-    const cols = parseHeader(allocator, header_record) catch |err| {
+    const cols = parseHeader(allocator, header_record, stderr_writer) catch |err| {
         switch (err) {
             error.EmptyColumnName => fatal("row 1: empty column name in header", stderr_writer, .csv_error, .{}),
             error.NoColumns => fatal("row 1: no columns found in header", stderr_writer, .csv_error, .{}),
