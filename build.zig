@@ -214,6 +214,22 @@ pub fn build(b: *std.Build) void {
     test_json_incompatible.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_json_incompatible.step);
 
+    // Integration test 18: duplicate column names emit warning to stderr
+    const test_dup_col_warning = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,value,value\n1,a,b\n' | ./zig-out/bin/sql-pipe 'SELECT value_2 FROM t' 2>&1 >/dev/null | grep -q 'warning: duplicate column "value" renamed to "value_2"'
+    });
+    test_dup_col_warning.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_dup_col_warning.step);
+
+    // Integration test 19: duplicate column warning does not corrupt stdout
+    const test_dup_col_stdout = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,value,value\n1,a,b\n' | ./zig-out/bin/sql-pipe 'SELECT value_2 FROM t' 2>/dev/null | diff - <(printf 'b\n')
+    });
+    test_dup_col_stdout.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_dup_col_stdout.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
