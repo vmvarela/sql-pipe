@@ -538,7 +538,7 @@ fn printRow(
         } else {
             const ptr = c.sqlite3_column_text(stmt, i);
             if (ptr != null) {
-                try writer.writeAll(std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
+                try writeField(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
             } else {
                 try writer.writeAll("NULL");
             }
