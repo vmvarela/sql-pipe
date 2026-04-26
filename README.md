@@ -17,7 +17,7 @@ $ curl -s https://example.com/data.csv | sql-pipe 'SELECT region, SUM(revenue) F
 **macOS / Linux via Homebrew:**
 
 ```sh
-brew tap vmvarela/sql-pipe
+brew tap vmvarela/homebrew-tap
 brew install sql-pipe
 ```
 
