@@ -214,6 +214,14 @@ pub fn build(b: *std.Build) void {
     test_json_incompatible.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_json_incompatible.step);
 
+    // Integration test 17b: --json is compatible with --delimiter (delimiter affects input only)
+    const test_json_with_delimiter = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name;age\nAlice;30\nBob;25\n' | ./zig-out/bin/sql-pipe --json -d ';' 'SELECT name, age FROM t ORDER BY age' | diff - <(printf '[{"name":"Bob","age":25},{"name":"Alice","age":30}]\n')
+    });
+    test_json_with_delimiter.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_with_delimiter.step);
+
     // Integration test 18: duplicate column names emit warning to stderr
     const test_dup_col_warning = b.addSystemCommand(&.{
         "bash", "-c",

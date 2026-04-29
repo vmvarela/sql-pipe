@@ -192,8 +192,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         }
     }
 
-    // --json is mutually exclusive with --delimiter / --tsv / --header
-    if (json and (explicit_delimiter or explicit_tsv or header))
+    // --json is mutually exclusive with --header (both affect output format)
+    if (json and header)
         return error.IncompatibleFlags;
 
     return .{ .parsed = ParsedArgs{
@@ -901,7 +901,7 @@ pub fn main(init: std.process.Init.Minimal) void {
     const args_result = parseArgs(args) catch |err| {
         switch (err) {
             error.IncompatibleFlags => {
-                stderr_writer.writeAll("error: --json cannot be combined with --delimiter, --tsv, or --header\n") catch |werr| {
+                stderr_writer.writeAll("error: --json cannot be combined with --header\n") catch |werr| {
                     std.log.err("failed to write error message: {}", .{werr});
                 };
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
