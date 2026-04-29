@@ -174,18 +174,33 @@ $ cat events.csv \
 | `-H`, `--header` | Print column names as the first output row |
 | `--json` | Output results as a JSON array of objects (mutually exclusive with `-H`) |
 | `--max-rows <n>` | Stop if more than `n` data rows are read (exit 1) |
-| `-v`, `--verbose` | Print `Loaded <n> rows` to stderr after loading (always on TTY; forced with flag) |
+| `-v`, `--verbose` | Print `Loaded <n> rows in <t>s` to stderr after loading (always on TTY; forced with flag) |
 | `-h`, `--help` | Show usage help and exit |
 | `-V`, `--version` | Print version and exit |
 
-After loading, `sql-pipe` prints `Loaded <n> rows` to stderr whenever stderr is a TTY (interactive terminal). The message is suppressed in scripts and pipes to keep them noise-free. Use `-v` / `--verbose` to force it regardless of TTY:
+After loading, `sql-pipe` prints `Loaded <n> rows in <t>s` to stderr whenever stderr is a TTY (interactive terminal). The message is suppressed in scripts and pipes to keep them noise-free. Use `-v` / `--verbose` to force it regardless of TTY:
 
 ```sh
 $ cat sales.csv | sql-pipe --verbose 'SELECT region, SUM(revenue) FROM t GROUP BY region'
-# stderr: Loaded 42,317 rows
+# stderr: Loaded 42,317 rows in 1.2s
 ```
 
-The count uses thousands separators (`42,317` not `42317`). It is always written to stderr so stdout remains clean for piping.
+When stderr is a TTY and the input exceeds 10,000 rows, a running counter updates in place on stderr during loading:
+
+```
+Loading... 10,000 rows
+Loading... 20,000 rows
+...
+Loaded 42,317 rows in 1.2s
+```
+
+When `--max-rows` is set, the total limit is shown alongside the current count:
+
+```
+Loading... 10,000 / 100,000 rows
+```
+
+The counter is suppressed in pipes and scripts (zero overhead when stderr is not a TTY). The count uses thousands separators (`42,317` not `42317`). It is always written to stderr so stdout remains clean for piping.
 
 ### Exit Codes
 
