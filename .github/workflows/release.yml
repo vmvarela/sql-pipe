@@ -150,21 +150,26 @@ jobs:
   # ── Update Homebrew tap ─────────────────────────────────────────────
   # Requires:
   #   1. Repository: vmvarela/homebrew-tap (with a Formula/ directory)
-  #   2. Secret: HOMEBREW_TAP_TOKEN (PAT with contents:write on the tap repo)
+  #   2. Secret: HOMEBREW_TAP_TOKEN (fine-grained PAT with contents:write
+  #      on vmvarela/homebrew-tap, or classic PAT with public_repo scope)
   update-homebrew:
     name: Update Homebrew tap
     needs: release
     runs-on: ubuntu-latest
+    env:
+      HAS_HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
       - name: Download all artifacts
+        if: ${{ env.HAS_HOMEBREW_TOKEN == 'true' }}
         uses: actions/download-artifact@v8
         with:
           path: artifacts/
           merge-multiple: true
 
       - name: Generate formula and push to tap
+        if: ${{ env.HAS_HOMEBREW_TOKEN == 'true' }}
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
 
@@ -230,15 +235,23 @@ jobs:
           echo "==> Generated formula for sql-pipe ${VERSION}:"
           cat sql-pipe.rb
 
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/vmvarela/homebrew-tap.git" tap
-          mkdir -p tap/Formula
-          cp sql-pipe.rb tap/Formula/sql-pipe.rb
-          cd tap
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/sql-pipe.rb
-          git diff --cached --quiet || git commit -m "sql-pipe ${VERSION}"
-          git push
+          # Push via GitHub Contents API — no git clone/push needed,
+          # works with fine-grained PATs (contents:write on the tap repo).
+          CURRENT_SHA=$(gh api "repos/vmvarela/homebrew-tap/contents/Formula/sql-pipe.rb" \
+            --jq '.sha' 2>/dev/null || echo "")
+
+          if [ -n "${CURRENT_SHA}" ]; then
+            gh api "repos/vmvarela/homebrew-tap/contents/Formula/sql-pipe.rb" \
+              --method PUT \
+              -f "message=sql-pipe ${VERSION}" \
+              -f "content=$(base64 -w0 sql-pipe.rb)" \
+              -f "sha=${CURRENT_SHA}"
+          else
+            gh api "repos/vmvarela/homebrew-tap/contents/Formula/sql-pipe.rb" \
+              --method PUT \
+              -f "message=sql-pipe ${VERSION}" \
+              -f "content=$(base64 -w0 sql-pipe.rb)"
+          fi
 
   # ── Update AUR package ──────────────────────────────────────────────
   # Requires:
