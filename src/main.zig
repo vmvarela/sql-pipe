@@ -5,15 +5,10 @@ const c = @cImport({
 const csv = @import("csv.zig");
 const build_options = @import("build_options");
 
-/// Version string injected at build time from build.zig.zon via build.zig.
 const VERSION: []const u8 = build_options.version;
 
-// sqlite_static (null): SQLite assumes the memory is constant and won't free it.
-// Safety: sqlite3_step is called inside insertRowTyped immediately after all
-// bindings, returning SQLITE_DONE before the function returns. The caller's
-// row buffer is only freed after insertRowTyped returns, so the bound pointers
-// remain valid throughout the statement's execution. sqlite3_reset at the top
-// of the next call releases any prior references.
+/// SQLITE_STATIC sentinel: tells sqlite3_bind_text that the string is
+/// caller-managed and SQLite must not attempt to free it.
 const sqlite_static: c.sqlite3_destructor_type = null;
 
 // ─── Error types ─────────────────────────────────────
@@ -22,6 +17,7 @@ const SqlPipeError = error{
     MissingQuery,
     InvalidDelimiter,
     IncompatibleFlags,
+    InvalidMaxRows,
     OpenDbFailed,
     EmptyInput,
     EmptyColumnName,
@@ -57,16 +53,18 @@ const ExitCode = enum(u8) {
 
 /// Parsed command-line arguments.
 const ParsedArgs = struct {
-    /// The SQL query to execute after loading stdin.
+    /// SQL query to execute against table `t`.
     query: []const u8,
-    /// When false, skip type inference and use TEXT for every column (pure TEXT mode).
+    /// Infer column types from the first 100 buffered rows when true.
     type_inference: bool,
-    /// Input field delimiter for CSV parsing.
+    /// CSV field delimiter (default: ',').
     delimiter: u8,
-    /// When true, print a header row with column names before data rows.
+    /// Emit column names as first output row when true.
     header: bool,
-    /// When true, emit results as a JSON array of objects instead of CSV.
+    /// Output results as a JSON array of objects when true.
     json: bool,
+    /// Abort with exit 1 when more than this many data rows are read; null = unlimited.
+    max_rows: ?usize,
 };
 
 /// Result of argument parsing — either parsed arguments or a special action.
@@ -84,7 +82,7 @@ const ArgsResult = union(enum) {
 /// printUsage(writer) → void
 /// Pre:  writer is a valid stderr writer
 /// Post: usage text has been written to writer
-fn printUsage(writer: anytype) !void {
+fn printUsage(writer: *std.Io.Writer) !void {
     try writer.writeAll(
         \\Usage: sql-pipe [OPTIONS] <query>
         \\
@@ -97,6 +95,7 @@ fn printUsage(writer: anytype) !void {
         \\  --no-type-inference  Treat all columns as TEXT (skip auto-detection)
         \\  -H, --header         Print column names as the first output row
         \\  --json               Output results as a JSON array of objects
+        \\  --max-rows <n>       Stop if more than <n> data rows are read (exit 1)
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
         \\
@@ -135,7 +134,7 @@ fn parseDelimiter(value: []const u8) SqlPipeError!u8 {
 ///       result = .version when --version or -V is present
 ///       error.MissingQuery when no non-flag argument is found
 ///       error.IncompatibleFlags when --json is combined with --delimiter/--tsv/--header
-fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
+fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
     var delimiter: u8 = ',';
@@ -143,13 +142,15 @@ fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
     var json = false;
     var explicit_delimiter = false;
     var explicit_tsv = false;
+    var max_rows: ?usize = null;
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
     //   type_inference reflects the presence of --no-type-inference;
     //   delimiter reflects -d/--delimiter/--tsv if present;
     //   header reflects the presence of --header/-H;
-    //   json reflects the presence of --json
+    //   json reflects the presence of --json;
+    //   max_rows reflects the presence of --max-rows
     // Bounding function: args.len - i
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -178,6 +179,14 @@ fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
             header = true;
         } else if (std.mem.eql(u8, arg, "--json")) {
             json = true;
+        } else if (std.mem.eql(u8, arg, "--max-rows")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidMaxRows;
+            max_rows = std.fmt.parseUnsigned(usize, args[i], 10) catch return error.InvalidMaxRows;
+            if (max_rows.? == 0) return error.InvalidMaxRows;
+        } else if (std.mem.startsWith(u8, arg, "--max-rows=")) {
+            max_rows = std.fmt.parseUnsigned(usize, arg["--max-rows=".len..], 10) catch return error.InvalidMaxRows;
+            if (max_rows.? == 0) return error.InvalidMaxRows;
         } else {
             if (query == null) query = arg;
         }
@@ -193,6 +202,7 @@ fn parseArgs(args: []const [:0]u8) SqlPipeError!ArgsResult {
         .delimiter = delimiter,
         .header = header,
         .json = json,
+        .max_rows = max_rows,
     } };
 }
 
@@ -325,7 +335,7 @@ fn inferTypes(
 fn parseHeader(
     allocator: std.mem.Allocator,
     record: [][]u8,
-    stderr_writer: anytype,
+    stderr_writer: *std.Io.Writer,
 ) (SqlPipeError || std.mem.Allocator.Error)![][]const u8 {
     if (record.len == 0) return error.NoColumns;
 
@@ -337,7 +347,7 @@ fn parseHeader(
         record[0] = without_bom;
     }
 
-    var cols: std.ArrayList([]const u8) = .{};
+    var cols: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (cols.items) |col| allocator.free(col);
         cols.deinit(allocator);
@@ -393,7 +403,7 @@ fn createTable(
     cols: []const []const u8,
     types: []const ColumnType,
 ) (SqlPipeError || std.mem.Allocator.Error)!void {
-    var sql: std.ArrayList(u8) = .{};
+    var sql: std.ArrayList(u8) = .empty;
     defer sql.deinit(allocator);
 
     try sql.appendSlice(allocator, "CREATE TABLE t (");
@@ -434,7 +444,7 @@ fn prepareInsert(
     db: *c.sqlite3,
     n: usize,
 ) (SqlPipeError || std.mem.Allocator.Error)!*c.sqlite3_stmt {
-    var sql: std.ArrayList(u8) = .{};
+    var sql: std.ArrayList(u8) = .empty;
     defer sql.deinit(allocator);
 
     try sql.appendSlice(allocator, "INSERT INTO t VALUES (");
@@ -536,7 +546,7 @@ fn insertRowTyped(
 fn printRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
-    writer: anytype,
+    writer: *std.Io.Writer,
 ) !void {
     // Loop invariant I: columns 0..i-1 have been written, separated by commas
     // Bounding function: col_count - i
@@ -563,7 +573,7 @@ fn printRow(
 ///       if value contains comma, double-quote, or newline, it is enclosed
 ///       in double-quotes with internal quotes escaped as "" (RFC 4180);
 ///       otherwise it is written verbatim
-fn writeField(writer: anytype, value: []const u8) !void {
+fn writeField(writer: *std.Io.Writer, value: []const u8) !void {
     var needs_quoting = false;
     for (value) |ch| {
         if (ch == ',' or ch == '"' or ch == '\n' or ch == '\r') {
@@ -591,7 +601,7 @@ fn writeField(writer: anytype, value: []const u8) !void {
 fn printHeaderRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
-    writer: anytype,
+    writer: *std.Io.Writer,
 ) !void {
     // Loop invariant I: columns 0..i-1 names have been written, separated by commas
     // Bounding function: col_count - i
@@ -612,7 +622,7 @@ fn printHeaderRow(
 /// Post: s is written as a JSON string literal (double-quoted, with special
 ///       characters escaped per RFC 8259: \", \\, \/, \b, \f, \n, \r, \t,
 ///       and \uXXXX for control characters 0x00–0x1F)
-fn writeJsonString(writer: anytype, s: []const u8) !void {
+fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
     try writer.writeByte('"');
     for (s) |ch| {
         switch (ch) {
@@ -643,7 +653,7 @@ fn printJsonRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
     col_names: []const [*:0]const u8,
-    writer: anytype,
+    writer: *std.Io.Writer,
     is_first: bool,
 ) !void {
     if (!is_first) try writer.writeByte(',');
@@ -696,10 +706,10 @@ fn execQuery(
     allocator: std.mem.Allocator,
     db: *c.sqlite3,
     query: []const u8,
-    writer: anytype,
+    writer: *std.Io.Writer,
     header: bool,
     json: bool,
-) (SqlPipeError || std.mem.Allocator.Error || @TypeOf(writer).Error)!void {
+) (SqlPipeError || std.mem.Allocator.Error || std.Io.Writer.Error)!void {
     const query_z = try allocator.dupeZ(u8, query);
     defer allocator.free(query_z);
 
@@ -747,26 +757,33 @@ fn execQuery(
 /// fatal(writer, code, comptime fmt, args) → noreturn
 /// Pre:  writer is stderr, code is non-zero ExitCode
 /// Post: "error: <message>\n" written to stderr, process exits with code
-fn fatal(comptime fmt: []const u8, writer: anytype, code: ExitCode, args: anytype) noreturn {
+fn fatal(comptime fmt: []const u8, writer: *std.Io.Writer, code: ExitCode, args: anytype) noreturn {
     writer.print("error: " ++ fmt ++ "\n", args) catch |err| {
         std.log.err("failed to write error message: {}", .{err});
     };
+    writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
     std.process.exit(@intFromEnum(code));
 }
 
-pub fn main() void {
+pub fn main(init: std.process.Init.Minimal) void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stderr = std.fs.File.stderr();
-    const stderr_writer = stderr.deprecatedWriter();
-    const stdout_writer = std.fs.File.stdout().deprecatedWriter();
+    var io = std.Io.Threaded.init_single_threaded;
 
-    // {A0: process argv is accessible, allocator is valid}
-    const args = std.process.argsAlloc(allocator) catch
+    var stderr_buf: [1024]u8 = undefined;
+    var stderr_file_writer = std.Io.File.writer(std.Io.File.stderr(), io.io(), &stderr_buf);
+    const stderr_writer: *std.Io.Writer = &stderr_file_writer.interface;
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_file_writer = std.Io.File.writer(std.Io.File.stdout(), io.io(), &stdout_buf);
+    const stdout_writer: *std.Io.Writer = &stdout_file_writer.interface;
+
+    var args_arena = std.heap.ArenaAllocator.init(allocator);
+    defer args_arena.deinit();
+    const args = init.args.toSlice(args_arena.allocator()) catch
         fatal("failed to read process arguments", stderr_writer, .usage, .{});
-    defer std.process.argsFree(allocator, args);
 
     const args_result = parseArgs(args) catch |err| {
         switch (err) {
@@ -774,6 +791,14 @@ pub fn main() void {
                 stderr_writer.writeAll("error: --json cannot be combined with --delimiter, --tsv, or --header\n") catch |werr| {
                     std.log.err("failed to write error message: {}", .{werr});
                 };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.InvalidMaxRows => {
+                stderr_writer.writeAll("error: --max-rows must be a positive integer\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
             },
             else => {},
@@ -781,6 +806,7 @@ pub fn main() void {
         printUsage(stderr_writer) catch |werr| {
             std.log.err("failed to write usage: {}", .{werr});
         };
+        stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
         std.process.exit(@intFromEnum(ExitCode.usage));
     };
 
@@ -789,16 +815,24 @@ pub fn main() void {
             printUsage(stderr_writer) catch |err| {
                 std.log.err("failed to write usage: {}", .{err});
             };
+            stderr_writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
             std.process.exit(@intFromEnum(ExitCode.success));
         },
         .version => {
             stderr_writer.print("sql-pipe {s}\n", .{VERSION}) catch |err| {
                 std.log.err("failed to write version: {}", .{err});
             };
+            stderr_writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
             std.process.exit(@intFromEnum(ExitCode.success));
         },
         .parsed => |parsed| {
-            run(parsed, allocator, stderr_writer, stdout_writer);
+            run(parsed, allocator, io.io(), stderr_writer, stdout_writer);
+            stdout_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stdout: {}", .{err});
+            };
+            stderr_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stderr: {}", .{err});
+            };
         },
     }
 }
@@ -811,8 +845,9 @@ pub fn main() void {
 fn run(
     parsed: ParsedArgs,
     allocator: std.mem.Allocator,
-    stderr_writer: anytype,
-    stdout_writer: anytype,
+    io: std.Io,
+    stderr_writer: *std.Io.Writer,
+    stdout_writer: *std.Io.Writer,
 ) void {
     const query = parsed.query;
     // {A1: query is the SQL string; parsed.type_inference indicates buffer-first mode}
@@ -822,8 +857,9 @@ fn run(
     defer _ = c.sqlite3_close(db);
     // {A2: db is an open, empty in-memory SQLite database}
 
-    const stdin = std.fs.File.stdin().deprecatedReader();
-    var csv_reader = csv.csvReaderWithDelimiter(allocator, stdin, parsed.delimiter);
+    var stdin_buf: [4096]u8 = undefined;
+    var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+    var csv_reader = csv.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, parsed.delimiter);
 
     const header_record = csv_reader.nextRecord() catch |err| switch (err) {
         error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),
@@ -847,7 +883,7 @@ fn run(
     const num_cols = cols.len;
 
     // ─── Phase 1: determine column types ─────────────────────────────────────
-    var row_buffer: std.ArrayList([][]u8) = .{};
+    var row_buffer: std.ArrayList([][]u8) = .empty;
     defer {
         for (row_buffer.items) |row| csv_reader.freeRecord(row);
         row_buffer.deinit(allocator);
@@ -909,7 +945,14 @@ fn run(
     defer _ = c.sqlite3_finalize(stmt);
 
     // Insert buffered rows
+    var rows_inserted: usize = 0;
     for (row_buffer.items) |row| {
+        rows_inserted += 1;
+        if (parsed.max_rows) |limit| {
+            if (rows_inserted > limit) {
+                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
+            }
+        }
         insertRowTyped(stmt, db, row, types, @intCast(num_cols)) catch
             fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
@@ -936,6 +979,12 @@ fn run(
 
         if (record.len == 0) continue;
 
+        rows_inserted += 1;
+        if (parsed.max_rows) |limit| {
+            if (rows_inserted > limit) {
+                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
+            }
+        }
         insertRowTyped(stmt, db, record, types, @intCast(num_cols)) catch
             fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     }

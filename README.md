@@ -173,6 +173,7 @@ $ cat events.csv \
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
 | `-H`, `--header` | Print column names as the first output row |
 | `--json` | Output results as a JSON array of objects (mutually exclusive with `-d`, `--tsv`, `-H`) |
+| `--max-rows <n>` | Stop if more than `n` data rows are read (exit 1) |
 | `-h`, `--help` | Show usage help and exit |
 | `-V`, `--version` | Print version and exit |
 

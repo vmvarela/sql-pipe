@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
         []const u8,
         "version",
         "Override version string (default: from build.zig.zon)",
-    ) orelse "0.2.0";
+    ) orelse "0.0.0-dev";
 
     const exe = b.addExecutable(.{
         .name = "sql-pipe",
@@ -35,8 +35,8 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addOptions("build_options", build_options);
 
     if (bundle_sqlite) {
-        exe.addIncludePath(b.path("lib"));
-        exe.addCSourceFile(.{
+        exe.root_module.addIncludePath(b.path("lib"));
+        exe.root_module.addCSourceFile(.{
             .file = b.path("lib/sqlite3.c"),
             .flags = &.{"-DSQLITE_OMIT_LOAD_EXTENSION=1"},
         });
@@ -229,6 +229,56 @@ pub fn build(b: *std.Build) void {
     });
     test_dup_col_stdout.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_dup_col_stdout.step);
+
+    // Integration test 20: --max-rows under limit succeeds
+    const test_max_rows_under = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --max-rows 5 'SELECT name FROM t ORDER BY name' | diff - <(printf 'Alice\nBob\n')
+    });
+    test_max_rows_under.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_max_rows_under.step);
+
+    // Integration test 21: --max-rows limit hit exits 1 with error message
+    const test_max_rows_hit = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'name,age\nAlice,30\nBob,25\nCarol,35\n' | ./zig-out/bin/sql-pipe --max-rows 1 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: input exceeds --max-rows limit (1 rows)' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_max_rows_hit.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_max_rows_hit.step);
+
+    // Integration test 22: --max-rows 0 exits 1 with error message
+    const test_max_rows_zero = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --max-rows 0 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --max-rows must be a positive integer' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_max_rows_zero.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_max_rows_zero.step);
+
+    // Integration test 23: --max-rows=5 (equals form) succeeds
+    const test_max_rows_equals = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --max-rows=5 'SELECT name FROM t ORDER BY name' | diff - <(printf 'Alice\nBob\n')
+    });
+    test_max_rows_equals.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_max_rows_equals.step);
+
+    // Integration test 24: --max-rows with non-numeric value exits 1
+    const test_max_rows_nan = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --max-rows abc 'SELECT * FROM t' 2>&1 >/dev/null; test $? -eq 1
+    });
+    test_max_rows_nan.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_max_rows_nan.step);
+
+    // Integration test 25: --no-type-inference --max-rows 1 hits limit and exits 1
+    const test_max_rows_streaming = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --no-type-inference --max-rows 1 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?") && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_max_rows_streaming.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_max_rows_streaming.step);
 
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{

@@ -52,6 +52,11 @@ OPTIONS
 		number, or null). Mutually exclusive with *--delimiter*, *--tsv*, and
 		*--header*.
 
+	*--max-rows* <n>
+		Stop reading input after inserting <n> data rows and exit with
+		code 1 and an error message. Use this to guard against
+		accidentally piping extremely large files into memory.
+
 	*-h, --help*
 		Print the help message and exit with code 0.
 
