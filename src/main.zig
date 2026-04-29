@@ -7,6 +7,8 @@ const build_options = @import("build_options");
 
 const VERSION: []const u8 = build_options.version;
 
+/// SQLITE_STATIC sentinel: tells sqlite3_bind_text that the string is
+/// caller-managed and SQLite must not attempt to free it.
 const sqlite_static: c.sqlite3_destructor_type = null;
 
 // ─── Error types ─────────────────────────────────────
@@ -51,11 +53,17 @@ const ExitCode = enum(u8) {
 
 /// Parsed command-line arguments.
 const ParsedArgs = struct {
+    /// SQL query to execute against table `t`.
     query: []const u8,
+    /// Infer column types from the first 100 buffered rows when true.
     type_inference: bool,
+    /// CSV field delimiter (default: ',').
     delimiter: u8,
+    /// Emit column names as first output row when true.
     header: bool,
+    /// Output results as a JSON array of objects when true.
     json: bool,
+    /// Abort with exit 1 when more than this many data rows are read; null = unlimited.
     max_rows: ?usize,
 };
 
@@ -87,7 +95,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  --no-type-inference  Treat all columns as TEXT (skip auto-detection)
         \\  -H, --header         Print column names as the first output row
         \\  --json               Output results as a JSON array of objects
-        \\  --max-rows <n>       Stop after <n> data rows and exit with error
+        \\  --max-rows <n>       Stop if more than <n> data rows are read (exit 1)
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
         \\
@@ -327,7 +335,7 @@ fn inferTypes(
 fn parseHeader(
     allocator: std.mem.Allocator,
     record: [][]u8,
-    stderr_writer: anytype,
+    stderr_writer: *std.Io.Writer,
 ) (SqlPipeError || std.mem.Allocator.Error)![][]const u8 {
     if (record.len == 0) return error.NoColumns;
 
@@ -538,7 +546,7 @@ fn insertRowTyped(
 fn printRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
-    writer: anytype,
+    writer: *std.Io.Writer,
 ) !void {
     // Loop invariant I: columns 0..i-1 have been written, separated by commas
     // Bounding function: col_count - i
@@ -565,7 +573,7 @@ fn printRow(
 ///       if value contains comma, double-quote, or newline, it is enclosed
 ///       in double-quotes with internal quotes escaped as "" (RFC 4180);
 ///       otherwise it is written verbatim
-fn writeField(writer: anytype, value: []const u8) !void {
+fn writeField(writer: *std.Io.Writer, value: []const u8) !void {
     var needs_quoting = false;
     for (value) |ch| {
         if (ch == ',' or ch == '"' or ch == '\n' or ch == '\r') {
@@ -593,7 +601,7 @@ fn writeField(writer: anytype, value: []const u8) !void {
 fn printHeaderRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
-    writer: anytype,
+    writer: *std.Io.Writer,
 ) !void {
     // Loop invariant I: columns 0..i-1 names have been written, separated by commas
     // Bounding function: col_count - i
@@ -614,7 +622,7 @@ fn printHeaderRow(
 /// Post: s is written as a JSON string literal (double-quoted, with special
 ///       characters escaped per RFC 8259: \", \\, \/, \b, \f, \n, \r, \t,
 ///       and \uXXXX for control characters 0x00–0x1F)
-fn writeJsonString(writer: anytype, s: []const u8) !void {
+fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
     try writer.writeByte('"');
     for (s) |ch| {
         switch (ch) {
@@ -645,7 +653,7 @@ fn printJsonRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
     col_names: []const [*:0]const u8,
-    writer: anytype,
+    writer: *std.Io.Writer,
     is_first: bool,
 ) !void {
     if (!is_first) try writer.writeByte(',');

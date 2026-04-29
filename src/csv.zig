@@ -62,161 +62,161 @@ pub const CsvReader = struct {
         return .{ .reader = reader, .allocator = allocator, .delimiter = delimiter };
     }
 
-        /// Read the next CSV record.
-        ///
-        /// Pre:  self.done = false  (otherwise returns null immediately)
-        ///       self.reader is positioned at the start of the next record
-        ///       self.allocator is valid
-        /// Post: result = null  ⟺  no more records exist in the input
-        ///       result = fields  ⟺  fields is a heap-allocated [][]u8 where
-        ///           fields[i] is the UTF-8 content of the i-th field of the record,
-        ///           decoded according to RFC 4180 ("" → ", embedded newlines preserved)
-        ///       On error.UnterminatedQuotedField: input ended inside a quoted field
-        ///       All returned memory must be freed with freeRecord.
-        pub fn nextRecord(self: *CsvReader) !?[][]u8 {
-            if (self.done) return null;
+    /// Read the next CSV record.
+    ///
+    /// Pre:  self.done = false  (otherwise returns null immediately)
+    ///       self.reader is positioned at the start of the next record
+    ///       self.allocator is valid
+    /// Post: result = null  ⟺  no more records exist in the input
+    ///       result = fields  ⟺  fields is a heap-allocated [][]u8 where
+    ///           fields[i] is the UTF-8 content of the i-th field of the record,
+    ///           decoded according to RFC 4180 ("" → ", embedded newlines preserved)
+    ///       On error.UnterminatedQuotedField: input ended inside a quoted field
+    ///       All returned memory must be freed with freeRecord.
+    pub fn nextRecord(self: *CsvReader) !?[][]u8 {
+        if (self.done) return null;
 
-            var fields = std.ArrayList([]u8).empty;
-            errdefer {
-                for (fields.items) |f| self.allocator.free(f);
-                fields.deinit(self.allocator);
-            }
+        var fields = std.ArrayList([]u8).empty;
+        errdefer {
+            for (fields.items) |f| self.allocator.free(f);
+            fields.deinit(self.allocator);
+        }
 
-            var field = std.ArrayList(u8).empty;
-            errdefer field.deinit(self.allocator);
+        var field = std.ArrayList(u8).empty;
+        errdefer field.deinit(self.allocator);
 
-            var state: State = .field_start;
-            var has_data = false;
+        var state: State = .field_start;
+        var has_data = false;
 
-            // Loop invariant I:
-            //   `state` satisfies the representation invariant of the automaton.
-            //   `field` contains the decoded bytes of the field currently being parsed.
-            //   `fields` contains the completed, heap-allocated fields of this record.
-            //   All bytes read from `reader` so far have been processed exactly once.
-            // Bounding function:
-            //   Number of bytes remaining in `reader` (finite input; decreases by 1
-            //   each iteration except on the EOF branch which exits immediately).
-            while (true) {
-                const byte = self.reader.takeByte() catch |err| switch (err) {
-                    error.EndOfStream => {
-                        // EOF: flush whatever pending data we have.
-                        if (!has_data and fields.items.len == 0) {
-                            field.deinit(self.allocator);
-                            fields.deinit(self.allocator);
-                            self.done = true;
-                            return null;
-                        }
-                        if (state == .quoted) {
-                            field.deinit(self.allocator);
-                            for (fields.items) |f| self.allocator.free(f);
-                            fields.deinit(self.allocator);
-                            return error.UnterminatedQuotedField;
-                        }
-                        // Flush the last field and return the record.
-                        try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+        // Loop invariant I:
+        //   `state` satisfies the representation invariant of the automaton.
+        //   `field` contains the decoded bytes of the field currently being parsed.
+        //   `fields` contains the completed, heap-allocated fields of this record.
+        //   All bytes read from `reader` so far have been processed exactly once.
+        // Bounding function:
+        //   Number of bytes remaining in `reader` (finite input; decreases by 1
+        //   each iteration except on the EOF branch which exits immediately).
+        while (true) {
+            const byte = self.reader.takeByte() catch |err| switch (err) {
+                error.EndOfStream => {
+                    // EOF: flush whatever pending data we have.
+                    if (!has_data and fields.items.len == 0) {
+                        field.deinit(self.allocator);
+                        fields.deinit(self.allocator);
                         self.done = true;
-                        return try fields.toOwnedSlice(self.allocator);
-                    },
-                    else => return err,
-                };
+                        return null;
+                    }
+                    if (state == .quoted) {
+                        field.deinit(self.allocator);
+                        for (fields.items) |f| self.allocator.free(f);
+                        fields.deinit(self.allocator);
+                        return error.UnterminatedQuotedField;
+                    }
+                    // Flush the last field and return the record.
+                    try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                    self.done = true;
+                    return try fields.toOwnedSlice(self.allocator);
+                },
+                else => return err,
+            };
 
-                has_data = true;
+            has_data = true;
 
-                switch (state) {
-                    .field_start => {
-                        if (byte == self.delimiter) {
-                            // Empty unquoted field before delimiter.
-                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                            state = .field_start;
-                        } else switch (byte) {
-                            '"' => {
-                                state = .quoted;
-                            },
-                            '\r' => {
-                                // Part of \r\n; ignore, \n will terminate the record.
-                            },
-                            '\n' => {
-                                // End of record — last field is empty.
-                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                                return try fields.toOwnedSlice(self.allocator);
-                            },
-                            else => {
-                                try field.append(self.allocator, byte);
-                                state = .unquoted;
-                            },
-                        }
-                    },
-
-                    .unquoted => {
-                        if (byte == self.delimiter) {
-                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                            state = .field_start;
-                        } else switch (byte) {
-                            '\r' => {
-                                // Strip \r before the \n record terminator.
-                            },
-                            '\n' => {
-                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                                return try fields.toOwnedSlice(self.allocator);
-                            },
-                            else => {
-                                try field.append(self.allocator, byte);
-                            },
-                        }
-                    },
-
-                    .quoted => switch (byte) {
+            switch (state) {
+                .field_start => {
+                    if (byte == self.delimiter) {
+                        // Empty unquoted field before delimiter.
+                        try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                        state = .field_start;
+                    } else switch (byte) {
                         '"' => {
-                            state = .quote_saw;
+                            state = .quoted;
                         },
-                        // All bytes including \n and \r are part of the field value
-                        // when inside a quoted field (RFC 4180 §2.6).
+                        '\r' => {
+                            // Part of \r\n; ignore, \n will terminate the record.
+                        },
+                        '\n' => {
+                            // End of record — last field is empty.
+                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                            return try fields.toOwnedSlice(self.allocator);
+                        },
+                        else => {
+                            try field.append(self.allocator, byte);
+                            state = .unquoted;
+                        },
+                    }
+                },
+
+                .unquoted => {
+                    if (byte == self.delimiter) {
+                        try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                        state = .field_start;
+                    } else switch (byte) {
+                        '\r' => {
+                            // Strip \r before the \n record terminator.
+                        },
+                        '\n' => {
+                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                            return try fields.toOwnedSlice(self.allocator);
+                        },
                         else => {
                             try field.append(self.allocator, byte);
                         },
-                    },
+                    }
+                },
 
-                    .quote_saw => {
-                        if (byte == self.delimiter) {
-                            // Closing quote followed by field delimiter.
-                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                            state = .field_start;
-                        } else switch (byte) {
-                            '"' => {
-                                // Escaped double-quote: "" → single "
-                                try field.append(self.allocator, '"');
-                                state = .quoted;
-                            },
-                            '\r' => {
-                                // Skip \r before \n record terminator.
-                            },
-                            '\n' => {
-                                // Closing quote followed by record terminator.
-                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                                return try fields.toOwnedSlice(self.allocator);
-                            },
-                            else => {
-                                // Non-standard content after closing quote; treat as
-                                // continuation of the field in unquoted mode.
-                                try field.append(self.allocator, byte);
-                                state = .unquoted;
-                            },
-                        }
+                .quoted => switch (byte) {
+                    '"' => {
+                        state = .quote_saw;
                     },
-                }
+                    // All bytes including \n and \r are part of the field value
+                    // when inside a quoted field (RFC 4180 §2.6).
+                    else => {
+                        try field.append(self.allocator, byte);
+                    },
+                },
+
+                .quote_saw => {
+                    if (byte == self.delimiter) {
+                        // Closing quote followed by field delimiter.
+                        try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                        state = .field_start;
+                    } else switch (byte) {
+                        '"' => {
+                            // Escaped double-quote: "" → single "
+                            try field.append(self.allocator, '"');
+                            state = .quoted;
+                        },
+                        '\r' => {
+                            // Skip \r before \n record terminator.
+                        },
+                        '\n' => {
+                            // Closing quote followed by record terminator.
+                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                            return try fields.toOwnedSlice(self.allocator);
+                        },
+                        else => {
+                            // Non-standard content after closing quote; treat as
+                            // continuation of the field in unquoted mode.
+                            try field.append(self.allocator, byte);
+                            state = .unquoted;
+                        },
+                    }
+                },
             }
         }
+    }
 
-        /// Release a record previously returned by `nextRecord`.
-        ///
-        /// Pre:  record was returned by nextRecord on this CsvReader instance
-        ///       (same allocator); not yet freed.
-        /// Post: every field string in record and the record slice itself are freed;
-        ///       no further access to record or its elements is valid.
-        pub fn freeRecord(self: *CsvReader, record: [][]u8) void {
-            for (record) |f| self.allocator.free(f);
-            self.allocator.free(record);
-        }
+    /// Release a record previously returned by `nextRecord`.
+    ///
+    /// Pre:  record was returned by nextRecord on this CsvReader instance
+    ///       (same allocator); not yet freed.
+    /// Post: every field string in record and the record slice itself are freed;
+    ///       no further access to record or its elements is valid.
+    pub fn freeRecord(self: *CsvReader, record: [][]u8) void {
+        for (record) |f| self.allocator.free(f);
+        self.allocator.free(record);
+    }
 };
 
 /// Convenience constructor — comma delimiter.
