@@ -99,7 +99,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  -H, --header         Print column names as the first output row
         \\  --json               Output results as a JSON array of objects
         \\  --max-rows <n>       Stop if more than <n> data rows are read (exit 1)
-        \\  -v, --verbose        Print row count to stderr after loading (always on TTY)
+        \\  -v, --verbose        Force row count to stderr (shown automatically on TTY)
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
         \\
@@ -863,7 +863,7 @@ fn printSqlErrorContext(
 /// Post: n is formatted as a decimal string with ',' separating each group of
 ///       three digits from the right (e.g. 42317 → "42,317", 1000 → "1,000")
 fn fmtThousands(buf: []u8, n: usize) []const u8 {
-    var tmp: [20]u8 = undefined;
+    var tmp: [32]u8 = undefined; // 20 digits max (u64) + safety margin
     const digits = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable;
     const len = digits.len;
     const first_group = len % 3; // digits in the leading group (0 means groups of 3 from start)

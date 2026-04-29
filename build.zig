@@ -334,6 +334,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_verbose_thousands.step);
 
     // Integration test 31: without --verbose, row count is NOT printed to stderr (non-TTY)
+    // Note: `2>&1 >/dev/null` redirects stderr to the subshell's stdout (captured in $out),
+    //       then redirects stdout to /dev/null. The TTY check suppresses the count in this
+    //       non-interactive context, so $out should be empty.
     const test_no_verbose_silent = b.addSystemCommand(&.{
         "bash", "-c",
         \\out=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe 'SELECT * FROM t' 2>&1 >/dev/null)
