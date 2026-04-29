@@ -133,7 +133,7 @@ fn parseDelimiter(value: []const u8) SqlPipeError!u8 {
 ///       result = .help when --help or -h is present
 ///       result = .version when --version or -V is present
 ///       error.MissingQuery when no non-flag argument is found
-///       error.IncompatibleFlags when --json is combined with --delimiter/--tsv/--header
+///       error.IncompatibleFlags when --json is combined with --header
 fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
