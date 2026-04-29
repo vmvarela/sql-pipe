@@ -65,6 +65,9 @@ const ParsedArgs = struct {
     json: bool,
     /// Abort with exit 1 when more than this many data rows are read; null = unlimited.
     max_rows: ?usize,
+    /// Print "Loaded <n> rows" to stderr after all CSV rows are inserted when true.
+    /// When false, the message is still shown automatically when stderr is a TTY.
+    verbose: bool,
 };
 
 /// Result of argument parsing — either parsed arguments or a special action.
@@ -96,6 +99,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  -H, --header         Print column names as the first output row
         \\  --json               Output results as a JSON array of objects
         \\  --max-rows <n>       Stop if more than <n> data rows are read (exit 1)
+        \\  -v, --verbose        Force row count to stderr (shown automatically on TTY)
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
         \\
@@ -143,6 +147,7 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var explicit_delimiter = false;
     var explicit_tsv = false;
     var max_rows: ?usize = null;
+    var verbose = false;
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
@@ -187,6 +192,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         } else if (std.mem.startsWith(u8, arg, "--max-rows=")) {
             max_rows = std.fmt.parseUnsigned(usize, arg["--max-rows=".len..], 10) catch return error.InvalidMaxRows;
             if (max_rows.? == 0) return error.InvalidMaxRows;
+        } else if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v")) {
+            verbose = true;
         } else {
             if (query == null) query = arg;
         }
@@ -203,6 +210,7 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         .header = header,
         .json = json,
         .max_rows = max_rows,
+        .verbose = verbose,
     } };
 }
 
@@ -850,6 +858,32 @@ fn printSqlErrorContext(
 
 // ─── Entry point ──────────────────────────────────────
 
+/// fmtThousands(buf, n) → []const u8
+/// Pre:  buf.len >= 26 (accommodates any usize value with thousands separators)
+/// Post: n is formatted as a decimal string with ',' separating each group of
+///       three digits from the right (e.g. 42317 → "42,317", 1000 → "1,000")
+fn fmtThousands(buf: []u8, n: usize) []const u8 {
+    var tmp: [32]u8 = undefined; // 20 digits max (u64) + safety margin
+    const digits = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable;
+    const len = digits.len;
+    const first_group = len % 3; // digits in the leading group (0 means groups of 3 from start)
+    var out_len: usize = 0;
+    // Loop invariant I: buf[0..out_len] = formatted prefix of digits[0..i]
+    //                   commas inserted before every third digit counted from the right
+    // Bounding function: len - i
+    for (digits, 0..) |ch, i| {
+        if ((i > 0 and i == first_group) or
+            (i > first_group and (i - first_group) % 3 == 0))
+        {
+            buf[out_len] = ',';
+            out_len += 1;
+        }
+        buf[out_len] = ch;
+        out_len += 1;
+    }
+    return buf[0..out_len];
+}
+
 /// fatal(writer, code, comptime fmt, args) → noreturn
 /// Pre:  writer is stderr, code is non-zero ExitCode
 /// Post: "error: <message>\n" written to stderr, process exits with code
@@ -1113,6 +1147,16 @@ fn run(
         if (errmsg != null) c.sqlite3_free(errmsg);
     }
     // {A9: transaction committed; t holds all input rows, no active transaction}
+
+    // Print row count to stderr when stderr is a TTY or --verbose is set.
+    if (parsed.verbose or (std.Io.File.isTty(std.Io.File.stderr(), io) catch false)) {
+        var count_buf: [32]u8 = undefined;
+        const count_str = fmtThousands(&count_buf, rows_inserted);
+        stderr_writer.print("Loaded {s} rows\n", .{count_str}) catch |err| {
+            std.log.err("failed to write row count: {}", .{err});
+        };
+        stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
+    }
 
     execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.json) catch {
         fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
