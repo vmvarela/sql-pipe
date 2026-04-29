@@ -353,6 +353,80 @@ pub fn build(b: *std.Build) void {
     test_verbose_short.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_verbose_short.step);
 
+    // Integration test 33: --columns prints column names one per line and exits 0
+    const test_columns_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,region,amount\n1,east,100\n' | ./zig-out/bin/sql-pipe --columns | diff - <(printf 'id\nregion\namount\n')
+    });
+    test_columns_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_basic.step);
+
+    // Integration test 34: --columns --verbose prints "name TYPE" lines
+    const test_columns_verbose = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,name,amount\n1,Alice,3.14\n2,Bob,2.72\n' | ./zig-out/bin/sql-pipe --columns --verbose | diff - <(printf 'id INTEGER\nname TEXT\namount REAL\n')
+    });
+    test_columns_verbose.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_verbose.step);
+
+    // Integration test 35: --columns works with --delimiter
+    const test_columns_delimiter = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'a|b|c\n1|2|3\n' | ./zig-out/bin/sql-pipe --columns -d '|' | diff - <(printf 'a\nb\nc\n')
+    });
+    test_columns_delimiter.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_delimiter.step);
+
+    // Integration test 36: --columns works with --tsv
+    const test_columns_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'col1\tcol2\tcol3\n' | ./zig-out/bin/sql-pipe --columns --tsv | diff - <(printf 'col1\ncol2\ncol3\n')
+    });
+    test_columns_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_tsv.step);
+
+    // Integration test 37: --columns combined with a query argument exits 1 with error
+    const test_columns_with_query = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --columns 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --columns cannot be combined with a query argument' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_columns_with_query.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_with_query.step);
+
+    // Integration test 38: --columns --verbose with malformed CSV exits 2
+    const test_columns_verbose_bad_csv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n"unterminated' | ./zig-out/bin/sql-pipe --columns --verbose 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'row 2: unterminated quoted field' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_columns_verbose_bad_csv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_verbose_bad_csv.step);
+
+    // Integration test 39: --columns --verbose with header-only (no data rows) → all TEXT
+    const test_columns_verbose_no_data = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,name\n' | ./zig-out/bin/sql-pipe --columns --verbose | diff - <(printf 'id TEXT\nname TEXT\n')
+    });
+    test_columns_verbose_no_data.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_verbose_no_data.step);
+
+    // Integration test 40: --columns with empty stdin exits 2
+    const test_columns_empty_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '' | ./zig-out/bin/sql-pipe --columns 2>/dev/null; test $? -eq 2
+    });
+    test_columns_empty_stdin.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_empty_stdin.step);
+
+    // Integration test 41: -v is a valid alias for --verbose with --columns
+    const test_columns_short_verbose = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,name\n1,Alice\n' | ./zig-out/bin/sql-pipe --columns -v | diff - <(printf 'id INTEGER\nname TEXT\n')
+    });
+    test_columns_short_verbose.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_short_verbose.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
