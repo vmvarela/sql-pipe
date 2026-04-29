@@ -154,7 +154,7 @@ $ printf 'name,age\nAlice,30\nBob,25' | sql-pipe --json 'SELECT * FROM t'
 [{"name":"Alice","age":30},{"name":"Bob","age":25}]
 ```
 
-`--json` is mutually exclusive with `-d`/`--delimiter`, `--tsv`, and `-H`/`--header`.
+`--json` is mutually exclusive with `-H`/`--header`. It can be combined with `-d`/`--delimiter` and `--tsv` to read non-comma-separated input.
 
 Chain queries by piping back in — useful for two-pass aggregations:
 
@@ -172,7 +172,7 @@ $ cat events.csv \
 | `--tsv` | Alias for `--delimiter '\t'` |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
 | `-H`, `--header` | Print column names as the first output row |
-| `--json` | Output results as a JSON array of objects (mutually exclusive with `-d`, `--tsv`, `-H`) |
+| `--json` | Output results as a JSON array of objects (mutually exclusive with `-H`) |
 | `--max-rows <n>` | Stop if more than `n` data rows are read (exit 1) |
 | `-h`, `--help` | Show usage help and exit |
 | `-V`, `--version` | Print version and exit |
@@ -183,10 +183,19 @@ $ cat events.csv \
 |------|----------|
 | `0` | Success |
 | `1` | Usage error (missing query, bad arguments) |
-| `2` | CSV parse error (with row number) |
-| `3` | SQL error (with sqlite3 error message) |
+| `2` | CSV parse error (with 1-based row number) |
+| `3` | SQL error (with sqlite3 error message, available columns, and a "did you mean?" hint when applicable) |
 
 All error messages are prefixed with `error:` and written to stderr.
+
+On SQL error, `sql-pipe` also prints the list of columns available in table `t` and,
+when the unknown identifier closely matches a column name (edit distance ≤ 2), a hint:
+
+```
+error: no such column: amout
+  table "t" has columns: id, amount, region
+  hint: did you mean "amount"?
+```
 
 ## Recipes
 

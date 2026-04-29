@@ -214,6 +214,14 @@ pub fn build(b: *std.Build) void {
     test_json_incompatible.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_json_incompatible.step);
 
+    // Integration test 17b: --json is compatible with --delimiter (delimiter affects input only)
+    const test_json_with_delimiter = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name;age\nAlice;30\nBob;25\n' | ./zig-out/bin/sql-pipe --json -d ';' 'SELECT name, age FROM t ORDER BY age' | diff - <(printf '[{"name":"Bob","age":25},{"name":"Alice","age":30}]\n')
+    });
+    test_json_with_delimiter.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_with_delimiter.step);
+
     // Integration test 18: duplicate column names emit warning to stderr
     const test_dup_col_warning = b.addSystemCommand(&.{
         "bash", "-c",
@@ -279,6 +287,35 @@ pub fn build(b: *std.Build) void {
     });
     test_max_rows_streaming.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_max_rows_streaming.step);
+
+    // Integration test 26: SQL error on unknown column prints column list to stderr
+    const test_sql_error_col_list = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'id,amount,region\n1,100,east\n' | ./zig-out/bin/sql-pipe 'SELECT revenue FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'no such column: revenue' \
+        \\  && echo "$msg" | grep -q 'table "t" has columns: id, amount, region' \
+        \\  && echo "$msg" | grep -q 'EXIT:3'
+    });
+    test_sql_error_col_list.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_error_col_list.step);
+
+    // Integration test 27: SQL error on near-miss column name prints "did you mean" hint
+    const test_sql_error_hint = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'id,amount,region\n1,100,east\n' | ./zig-out/bin/sql-pipe 'SELECT amout FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'hint: did you mean "amount"' && echo "$msg" | grep -q 'EXIT:3'
+    });
+    test_sql_error_hint.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_error_hint.step);
+
+    // Integration test 28: CSV parse error includes 1-based row number in message
+    const test_csv_row_number = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'name,age\n"unterminated' | ./zig-out/bin/sql-pipe 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'row 2: unterminated quoted field' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_csv_row_number.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_csv_row_number.step);
 
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
