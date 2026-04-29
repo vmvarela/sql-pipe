@@ -17,6 +17,7 @@ const SqlPipeError = error{
     MissingQuery,
     InvalidDelimiter,
     IncompatibleFlags,
+    ColumnsWithQuery,
     InvalidMaxRows,
     OpenDbFailed,
     EmptyInput,
@@ -73,6 +74,14 @@ const ParsedArgs = struct {
     verbose: bool,
 };
 
+/// Arguments for `--columns` mode.
+const ColumnsArgs = struct {
+    /// CSV field delimiter (default: ',').
+    delimiter: u8,
+    /// Show inferred type alongside name when true.
+    verbose: bool,
+};
+
 /// Result of argument parsing — either parsed arguments or a special action.
 const ArgsResult = union(enum) {
     /// Normal execution: run the query.
@@ -81,6 +90,8 @@ const ArgsResult = union(enum) {
     help,
     /// User requested --version / -V.
     version,
+    /// User requested --columns: list column names and exit.
+    columns: ColumnsArgs,
 };
 
 // ─── Extracted functions ──────────────────────────────
@@ -103,6 +114,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  --json               Output results as a JSON array of objects
         \\  --max-rows <n>       Stop if more than <n> data rows are read (exit 1)
         \\  -v, --verbose        Force row count to stderr (shown automatically on TTY)
+        \\  --columns            List column names from header (one per line) and exit
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
         \\
@@ -151,6 +163,7 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var explicit_tsv = false;
     var max_rows: ?usize = null;
     var verbose = false;
+    var list_columns = false;
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
@@ -197,6 +210,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             if (max_rows.? == 0) return error.InvalidMaxRows;
         } else if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v")) {
             verbose = true;
+        } else if (std.mem.eql(u8, arg, "--columns")) {
+            list_columns = true;
         } else {
             if (query == null) query = arg;
         }
@@ -205,6 +220,14 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     // --json is mutually exclusive with --header (both affect output format)
     if (json and header)
         return error.IncompatibleFlags;
+
+    // --columns is mutually exclusive with a query argument
+    if (list_columns and query != null)
+        return error.ColumnsWithQuery;
+
+    // --columns mode: list headers and exit
+    if (list_columns)
+        return .{ .columns = ColumnsArgs{ .delimiter = delimiter, .verbose = verbose } };
 
     return .{ .parsed = ParsedArgs{
         .query = query orelse return error.MissingQuery,
@@ -781,7 +804,7 @@ fn levenshteinDistance(a: []const u8, b: []const u8) usize {
             const cost: usize = if (a[i] == b[j]) 0 else 1;
             curr[j + 1] = @min(curr[j] + 1, @min(prev[j + 1] + 1, prev[j] + cost));
         }
-        @memcpy(prev[0..b_len + 1], curr[0..b_len + 1]);
+        @memcpy(prev[0 .. b_len + 1], curr[0 .. b_len + 1]);
     }
     return prev[b_len];
 }
@@ -972,6 +995,13 @@ pub fn main(init: std.process.Init.Minimal) void {
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
             },
+            error.ColumnsWithQuery => {
+                stderr_writer.writeAll("error: --columns cannot be combined with a query argument\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
             else => {},
         }
         printUsage(stderr_writer) catch |werr| {
@@ -996,6 +1026,15 @@ pub fn main(init: std.process.Init.Minimal) void {
             stderr_writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
             std.process.exit(@intFromEnum(ExitCode.success));
         },
+        .columns => |col_args| {
+            runColumns(col_args, allocator, io.io(), stderr_writer, stdout_writer);
+            stdout_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stdout: {}", .{err});
+            };
+            stderr_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stderr: {}", .{err});
+            };
+        },
         .parsed => |parsed| {
             run(parsed, allocator, io.io(), stderr_writer, stdout_writer);
             stdout_file_writer.flush() catch |err| {
@@ -1005,6 +1044,83 @@ pub fn main(init: std.process.Init.Minimal) void {
                 std.log.err("failed to flush stderr: {}", .{err});
             };
         },
+    }
+}
+
+/// runColumns(args, allocator, io, stderr_writer, stdout_writer) → void
+/// Pre:  args.delimiter is valid; allocator and writers are valid
+/// Post: column names from stdin CSV header row are written to stdout, one per line;
+///       when args.verbose is true, each line has format "<name> <TYPE>" where TYPE
+///       is inferred from the first 100 data rows (INTEGER, REAL, or TEXT)
+///       error messages go to stderr; process exits 0 on success, 2 on CSV error
+fn runColumns(
+    args: ColumnsArgs,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    stderr_writer: *std.Io.Writer,
+    stdout_writer: *std.Io.Writer,
+) void {
+    var stdin_buf: [4096]u8 = undefined;
+    var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+    var csv_reader = csv.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, args.delimiter);
+
+    const header_record = csv_reader.nextRecord() catch |err| switch (err) {
+        error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),
+        else => fatal("row 1: failed to parse CSV header", stderr_writer, .csv_error, .{}),
+    } orelse fatal("empty input (no header row)", stderr_writer, .csv_error, .{});
+    defer csv_reader.freeRecord(header_record);
+
+    const cols = parseHeader(allocator, header_record, stderr_writer) catch |err| {
+        switch (err) {
+            error.EmptyColumnName => fatal("row 1: empty column name in header", stderr_writer, .csv_error, .{}),
+            error.NoColumns => fatal("row 1: no columns found in header", stderr_writer, .csv_error, .{}),
+            else => fatal("row 1: failed to parse header", stderr_writer, .csv_error, .{}),
+        }
+    };
+    defer {
+        for (cols) |col| allocator.free(col);
+        allocator.free(cols);
+    }
+    // {A1: cols is a non-empty slice of trimmed, BOM-free column names}
+
+    if (args.verbose) {
+        // Read up to inference_buffer_size rows for type inference
+        var row_buffer: std.ArrayList([][]u8) = .empty;
+        defer {
+            for (row_buffer.items) |row| csv_reader.freeRecord(row);
+            row_buffer.deinit(allocator);
+        }
+        // Loop invariant I: row_buffer.items.len ≤ inference_buffer_size
+        //                   all items are valid parsed CSV records
+        // Bounding function: inference_buffer_size - row_buffer.items.len
+        while (row_buffer.items.len < inference_buffer_size) {
+            const rec = csv_reader.nextRecord() catch break orelse break;
+            if (rec.len == 0) {
+                csv_reader.freeRecord(rec);
+                continue;
+            }
+            row_buffer.append(allocator, rec) catch
+                fatal("out of memory while buffering rows", stderr_writer, .csv_error, .{});
+        }
+        const types = inferTypes(allocator, row_buffer.items, cols.len) catch
+            fatal("out of memory during type inference", stderr_writer, .csv_error, .{});
+        defer allocator.free(types);
+
+        // Loop invariant I: cols[0..i] have been written with type annotation to stdout
+        // Bounding function: cols.len - i
+        for (cols, types) |col, t| {
+            stdout_writer.print("{s} {s}\n", .{ col, @tagName(t) }) catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+            };
+        }
+    } else {
+        // Loop invariant I: cols[0..i] have been written to stdout
+        // Bounding function: cols.len - i
+        for (cols) |col| {
+            stdout_writer.print("{s}\n", .{col}) catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+            };
+        }
     }
 }
 

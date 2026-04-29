@@ -353,6 +353,47 @@ pub fn build(b: *std.Build) void {
     test_verbose_short.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_verbose_short.step);
 
+    // Integration test 33: --columns prints column names one per line and exits 0
+    const test_columns_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,region,amount\n1,east,100\n' | ./zig-out/bin/sql-pipe --columns | diff - <(printf 'id\nregion\namount\n')
+    });
+    test_columns_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_basic.step);
+
+    // Integration test 34: --columns --verbose prints "name TYPE" lines
+    const test_columns_verbose = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,name,amount\n1,Alice,3.14\n2,Bob,2.72\n' | ./zig-out/bin/sql-pipe --columns --verbose | diff - <(printf 'id INTEGER\nname TEXT\namount REAL\n')
+    });
+    test_columns_verbose.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_verbose.step);
+
+    // Integration test 35: --columns works with --delimiter
+    const test_columns_delimiter = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'a|b|c\n1|2|3\n' | ./zig-out/bin/sql-pipe --columns -d '|' | diff - <(printf 'a\nb\nc\n')
+    });
+    test_columns_delimiter.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_delimiter.step);
+
+    // Integration test 36: --columns works with --tsv
+    const test_columns_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'col1\tcol2\tcol3\n' | ./zig-out/bin/sql-pipe --columns --tsv | diff - <(printf 'col1\ncol2\ncol3\n')
+    });
+    test_columns_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_tsv.step);
+
+    // Integration test 37: --columns combined with a query argument exits 1 with error
+    const test_columns_with_query = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --columns 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --columns cannot be combined with a query argument' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_columns_with_query.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_with_query.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

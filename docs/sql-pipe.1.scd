@@ -5,6 +5,7 @@ NAME
 
 SYNOPSIS
 	*sql-pipe* [OPTIONS] <query>
+	*sql-pipe* --columns [OPTIONS]
 
 DESCRIPTION
 	sql-pipe reads CSV data from standard input, loads it into an in-memory SQLite
@@ -56,6 +57,13 @@ OPTIONS
 		Stop reading input after inserting <n> data rows and exit with
 		code 1 and an error message. Use this to guard against
 		accidentally piping extremely large files into memory.
+
+	*--columns*
+		Read the CSV header row, print each column name on its own line to
+		standard output, and exit with code 0. When combined with *-v* /
+		*--verbose*, also shows the inferred type (INTEGER, REAL, or TEXT)
+		for each column, using the first 100 data rows for inference. Respects
+		*--delimiter* and *--tsv*. Mutually exclusive with a query argument.
 
 	*-h, --help*
 		Print the help message and exit with code 0.
