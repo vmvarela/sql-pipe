@@ -39,6 +39,9 @@ const ColumnType = enum { TEXT, INTEGER, REAL };
 /// Number of rows buffered from stdin to infer column types.
 const inference_buffer_size: usize = 100;
 
+/// Number of rows between progress indicator updates.
+const progress_interval: usize = 10_000;
+
 /// Structured exit codes for scripting.
 ///   0 = success
 ///   1 = usage error (missing query, bad flag)
@@ -884,6 +887,27 @@ fn fmtThousands(buf: []u8, n: usize) []const u8 {
     return buf[0..out_len];
 }
 
+/// printProgress(writer, n, max_rows) → void
+/// Pre:  writer is stderr; n > 0
+/// Post: "Loading... <n> rows\r" (or "Loading... <n> / <max> rows\r" when max_rows is set)
+///       written to writer with carriage return for in-place update; flushed immediately
+fn printProgress(writer: *std.Io.Writer, n: usize, max_rows: ?usize) void {
+    var count_buf: [32]u8 = undefined;
+    const count_str = fmtThousands(&count_buf, n);
+    if (max_rows) |limit| {
+        var limit_buf: [32]u8 = undefined;
+        const limit_str = fmtThousands(&limit_buf, limit);
+        writer.print("Loading... {s} / {s} rows\r", .{ count_str, limit_str }) catch |err| {
+            std.log.err("failed to write progress: {}", .{err});
+        };
+    } else {
+        writer.print("Loading... {s} rows\r", .{count_str}) catch |err| {
+            std.log.err("failed to write progress: {}", .{err});
+        };
+    }
+    writer.flush() catch |err| std.log.err("failed to flush progress: {}", .{err});
+}
+
 /// fatal(writer, code, comptime fmt, args) → noreturn
 /// Pre:  writer is stderr, code is non-zero ExitCode
 /// Post: "error: <message>\n" written to stderr, process exits with code
@@ -1029,6 +1053,9 @@ fn run(
 
     const num_cols = cols.len;
 
+    const is_tty = std.Io.File.isTty(std.Io.File.stderr(), io) catch false;
+    const start_ts = std.Io.Timestamp.now(io, .awake);
+
     // ─── Phase 1: determine column types ─────────────────────────────────────
     var row_buffer: std.ArrayList([][]u8) = .empty;
     defer {
@@ -1102,6 +1129,9 @@ fn run(
         }
         insertRowTyped(stmt, db, row, types, @intCast(num_cols)) catch
             fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+        if (is_tty and rows_inserted % progress_interval == 0) {
+            printProgress(stderr_writer, rows_inserted, parsed.max_rows);
+        }
     }
     // {A7: all buffered rows are in t}
 
@@ -1134,6 +1164,9 @@ fn run(
         }
         insertRowTyped(stmt, db, record, types, @intCast(num_cols)) catch
             fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+        if (is_tty and rows_inserted % progress_interval == 0) {
+            printProgress(stderr_writer, rows_inserted, parsed.max_rows);
+        }
     }
     // {A8: all stdin CSV rows are inserted into t; transaction is still active}
 
@@ -1148,11 +1181,21 @@ fn run(
     }
     // {A9: transaction committed; t holds all input rows, no active transaction}
 
-    // Print row count to stderr when stderr is a TTY or --verbose is set.
-    if (parsed.verbose or (std.Io.File.isTty(std.Io.File.stderr(), io) catch false)) {
+    // Print row count and elapsed time to stderr when stderr is a TTY or --verbose is set.
+    // When progress was shown (TTY + ≥ progress_interval rows), clear the progress line first.
+    if (parsed.verbose or is_tty) {
+        const end_ts = std.Io.Timestamp.now(io, .awake);
+        const elapsed_ns: i96 = end_ts.nanoseconds - start_ts.nanoseconds;
+        const elapsed_ms: u64 = @intCast(@max(@as(i96, 0), @divTrunc(elapsed_ns, std.time.ns_per_ms)));
         var count_buf: [32]u8 = undefined;
         const count_str = fmtThousands(&count_buf, rows_inserted);
-        stderr_writer.print("Loaded {s} rows\n", .{count_str}) catch |err| {
+        const secs = elapsed_ms / 1000;
+        const frac = (elapsed_ms % 1000) / 100; // tenths of a second
+        if (is_tty and rows_inserted >= progress_interval) {
+            // Overwrite the in-progress line: move to column 0, erase to end of line
+            stderr_writer.writeAll("\r\x1b[K") catch |err| std.log.err("failed to clear progress line: {}", .{err});
+        }
+        stderr_writer.print("Loaded {s} rows in {d}.{d}s\n", .{ count_str, secs, frac }) catch |err| {
             std.log.err("failed to write row count: {}", .{err});
         };
         stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
