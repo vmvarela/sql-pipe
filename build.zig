@@ -317,6 +317,39 @@ pub fn build(b: *std.Build) void {
     test_csv_row_number.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_csv_row_number.step);
 
+    // Integration test 29: --verbose prints "Loaded <n> rows" to stderr
+    const test_verbose_count = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\nBob,25\nCarol,35\n' | ./zig-out/bin/sql-pipe --verbose 'SELECT COUNT(*) FROM t' 2>&1 >/dev/null | grep -q 'Loaded 3 rows'
+    });
+    test_verbose_count.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_verbose_count.step);
+
+    // Integration test 30: --verbose formats thousands separator (e.g. 1,000 not 1000)
+    const test_verbose_thousands = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\{ printf 'n\n'; seq 1 1000; } | ./zig-out/bin/sql-pipe --verbose 'SELECT COUNT(*) FROM t' 2>&1 >/dev/null | grep -q 'Loaded 1,000 rows'
+    });
+    test_verbose_thousands.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_verbose_thousands.step);
+
+    // Integration test 31: without --verbose, row count is NOT printed to stderr (non-TTY)
+    const test_no_verbose_silent = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\out=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe 'SELECT * FROM t' 2>&1 >/dev/null)
+        \\test -z "$out"
+    });
+    test_no_verbose_silent.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_no_verbose_silent.step);
+
+    // Integration test 32: -v is an alias for --verbose
+    const test_verbose_short = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe -v 'SELECT * FROM t' 2>&1 >/dev/null | grep -q 'Loaded 1 rows'
+    });
+    test_verbose_short.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_verbose_short.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
