@@ -961,94 +961,6 @@ fn fatalSqlWithContext(
     std.process.exit(@intFromEnum(ExitCode.sql_error));
 }
 
-pub fn main(init: std.process.Init.Minimal) void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var io = std.Io.Threaded.init_single_threaded;
-
-    var stderr_buf: [1024]u8 = undefined;
-    var stderr_file_writer = std.Io.File.writer(std.Io.File.stderr(), io.io(), &stderr_buf);
-    const stderr_writer: *std.Io.Writer = &stderr_file_writer.interface;
-
-    var stdout_buf: [4096]u8 = undefined;
-    var stdout_file_writer = std.Io.File.writer(std.Io.File.stdout(), io.io(), &stdout_buf);
-    const stdout_writer: *std.Io.Writer = &stdout_file_writer.interface;
-
-    var args_arena = std.heap.ArenaAllocator.init(allocator);
-    defer args_arena.deinit();
-    const args = init.args.toSlice(args_arena.allocator()) catch
-        fatal("failed to read process arguments", stderr_writer, .usage, .{});
-
-    const args_result = parseArgs(args) catch |err| {
-        switch (err) {
-            error.IncompatibleFlags => {
-                stderr_writer.writeAll("error: --json cannot be combined with --header\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.InvalidMaxRows => {
-                stderr_writer.writeAll("error: --max-rows must be a positive integer\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.ColumnsWithQuery => {
-                stderr_writer.writeAll("error: --columns cannot be combined with a query argument\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            else => {},
-        }
-        printUsage(stderr_writer) catch |werr| {
-            std.log.err("failed to write usage: {}", .{werr});
-        };
-        stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-        std.process.exit(@intFromEnum(ExitCode.usage));
-    };
-
-    switch (args_result) {
-        .help => {
-            printUsage(stderr_writer) catch |err| {
-                std.log.err("failed to write usage: {}", .{err});
-            };
-            stderr_writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
-            std.process.exit(@intFromEnum(ExitCode.success));
-        },
-        .version => {
-            stderr_writer.print("sql-pipe {s}\n", .{VERSION}) catch |err| {
-                std.log.err("failed to write version: {}", .{err});
-            };
-            stderr_writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
-            std.process.exit(@intFromEnum(ExitCode.success));
-        },
-        .columns => |col_args| {
-            runColumns(col_args, allocator, io.io(), stderr_writer, stdout_writer);
-            stdout_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stdout: {}", .{err});
-            };
-            stderr_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stderr: {}", .{err});
-            };
-        },
-        .parsed => |parsed| {
-            run(parsed, allocator, io.io(), stderr_writer, stdout_writer);
-            stdout_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stdout: {}", .{err});
-            };
-            stderr_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stderr: {}", .{err});
-            };
-        },
-    }
-}
-
 /// runColumns(args, allocator, io, stderr_writer, stdout_writer) → void
 /// Pre:  args.delimiter is valid; allocator and writers are valid
 /// Post: column names from stdin CSV header row are written to stdout, one per line;
@@ -1342,4 +1254,92 @@ fn run(
         fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
     };
     // {A10: all result rows written to stdout as CSV lines}
+}
+
+pub fn main(init: std.process.Init.Minimal) void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var io = std.Io.Threaded.init_single_threaded;
+
+    var stderr_buf: [1024]u8 = undefined;
+    var stderr_file_writer = std.Io.File.writer(std.Io.File.stderr(), io.io(), &stderr_buf);
+    const stderr_writer: *std.Io.Writer = &stderr_file_writer.interface;
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_file_writer = std.Io.File.writer(std.Io.File.stdout(), io.io(), &stdout_buf);
+    const stdout_writer: *std.Io.Writer = &stdout_file_writer.interface;
+
+    var args_arena = std.heap.ArenaAllocator.init(allocator);
+    defer args_arena.deinit();
+    const args = init.args.toSlice(args_arena.allocator()) catch
+        fatal("failed to read process arguments", stderr_writer, .usage, .{});
+
+    const args_result = parseArgs(args) catch |err| {
+        switch (err) {
+            error.IncompatibleFlags => {
+                stderr_writer.writeAll("error: --json cannot be combined with --header\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.InvalidMaxRows => {
+                stderr_writer.writeAll("error: --max-rows must be a positive integer\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.ColumnsWithQuery => {
+                stderr_writer.writeAll("error: --columns cannot be combined with a query argument\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            else => {},
+        }
+        printUsage(stderr_writer) catch |werr| {
+            std.log.err("failed to write usage: {}", .{werr});
+        };
+        stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+        std.process.exit(@intFromEnum(ExitCode.usage));
+    };
+
+    switch (args_result) {
+        .help => {
+            printUsage(stderr_writer) catch |err| {
+                std.log.err("failed to write usage: {}", .{err});
+            };
+            stderr_writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        },
+        .version => {
+            stderr_writer.print("sql-pipe {s}\n", .{VERSION}) catch |err| {
+                std.log.err("failed to write version: {}", .{err});
+            };
+            stderr_writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
+            std.process.exit(@intFromEnum(ExitCode.success));
+        },
+        .columns => |col_args| {
+            runColumns(col_args, allocator, io.io(), stderr_writer, stdout_writer);
+            stdout_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stdout: {}", .{err});
+            };
+            stderr_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stderr: {}", .{err});
+            };
+        },
+        .parsed => |parsed| {
+            run(parsed, allocator, io.io(), stderr_writer, stdout_writer);
+            stdout_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stdout: {}", .{err});
+            };
+            stderr_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stderr: {}", .{err});
+            };
+        },
+    }
 }
