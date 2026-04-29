@@ -31,6 +31,7 @@ const SqlPipeError = error{
     CommitFailed,
     PrepareQueryFailed,
     InvalidOutputPath,
+    OutputWithColumns,
 };
 
 // ─── Column type inference ────────────────────────────
@@ -120,6 +121,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\                       With --columns: show inferred type per column
         \\  --columns            List column names from header (one per line) and exit
         \\                       Combine with -v/--verbose to include inferred types
+        \\                       Cannot be combined with --output or a query argument
         \\  --output <file>      Write results to file instead of stdout
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
@@ -222,10 +224,13 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         } else if (std.mem.eql(u8, arg, "--output")) {
             i += 1;
             if (i >= args.len) return error.InvalidOutputPath;
-            output = args[i];
+            const trimmed = std.mem.trim(u8, args[i], " \t");
+            if (trimmed.len == 0) return error.InvalidOutputPath;
+            output = trimmed;
         } else if (std.mem.startsWith(u8, arg, "--output=")) {
-            output = arg["--output=".len..];
-            if (output.?.len == 0) return error.InvalidOutputPath;
+            const trimmed = std.mem.trim(u8, arg["--output=".len..], " \t");
+            if (trimmed.len == 0) return error.InvalidOutputPath;
+            output = trimmed;
         } else {
             if (query == null) query = arg;
         }
@@ -234,6 +239,10 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     // --json is mutually exclusive with --header (both affect output format)
     if (json and header)
         return error.IncompatibleFlags;
+
+    // --output is mutually exclusive with --columns (--columns always writes to stdout)
+    if (output != null and list_columns)
+        return error.OutputWithColumns;
 
     // --columns is mutually exclusive with a query argument
     if (list_columns and query != null)
@@ -1264,6 +1273,7 @@ fn run(
     }
 
     execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.json) catch {
+        stdout_writer.flush() catch |err| std.log.err("failed to flush output before fatal: {}", .{err});
         fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
     };
     // {A10: all result rows written to stdout as CSV lines}
@@ -1314,6 +1324,13 @@ pub fn main(init: std.process.Init.Minimal) void {
             },
             error.InvalidOutputPath => {
                 stderr_writer.writeAll("error: --output requires a non-empty file path\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.OutputWithColumns => {
+                stderr_writer.writeAll("error: --output cannot be combined with --columns\n") catch |werr| {
                     std.log.err("failed to write error message: {}", .{werr});
                 };
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});

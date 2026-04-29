@@ -452,6 +452,35 @@ pub fn build(b: *std.Build) void {
     test_output_bad_path.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_output_bad_path.step);
 
+    // Integration test 45: --output works with --header
+    const test_output_header = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp); printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --header --output "$tmp" 'SELECT name FROM t'; diff "$tmp" <(printf 'name\nAlice\n'); rm -f "$tmp"
+    });
+    test_output_header.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_header.step);
+
+    // Integration test 46: --output cannot be combined with --columns (exits 1 with error)
+    const test_output_with_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --columns --output /tmp/out.csv 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --output cannot be combined with --columns' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_output_with_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_with_columns.step);
+
+    // Integration test 47: --output on SQL error flushes partial output before exit
+    const test_output_sql_error_flush = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --header --output "$tmp" 'SELECT * FROM nonexistent_table' 2>/dev/null; test $? -eq 3
+        \\rm -f "$tmp"
+    });
+    test_output_sql_error_flush.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_sql_error_flush.step);
+    test_output_bad_path.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_bad_path.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
