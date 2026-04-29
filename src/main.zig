@@ -780,9 +780,10 @@ pub fn main(init: std.process.Init.Minimal) void {
     var stdout_file_writer = std.Io.File.writer(std.Io.File.stdout(), io.io(), &stdout_buf);
     const stdout_writer: *std.Io.Writer = &stdout_file_writer.interface;
 
-    const args = init.args.toSlice(allocator) catch
+    var args_arena = std.heap.ArenaAllocator.init(allocator);
+    defer args_arena.deinit();
+    const args = init.args.toSlice(args_arena.allocator()) catch
         fatal("failed to read process arguments", stderr_writer, .usage, .{});
-    defer allocator.free(args);
 
     const args_result = parseArgs(args) catch |err| {
         switch (err) {
