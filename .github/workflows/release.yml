@@ -8,7 +8,7 @@ on:
 env:
   SQLITE_VERSION: "3490100"
   SQLITE_YEAR: "2025"
-  ZIG_VERSION: "0.15.0"
+  ZIG_VERSION: "0.16.0"
 
 jobs:
   build:
