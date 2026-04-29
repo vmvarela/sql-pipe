@@ -183,10 +183,19 @@ $ cat events.csv \
 |------|----------|
 | `0` | Success |
 | `1` | Usage error (missing query, bad arguments) |
-| `2` | CSV parse error (with row number) |
-| `3` | SQL error (with sqlite3 error message) |
+| `2` | CSV parse error (with 1-based row number) |
+| `3` | SQL error (with sqlite3 error message, available columns, and a "did you mean?" hint when applicable) |
 
 All error messages are prefixed with `error:` and written to stderr.
+
+On SQL error, `sql-pipe` also prints the list of columns available in table `t` and,
+when the unknown identifier closely matches a column name (edit distance ≤ 2), a hint:
+
+```
+error: no such column: amout
+  table "t" has columns: id, amount, region
+  hint: did you mean "amount"?
+```
 
 ## Recipes
 

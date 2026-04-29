@@ -107,9 +107,7 @@ pub const CsvReader = struct {
                         return null;
                     }
                     if (state == .quoted) {
-                        field.deinit(self.allocator);
-                        for (fields.items) |f| self.allocator.free(f);
-                        fields.deinit(self.allocator);
+                        // errdefer blocks above handle cleanup of `field` and `fields`.
                         return error.UnterminatedQuotedField;
                     }
                     // Flush the last field and return the record.
