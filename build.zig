@@ -427,6 +427,60 @@ pub fn build(b: *std.Build) void {
     test_columns_short_verbose.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_columns_short_verbose.step);
 
+    // Integration test 42: --output writes results to a file
+    const test_output_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp); printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --output "$tmp" 'SELECT name FROM t ORDER BY age'; diff "$tmp" <(printf 'Bob\nAlice\n'); rm -f "$tmp"
+    });
+    test_output_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_file.step);
+
+    // Integration test 43: --output works with --json
+    const test_output_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp); printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --json --output "$tmp" 'SELECT * FROM t'; grep -q '"name":"Alice"' "$tmp"; rm -f "$tmp"
+    });
+    test_output_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_json.step);
+
+    // Integration test 44: --output with missing parent directory exits 1 with error message
+    const test_output_bad_path = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe --output '/nonexistent/dir/file.csv' 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q "^error:" && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_output_bad_path.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_bad_path.step);
+
+    // Integration test 45: --output works with --header
+    const test_output_header = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp); printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --header --output "$tmp" 'SELECT name FROM t'; diff "$tmp" <(printf 'name\nAlice\n'); rm -f "$tmp"
+    });
+    test_output_header.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_header.step);
+
+    // Integration test 46: --output cannot be combined with --columns (exits 1 with error)
+    const test_output_with_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --columns --output /tmp/out.csv 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --output cannot be combined with --columns' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_output_with_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_with_columns.step);
+
+    // Integration test 47: --output on SQL error flushes partial output before exit
+    const test_output_sql_error_flush = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --header --output "$tmp" 'SELECT * FROM nonexistent_table' 2>/dev/null; test $? -eq 3
+        \\rm -f "$tmp"
+    });
+    test_output_sql_error_flush.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_sql_error_flush.step);
+    test_output_bad_path.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_bad_path.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
