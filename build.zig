@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
         []const u8,
         "version",
         "Override version string (default: from build.zig.zon)",
-    ) orelse "0.2.0";
+    ) orelse "0.0.0-dev";
 
     const exe = b.addExecutable(.{
         .name = "sql-pipe",
