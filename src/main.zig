@@ -30,6 +30,7 @@ const SqlPipeError = error{
     StepFailed,
     CommitFailed,
     PrepareQueryFailed,
+    InvalidOutputPath,
 };
 
 // ─── Column type inference ────────────────────────────
@@ -72,6 +73,8 @@ const ParsedArgs = struct {
     /// Print "Loaded <n> rows" to stderr after all CSV rows are inserted when true.
     /// When false, the message is still shown automatically when stderr is a TTY.
     verbose: bool,
+    /// Write results to this file path instead of stdout; null = write to stdout.
+    output: ?[]const u8,
 };
 
 /// Arguments for `--columns` mode.
@@ -117,6 +120,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\                       With --columns: show inferred type per column
         \\  --columns            List column names from header (one per line) and exit
         \\                       Combine with -v/--verbose to include inferred types
+        \\  --output <file>      Write results to file instead of stdout
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
         \\
@@ -166,6 +170,7 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var max_rows: ?usize = null;
     var verbose = false;
     var list_columns = false;
+    var output: ?[]const u8 = null;
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
@@ -214,6 +219,13 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             verbose = true;
         } else if (std.mem.eql(u8, arg, "--columns")) {
             list_columns = true;
+        } else if (std.mem.eql(u8, arg, "--output")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidOutputPath;
+            output = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--output=")) {
+            output = arg["--output=".len..];
+            if (output.?.len == 0) return error.InvalidOutputPath;
         } else {
             if (query == null) query = arg;
         }
@@ -239,6 +251,7 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         .json = json,
         .max_rows = max_rows,
         .verbose = verbose,
+        .output = output,
     } };
 }
 
@@ -1299,6 +1312,13 @@ pub fn main(init: std.process.Init.Minimal) void {
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
             },
+            error.InvalidOutputPath => {
+                stderr_writer.writeAll("error: --output requires a non-empty file path\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
             else => {},
         }
         printUsage(stderr_writer) catch |werr| {
@@ -1333,10 +1353,27 @@ pub fn main(init: std.process.Init.Minimal) void {
             };
         },
         .parsed => |parsed| {
-            run(parsed, allocator, io.io(), stderr_writer, stdout_writer);
-            stdout_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stdout: {}", .{err});
-            };
+            if (parsed.output) |output_path| {
+                const output_file = std.Io.Dir.createFile(std.Io.Dir.cwd(), io.io(), output_path, .{}) catch |err| {
+                    stderr_writer.print("error: cannot create output file '{s}': {s}\n", .{ output_path, @errorName(err) }) catch |werr| {
+                        std.log.err("failed to write error message: {}", .{werr});
+                    };
+                    stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+                defer std.Io.File.close(output_file, io.io());
+                var output_buf: [4096]u8 = undefined;
+                var output_file_writer = std.Io.File.writer(output_file, io.io(), &output_buf);
+                run(parsed, allocator, io.io(), stderr_writer, &output_file_writer.interface);
+                output_file_writer.flush() catch |err| {
+                    std.log.err("failed to flush output file: {}", .{err});
+                };
+            } else {
+                run(parsed, allocator, io.io(), stderr_writer, stdout_writer);
+                stdout_file_writer.flush() catch |err| {
+                    std.log.err("failed to flush stdout: {}", .{err});
+                };
+            }
             stderr_file_writer.flush() catch |err| {
                 std.log.err("failed to flush stderr: {}", .{err});
             };

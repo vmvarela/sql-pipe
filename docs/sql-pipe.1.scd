@@ -65,6 +65,12 @@ OPTIONS
 		for each column, using the first 100 data rows for inference. Respects
 		*--delimiter* and *--tsv*. Mutually exclusive with a query argument.
 
+	*--output* <file>
+		Write results to <file> instead of standard output. Creates or
+		overwrites the file. Compatible with all output modes (*--json*,
+		*--header*, CSV). Exits with code 1 and an error message if the file
+		cannot be created (bad path or insufficient permissions).
+
 	*-h, --help*
 		Print the help message and exit with code 0.
 
