@@ -394,6 +394,39 @@ pub fn build(b: *std.Build) void {
     test_columns_with_query.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_columns_with_query.step);
 
+    // Integration test 38: --columns --verbose with malformed CSV exits 2
+    const test_columns_verbose_bad_csv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n"unterminated' | ./zig-out/bin/sql-pipe --columns --verbose 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'row 2: unterminated quoted field' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_columns_verbose_bad_csv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_verbose_bad_csv.step);
+
+    // Integration test 39: --columns --verbose with header-only (no data rows) → all TEXT
+    const test_columns_verbose_no_data = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,name\n' | ./zig-out/bin/sql-pipe --columns --verbose | diff - <(printf 'id TEXT\nname TEXT\n')
+    });
+    test_columns_verbose_no_data.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_verbose_no_data.step);
+
+    // Integration test 40: --columns with empty stdin exits 2
+    const test_columns_empty_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '' | ./zig-out/bin/sql-pipe --columns 2>/dev/null; test $? -eq 2
+    });
+    test_columns_empty_stdin.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_empty_stdin.step);
+
+    // Integration test 41: -v is a valid alias for --verbose with --columns
+    const test_columns_short_verbose = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'id,name\n1,Alice\n' | ./zig-out/bin/sql-pipe --columns -v | diff - <(printf 'id INTEGER\nname TEXT\n')
+    });
+    test_columns_short_verbose.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_short_verbose.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

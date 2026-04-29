@@ -114,7 +114,9 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  --json               Output results as a JSON array of objects
         \\  --max-rows <n>       Stop if more than <n> data rows are read (exit 1)
         \\  -v, --verbose        Force row count to stderr (shown automatically on TTY)
+        \\                       With --columns: show inferred type per column
         \\  --columns            List column names from header (one per line) and exit
+        \\                       Combine with -v/--verbose to include inferred types
         \\  -h, --help           Show this help message and exit
         \\  -V, --version        Show version and exit
         \\
@@ -1090,11 +1092,30 @@ fn runColumns(
             for (row_buffer.items) |row| csv_reader.freeRecord(row);
             row_buffer.deinit(allocator);
         }
+        var data_row: usize = 1; // row 1 = header already read; data rows start at 2
         // Loop invariant I: row_buffer.items.len ≤ inference_buffer_size
         //                   all items are valid parsed CSV records
+        //                   data_row = 1 + number of data rows attempted so far
         // Bounding function: inference_buffer_size - row_buffer.items.len
+        //   (decreases for each non-empty row appended; empty rows are counted by
+        //    data_row but do not move the buffer toward the bound — stream must
+        //    be finite for termination)
         while (row_buffer.items.len < inference_buffer_size) {
-            const rec = csv_reader.nextRecord() catch break orelse break;
+            data_row += 1;
+            const rec = csv_reader.nextRecord() catch |err| switch (err) {
+                error.UnterminatedQuotedField => fatal(
+                    "row {d}: unterminated quoted field",
+                    stderr_writer,
+                    .csv_error,
+                    .{data_row},
+                ),
+                else => fatal(
+                    "row {d}: failed to parse CSV",
+                    stderr_writer,
+                    .csv_error,
+                    .{data_row},
+                ),
+            } orelse break;
             if (rec.len == 0) {
                 csv_reader.freeRecord(rec);
                 continue;
