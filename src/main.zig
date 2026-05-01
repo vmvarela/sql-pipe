@@ -130,7 +130,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson
         \\  --json                       Alias for --output-format json
         \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
-        \\  -H, --header                 Print column names as the first output row (CSV output only)
+        \\  -H, --header                 Print column names as the first output row (CSV/TSV output only)
         \\  --max-rows <n>               Stop if more than <n> data rows are read (exit 1)
         \\  -v, --verbose                Force row count to stderr (shown automatically on TTY)
         \\                               With --columns: show inferred type per column
@@ -201,7 +201,7 @@ fn parseOutputFormat(s: []const u8) SqlPipeError!OutputFormat {
 ///       result = .help when --help or -h is present
 ///       result = .version when --version or -V is present
 ///       error.MissingQuery when no non-flag argument is found
-///       error.IncompatibleFlags when a non-CSV output format is combined with --header
+///       error.IncompatibleFlags when a non-CSV/TSV output format is combined with --header
 fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
@@ -1402,7 +1402,7 @@ pub fn main(init: std.process.Init.Minimal) void {
         switch (err) {
             error.IncompatibleFlags => {
                 stderr_writer.writeAll(
-                    "error: --header cannot be combined with non-CSV output format\n",
+                    "error: --header cannot be combined with non-CSV/TSV output format\n",
                 ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
