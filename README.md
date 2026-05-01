@@ -35,31 +35,57 @@ By default it installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
 curl -sSL https://raw.githubusercontent.com/vmvarela/sql-pipe/master/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
-**Debian / Ubuntu (.deb package):**
+**Debian / Ubuntu (APT repository):**
 
 ```sh
-wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERSION_amd64.deb
-sudo dpkg -i sql-pipe_VERSION_amd64.deb
+curl -sSL https://vmvarela.github.io/apt-packages/key.gpg \
+  | sudo tee /etc/apt/keyrings/vmvarela.asc
+echo "deb [signed-by=/etc/apt/keyrings/vmvarela.asc] https://vmvarela.github.io/apt-packages stable main" \
+  | sudo tee /etc/apt/sources.list.d/vmvarela.list
+sudo apt update && sudo apt install sql-pipe
 ```
 
-Replace `VERSION` with the release version (e.g. `0.2.0`) and `amd64` with your architecture (`arm64`, `armhf`, or `386`).
-
-**Fedora / RHEL / openSUSE (.rpm package):**
+Or install a single release asset directly:
 
 ```sh
-sudo rpm -i https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe-VERSION-1.x86_64.rpm
+wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERSION_linux_amd64.deb
+sudo dpkg -i sql-pipe_VERSION_linux_amd64.deb
 ```
 
-Replace `VERSION` with the release version (e.g. `0.2.0`) and `x86_64` with your architecture (`aarch64`).
+Replace `VERSION` with the release version (e.g. `0.3.0`) and `amd64` with your architecture (`arm64`, `arm7`, or `386`).
 
-**Alpine Linux (.apk package):**
+**Fedora / RHEL / openSUSE (RPM repository):**
 
 ```sh
-wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERSION_x86_64.apk
-sudo apk add --allow-untrusted sql-pipe_VERSION_x86_64.apk
+sudo dnf config-manager --add-repo https://vmvarela.github.io/rpm-packages/vmvarela.repo
+sudo dnf install sql-pipe
 ```
 
-Replace `VERSION` with the release version (e.g. `0.2.0`) and `x86_64` with your architecture (`aarch64`).
+Or install a single release asset directly:
+
+```sh
+sudo rpm -i https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERSION_linux_amd64.rpm
+```
+
+Replace `VERSION` with the release version (e.g. `0.3.0`) and `amd64` with your architecture (`arm64`).
+
+**Alpine Linux (APK repository):**
+
+```sh
+wget -qO /etc/apk/keys/vmvarela.rsa.pub \
+  https://vmvarela.github.io/apk-packages/vmvarela.rsa.pub
+echo "https://vmvarela.github.io/apk-packages" >> /etc/apk/repositories
+apk update && apk add sql-pipe
+```
+
+Or install a single release asset directly:
+
+```sh
+wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERSION_linux_amd64.apk
+sudo apk add --allow-untrusted sql-pipe_VERSION_linux_amd64.apk
+```
+
+Replace `VERSION` with the release version (e.g. `0.3.0`) and `amd64` with your architecture (`arm64`).
 
 **Arch Linux (AUR):** install with your preferred AUR helper:
 
@@ -73,13 +99,13 @@ paru -S sql-pipe
 
 ```sh
 # Run without installing
-nix run github:vmvarela/sql-pipe -- 'SELECT * FROM t'
+nix run github:vmvarela/nix-packages#sql-pipe -- 'SELECT * FROM t'
 
 # Install to profile
-nix profile install github:vmvarela/sql-pipe
+nix profile install github:vmvarela/nix-packages#sql-pipe
 
 # Non-flake
-nix-env -if https://github.com/vmvarela/sql-pipe/archive/master.tar.gz
+nix-env -if https://github.com/vmvarela/nix-packages/archive/main.tar.gz
 ```
 
 **Windows (Chocolatey):**
@@ -97,7 +123,7 @@ winget install vmvarela.sql-pipe
 **Windows (Scoop):**
 
 ```powershell
-scoop bucket add sql-pipe https://github.com/vmvarela/scoop-sql-pipe
+scoop bucket add vmvarela https://github.com/vmvarela/scoop-bucket
 scoop install sql-pipe
 ```
 
