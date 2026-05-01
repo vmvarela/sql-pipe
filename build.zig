@@ -34,6 +34,16 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "version", version);
     exe.root_module.addOptions("build_options", build_options);
 
+    // Translate sqlite3.h to Zig declarations, exposed as @import("c").
+    // We always use lib/sqlite3.h for stable type declarations regardless of
+    // whether we bundle or link the system SQLite library.
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.path("lib/sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("c", translate_c.createModule());
+
     if (bundle_sqlite) {
         exe.root_module.addIncludePath(b.path("lib"));
         exe.root_module.addCSourceFile(.{
