@@ -34,6 +34,7 @@ categories:
       - "type:chore"
       - "type:docs"
       - "type:spike"
+      - "dependencies"
   - title: "🐛 Bug Fixes"
     labels:
       - "type:bug"
@@ -42,6 +43,7 @@ categories:
       - "type:chore"
       - "type:docs"
       - "type:spike"
+      - "dependencies"
   - title: "🧰 Maintenance"
     labels:
       - "type:chore"
@@ -51,6 +53,7 @@ categories:
       - "type:bug"
       - "type:docs"
       - "type:spike"
+      - "dependencies"
   - title: "📝 Documentation"
     labels:
       - "type:docs"
@@ -59,9 +62,15 @@ categories:
       - "type:bug"
       - "type:chore"
       - "type:spike"
+      - "dependencies"
   - title: "🔬 Spikes & Research"
     labels:
       - "type:spike"
+    exclude-labels:
+      - "dependencies"
+  - title: "⬆️ Dependency Updates"
+    labels:
+      - "dependencies"
 
 change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
 change-title-escapes: '\<*_&'

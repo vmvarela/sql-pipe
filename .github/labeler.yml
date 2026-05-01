@@ -1,15 +1,12 @@
-# Labels are applied based on PR title prefix (Conventional Commits) first,
-# then fall back to changed-file globs. The title-based rules take precedence
-# because they are listed first and actions/labeler applies the first match.
+# Labels are applied based on PR title prefix (Conventional Commits) and branch name.
+# File-based rules are intentionally omitted: they cause multiple type:* labels to be
+# applied to a single PR, which leads to duplicate entries in release notes.
 
 "type:feature":
   - head-branch:
       - "/^feat/"
   - title:
       - "/^feat(\\(.+\\))?:/i"
-  - changed-files:
-      - any-glob-to-any-file:
-          - "src/**"
 
 "type:bug":
   - head-branch:
@@ -30,21 +27,9 @@
       - "/^test(\\(.+\\))?:/i"
       - "/^refactor(\\(.+\\))?:/i"
       - "/^build(\\(.+\\))?:/i"
-  - changed-files:
-      - any-glob-to-any-file:
-          - "build.zig"
-          - "build.zig.zon"
-          - ".gitignore"
-          - ".editorconfig"
 
 "type:docs":
   - head-branch:
       - "/^docs/"
   - title:
       - "/^docs(\\(.+\\))?:/i"
-  - changed-files:
-      - any-glob-to-any-file:
-          - "**/*.md"
-          - "docs/**"
-          - "LICENSE*"
-          - "CHANGELOG*"
