@@ -1,8 +1,7 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("sqlite3.h");
-});
+const c = @import("c.zig").c;
 const csv = @import("csv.zig");
+const json = @import("json.zig");
 const build_options = @import("build_options");
 
 const VERSION: []const u8 = build_options.version;
@@ -654,96 +653,6 @@ fn insertRowTyped(
     if (c.sqlite3_step(stmt) != c.SQLITE_DONE) return error.StepFailed;
 }
 
-/// bindJsonValue(allocator, stmt, col_idx, value, deferred_allocs) → void
-/// Pre:  stmt is a prepared statement; col_idx ≥ 1
-///       deferred_allocs collects allocations that must outlive sqlite3_step
-/// Post: value is bound to parameter col_idx using the appropriate SQLite bind function:
-///         .null           → sqlite3_bind_null
-///         .bool           → sqlite3_bind_int64 (1 for true, 0 for false)
-///         .integer        → sqlite3_bind_int64
-///         .float          → sqlite3_bind_double
-///         .number_string  → sqlite3_bind_text (STATIC; arena owns string)
-///         .string         → sqlite3_bind_text (STATIC; arena owns string)
-///         .array/.object  → sqlite3_bind_text (JSON-serialised; appended to deferred_allocs)
-///       error.BindFailed on any sqlite3_bind_* failure
-fn bindJsonValue(
-    allocator: std.mem.Allocator,
-    stmt: *c.sqlite3_stmt,
-    col_idx: c_int,
-    value: std.json.Value,
-    deferred_allocs: *std.ArrayList([]u8),
-) (SqlPipeError || std.mem.Allocator.Error)!void {
-    switch (value) {
-        .null => {
-            if (c.sqlite3_bind_null(stmt, col_idx) != c.SQLITE_OK) return error.BindFailed;
-        },
-        .bool => |b| {
-            if (c.sqlite3_bind_int64(stmt, col_idx, if (b) 1 else 0) != c.SQLITE_OK) return error.BindFailed;
-        },
-        .integer => |n| {
-            if (c.sqlite3_bind_int64(stmt, col_idx, n) != c.SQLITE_OK) return error.BindFailed;
-        },
-        .float => |f| {
-            if (c.sqlite3_bind_double(stmt, col_idx, f) != c.SQLITE_OK) return error.BindFailed;
-        },
-        .number_string => |s| {
-            if (c.sqlite3_bind_text(stmt, col_idx, s.ptr, @intCast(s.len), sqlite_static) != c.SQLITE_OK)
-                return error.BindFailed;
-        },
-        .string => |s| {
-            if (c.sqlite3_bind_text(stmt, col_idx, s.ptr, @intCast(s.len), sqlite_static) != c.SQLITE_OK)
-                return error.BindFailed;
-        },
-        .array, .object => {
-            // Serialise to JSON text; defer free must happen AFTER sqlite3_step, so we
-            // hand the allocation to the caller via deferred_allocs.
-            const serialized = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(value, .{})});
-            try deferred_allocs.append(allocator, serialized);
-            if (c.sqlite3_bind_text(stmt, col_idx, serialized.ptr, @intCast(serialized.len), sqlite_static) != c.SQLITE_OK)
-                return error.BindFailed;
-        },
-    }
-}
-
-/// insertRowFromJson(allocator, stmt, db, cols, obj) → void
-/// Pre:  stmt is a freshly-prepared INSERT with cols.len parameters
-///       cols is the ordered list of column names
-///       obj is a JSON object whose values are bound by key name
-/// Post: each column in cols is bound to the corresponding value in obj
-///       (or NULL when the key is absent); sqlite3_step returned SQLITE_DONE
-///       error.BindFailed / error.StepFailed on SQLite errors
-fn insertRowFromJson(
-    allocator: std.mem.Allocator,
-    stmt: *c.sqlite3_stmt,
-    db: *c.sqlite3,
-    cols: []const []const u8,
-    obj: std.json.ObjectMap,
-) (SqlPipeError || std.mem.Allocator.Error)!void {
-    _ = db;
-    _ = c.sqlite3_reset(stmt);
-    _ = c.sqlite3_clear_bindings(stmt);
-
-    // Collect serialized array/object strings so they outlive sqlite3_step.
-    var deferred_allocs: std.ArrayList([]u8) = .empty;
-    defer {
-        for (deferred_allocs.items) |s| allocator.free(s);
-        deferred_allocs.deinit(allocator);
-    }
-
-    // Loop invariant I: params 1..col_idx-1 are bound for cols[0..col_idx-2]
-    // Bounding function: cols.len - j
-    for (cols, 0..) |col, j| {
-        const col_idx: c_int = @intCast(j + 1);
-        if (obj.get(col)) |val| {
-            try bindJsonValue(allocator, stmt, col_idx, val, &deferred_allocs);
-        } else {
-            if (c.sqlite3_bind_null(stmt, col_idx) != c.SQLITE_OK) return error.BindFailed;
-        }
-    }
-
-    if (c.sqlite3_step(stmt) != c.SQLITE_DONE) return error.StepFailed;
-}
-
 /// printRow(stmt, col_count, writer) → !void
 /// Pre:  sqlite3_step returned SQLITE_ROW for stmt
 ///       col_count = sqlite3_column_count(stmt) > 0
@@ -823,126 +732,6 @@ fn printHeaderRow(
     try writer.writeByte('\n');
 }
 
-/// writeJsonString(writer, s) → !void
-/// Pre:  writer is valid, s is a UTF-8 slice
-/// Post: s is written as a JSON string literal (double-quoted, with special
-///       characters escaped per RFC 8259: \", \\, \/, \b, \f, \n, \r, \t,
-///       and \uXXXX for control characters 0x00–0x1F)
-fn writeJsonString(writer: *std.Io.Writer, s: []const u8) !void {
-    try writer.writeByte('"');
-    for (s) |ch| {
-        switch (ch) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            '/' => try writer.writeAll("\\/"),
-            '\x08' => try writer.writeAll("\\b"),
-            '\x0C' => try writer.writeAll("\\f"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            0x00...0x07, 0x0B, 0x0E...0x1F => try writer.print("\\u{x:0>4}", .{ch}),
-            else => try writer.writeByte(ch),
-        }
-    }
-    try writer.writeByte('"');
-}
-
-/// printJsonRow(stmt, col_count, col_names, writer, is_first) → !void
-/// Pre:  sqlite3_step returned SQLITE_ROW for stmt
-///       col_count > 0; col_names.len = col_count
-///       is_first indicates whether this is the first row (no leading comma)
-/// Post: one JSON object written to writer as { "col": value, … }
-///       NULL cells are written as JSON null
-///       INTEGER / REAL columns written as JSON numbers
-///       TEXT columns written as JSON strings
-fn printJsonRow(
-    stmt: *c.sqlite3_stmt,
-    col_count: c_int,
-    col_names: []const [*:0]const u8,
-    writer: *std.Io.Writer,
-    is_first: bool,
-) !void {
-    if (!is_first) try writer.writeByte(',');
-    try writer.writeByte('{');
-    // Loop invariant I: columns 0..i-1 have been written as "name":value pairs
-    // Bounding function: col_count - i
-    var i: c_int = 0;
-    while (i < col_count) : (i += 1) {
-        if (i > 0) try writer.writeByte(',');
-        const name = std.mem.span(col_names[@intCast(i)]);
-        try writeJsonString(writer, name);
-        try writer.writeByte(':');
-        switch (c.sqlite3_column_type(stmt, i)) {
-            c.SQLITE_NULL => try writer.writeAll("null"),
-            c.SQLITE_INTEGER => try writer.print("{d}", .{c.sqlite3_column_int64(stmt, i)}),
-            c.SQLITE_FLOAT => {
-                const f = c.sqlite3_column_double(stmt, i);
-                // Emit as integer notation when value has no fractional part,
-                // otherwise use full precision float.
-                if (f == @trunc(f) and !std.math.isInf(f) and !std.math.isNan(f)) {
-                    try writer.print("{d}", .{@as(i64, @intFromFloat(f))});
-                } else {
-                    try writer.print("{d}", .{f});
-                }
-            },
-            else => { // SQLITE_TEXT and SQLITE_BLOB → emit as string
-                const ptr = c.sqlite3_column_text(stmt, i);
-                if (ptr != null) {
-                    try writeJsonString(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
-                } else {
-                    try writer.writeAll("null");
-                }
-            },
-        }
-    }
-    try writer.writeByte('}');
-}
-
-/// printNdjsonRow(stmt, col_count, col_names, writer) → !void
-/// Pre:  sqlite3_step returned SQLITE_ROW for stmt
-///       col_count > 0; col_names.len = col_count
-/// Post: one JSON object written to writer as {"col":value,...}\n (NDJSON format)
-///       NULL cells are written as JSON null
-///       INTEGER / REAL columns written as JSON numbers; TEXT as JSON strings
-fn printNdjsonRow(
-    stmt: *c.sqlite3_stmt,
-    col_count: c_int,
-    col_names: []const [*:0]const u8,
-    writer: *std.Io.Writer,
-) !void {
-    try writer.writeByte('{');
-    // Loop invariant I: columns 0..i-1 have been written as "name":value pairs
-    // Bounding function: col_count - i
-    var i: c_int = 0;
-    while (i < col_count) : (i += 1) {
-        if (i > 0) try writer.writeByte(',');
-        const name = std.mem.span(col_names[@intCast(i)]);
-        try writeJsonString(writer, name);
-        try writer.writeByte(':');
-        switch (c.sqlite3_column_type(stmt, i)) {
-            c.SQLITE_NULL => try writer.writeAll("null"),
-            c.SQLITE_INTEGER => try writer.print("{d}", .{c.sqlite3_column_int64(stmt, i)}),
-            c.SQLITE_FLOAT => {
-                const f = c.sqlite3_column_double(stmt, i);
-                if (f == @trunc(f) and !std.math.isInf(f) and !std.math.isNan(f)) {
-                    try writer.print("{d}", .{@as(i64, @intFromFloat(f))});
-                } else {
-                    try writer.print("{d}", .{f});
-                }
-            },
-            else => {
-                const ptr = c.sqlite3_column_text(stmt, i);
-                if (ptr != null) {
-                    try writeJsonString(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
-                } else {
-                    try writer.writeAll("null");
-                }
-            },
-        }
-    }
-    try writer.writeAll("}\n");
-}
-
 /// execQuery(db, query, allocator, writer, header, output_format) → !void
 /// Pre:  db is open with table `t` populated
 ///       query is a valid SQL string (not null-terminated)
@@ -987,7 +776,7 @@ fn execQuery(
             // Loop invariant I: all SQLITE_ROW results returned so far have been printed as JSON objects
             // Bounding function: number of remaining rows in the result set (finite)
             while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-                try printJsonRow(stmt.?, col_count, col_names, writer, first);
+                try json.printJsonRow(stmt.?, col_count, col_names, writer, first);
                 first = false;
             }
             try writer.writeAll("]\n");
@@ -1003,7 +792,7 @@ fn execQuery(
             // Loop invariant I: all SQLITE_ROW results returned so far have been printed as NDJSON lines
             // Bounding function: number of remaining rows in the result set (finite)
             while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-                try printNdjsonRow(stmt.?, col_count, col_names, writer);
+                try json.printNdjsonRow(stmt.?, col_count, col_names, writer);
             }
         },
         .csv => {
@@ -1194,43 +983,6 @@ fn fatalSqlWithContext(
     std.process.exit(@intFromEnum(ExitCode.sql_error));
 }
 
-/// readLine(allocator, reader) → ?[]u8
-/// Pre:  reader is a valid Io.Reader; allocator is valid
-/// Post: result is the next line of text excluding its terminator (\n or \r\n)
-///       result = null at EOF (before any byte has been read on this call)
-///       caller owns the returned slice (free with allocator.free)
-fn readLine(
-    allocator: std.mem.Allocator,
-    reader: *std.Io.Reader,
-) (std.mem.Allocator.Error || error{ReadFailed})!?[]u8 {
-    var line: std.ArrayList(u8) = .empty;
-    errdefer line.deinit(allocator);
-    var got_any = false;
-    // Loop invariant I: line contains bytes of the current line read so far (excl. terminator)
-    // Bounding function: bytes remaining in stream (stream is finite for well-formed input)
-    while (true) {
-        const byte = reader.takeByte() catch |err| switch (err) {
-            error.EndOfStream => {
-                if (!got_any) {
-                    line.deinit(allocator);
-                    return null;
-                }
-                break;
-            },
-            error.ReadFailed => return error.ReadFailed,
-        };
-        got_any = true;
-        if (byte == '\n') break;
-        try line.append(allocator, byte);
-    }
-    // Strip trailing \r for \r\n line endings
-    if (line.items.len > 0 and line.items[line.items.len - 1] == '\r') {
-        line.items.len -= 1;
-    }
-    const owned = try line.toOwnedSlice(allocator);
-    return owned;
-}
-
 /// loadCsvInput loads all CSV rows from stdin into db table `t`.
 /// Pre:  db is an open in-memory SQLite handle with no tables yet
 ///       parsed.delimiter is valid; allocator and writers are valid
@@ -1387,234 +1139,6 @@ fn loadCsvInput(
     return rows_inserted;
 }
 
-/// loadJsonArray loads a JSON array from stdin into db table `t`.
-/// Pre:  db is an open in-memory SQLite handle with no tables yet
-///       allocator and writers are valid; io is valid
-/// Post: table `t` exists with TEXT columns derived from the first object's keys;
-///       all array elements have been inserted; transaction committed
-///       returns rows_inserted; on error: writes to stderr and exits
-fn loadJsonArray(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    db: *c.sqlite3,
-    max_rows: ?usize,
-    stderr_writer: *std.Io.Writer,
-) usize {
-    var stdin_buf: [4096]u8 = undefined;
-    var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-
-    // Read all stdin into a buffer
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-    // Loop invariant I: buf contains all bytes read from stdin so far
-    // Bounding function: bytes remaining in stdin stream (stream is finite)
-    while (true) {
-        const byte = stdin_file_reader.interface.takeByte() catch |err| switch (err) {
-            error.EndOfStream => break,
-            error.ReadFailed => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
-        };
-        buf.append(allocator, byte) catch fatal("out of memory reading JSON input", stderr_writer, .csv_error, .{});
-    }
-
-    if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
-
-    // Parse the entire input as JSON
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, buf.items, .{}) catch
-        fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
-    defer parsed.deinit();
-
-    const array = switch (parsed.value) {
-        .array => |a| a,
-        else => fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
-    };
-
-    if (array.items.len == 0) fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});
-
-    // Extract column names from the first object's keys (insertion order)
-    const first_obj = switch (array.items[0]) {
-        .object => |o| o,
-        else => fatal("JSON array elements must be objects", stderr_writer, .csv_error, .{}),
-    };
-
-    var cols: std.ArrayList([]const u8) = .empty;
-    defer cols.deinit(allocator);
-    var key_iter = first_obj.iterator();
-    while (key_iter.next()) |entry| {
-        cols.append(allocator, entry.key_ptr.*) catch
-            fatal("out of memory building column list", stderr_writer, .csv_error, .{});
-    }
-    if (cols.items.len == 0) fatal("first JSON object has no keys", stderr_writer, .csv_error, .{});
-
-    // Create all-TEXT table (column names are owned by parsed arena — valid until parsed.deinit())
-    const text_types = allocator.alloc(ColumnType, cols.items.len) catch
-        fatal("out of memory", stderr_writer, .csv_error, .{});
-    defer allocator.free(text_types);
-    @memset(text_types, .TEXT);
-
-    createTable(allocator, db, cols.items, text_types) catch
-        fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
-
-    {
-        var errmsg: [*c]u8 = null;
-        if (c.sqlite3_exec(db, "BEGIN TRANSACTION", null, null, &errmsg) != c.SQLITE_OK) {
-            const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-            fatalSqlWithContext(allocator, db, msg, stderr_writer);
-        }
-    }
-
-    const stmt = prepareInsert(allocator, db, cols.items.len) catch
-        fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-    defer _ = c.sqlite3_finalize(stmt);
-
-    var rows_inserted: usize = 0;
-    // Loop invariant I: array.items[0..rows_inserted] have been inserted into t
-    // Bounding function: array.items.len - rows_inserted
-    for (array.items) |item| {
-        const obj = switch (item) {
-            .object => |o| o,
-            else => fatal("JSON array element is not an object", stderr_writer, .csv_error, .{}),
-        };
-        rows_inserted += 1;
-        if (max_rows) |limit| {
-            if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
-        }
-        insertRowFromJson(allocator, stmt, db, cols.items, obj) catch
-            fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-    }
-
-    {
-        var errmsg: [*c]u8 = null;
-        if (c.sqlite3_exec(db, "COMMIT", null, null, &errmsg) != c.SQLITE_OK) {
-            const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-            fatalSqlWithContext(allocator, db, msg, stderr_writer);
-        }
-        if (errmsg != null) c.sqlite3_free(errmsg);
-    }
-
-    return rows_inserted;
-}
-
-/// loadNdjsonInput loads newline-delimited JSON objects from stdin into db table `t`.
-/// Pre:  db is an open in-memory SQLite handle with no tables yet
-///       allocator and writers are valid; io is valid
-/// Post: table `t` exists with TEXT columns derived from the first non-empty line's keys;
-///       all NDJSON lines have been inserted; transaction committed
-///       returns rows_inserted; on error: writes to stderr and exits
-fn loadNdjsonInput(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    db: *c.sqlite3,
-    max_rows: ?usize,
-    stderr_writer: *std.Io.Writer,
-) usize {
-    var stdin_buf: [4096]u8 = undefined;
-    var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-
-    var line_num: usize = 0;
-    // cols_owned: column names duplicated into allocator; populated on first object
-    var cols_owned: ?[][]u8 = null;
-    defer if (cols_owned) |cs| {
-        for (cs) |col| allocator.free(col);
-        allocator.free(cs);
-    };
-    var insert_stmt: ?*c.sqlite3_stmt = null;
-    defer { if (insert_stmt) |s| _ = c.sqlite3_finalize(s); }
-    var rows_inserted: usize = 0;
-    var in_transaction = false;
-
-    // Loop invariant I: all non-empty lines 1..line_num have been processed;
-    //   rows_inserted = number of objects inserted; in_transaction is true after first object
-    // Bounding function: lines remaining in stdin (stream is finite)
-    while (true) {
-        line_num += 1;
-        const line = readLine(allocator, &stdin_file_reader.interface) catch |err| switch (err) {
-            error.OutOfMemory => fatal("out of memory reading NDJSON", stderr_writer, .csv_error, .{}),
-            error.ReadFailed => fatal("line {d}: failed to read NDJSON input", stderr_writer, .csv_error, .{line_num}),
-        } orelse break;
-        defer allocator.free(line);
-
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) { line_num -= 1; continue; } // skip blank lines
-
-        var parsed_line = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch
-            fatal("line {d}: failed to parse NDJSON", stderr_writer, .csv_error, .{line_num});
-        defer parsed_line.deinit();
-
-        const obj = switch (parsed_line.value) {
-            .object => |o| o,
-            else => fatal("line {d}: NDJSON element must be a JSON object", stderr_writer, .csv_error, .{line_num}),
-        };
-
-        if (cols_owned == null) {
-            // First object: extract column names and create table
-            var col_list: std.ArrayList([]u8) = .empty;
-            errdefer {
-                for (col_list.items) |col| allocator.free(col);
-                col_list.deinit(allocator);
-            }
-            var ki = obj.iterator();
-            while (ki.next()) |entry| {
-                const owned_key = allocator.dupe(u8, entry.key_ptr.*) catch
-                    fatal("out of memory building column list", stderr_writer, .csv_error, .{});
-                col_list.append(allocator, owned_key) catch
-                    fatal("out of memory building column list", stderr_writer, .csv_error, .{});
-            }
-            if (col_list.items.len == 0)
-                fatal("line 1: first NDJSON object has no keys", stderr_writer, .csv_error, .{});
-
-            cols_owned = col_list.toOwnedSlice(allocator) catch
-                fatal("out of memory", stderr_writer, .csv_error, .{});
-
-            const text_types = allocator.alloc(ColumnType, cols_owned.?.len) catch
-                fatal("out of memory", stderr_writer, .csv_error, .{});
-            defer allocator.free(text_types);
-            @memset(text_types, .TEXT);
-
-            // cols_owned items are []u8; coerce to []const u8 for createTable
-            const cols_const: []const []const u8 = @ptrCast(cols_owned.?);
-            createTable(allocator, db, cols_const, text_types) catch
-                fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
-
-            {
-                var errmsg: [*c]u8 = null;
-                if (c.sqlite3_exec(db, "BEGIN TRANSACTION", null, null, &errmsg) != c.SQLITE_OK) {
-                    const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-                    fatalSqlWithContext(allocator, db, msg, stderr_writer);
-                }
-            }
-            in_transaction = true;
-
-            insert_stmt = prepareInsert(allocator, db, cols_owned.?.len) catch
-                fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-        }
-
-        rows_inserted += 1;
-        if (max_rows) |limit| {
-            if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
-        }
-
-        const cols_const: []const []const u8 = @ptrCast(cols_owned.?);
-        insertRowFromJson(allocator, insert_stmt.?, db, cols_const, obj) catch
-            fatal("line {d}: {s}", stderr_writer, .sql_error, .{ line_num, std.mem.span(c.sqlite3_errmsg(db)) });
-    }
-
-    if (cols_owned == null)
-        fatal("empty NDJSON input", stderr_writer, .csv_error, .{});
-
-    if (in_transaction) {
-        var errmsg: [*c]u8 = null;
-        if (c.sqlite3_exec(db, "COMMIT", null, null, &errmsg) != c.SQLITE_OK) {
-            const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-            fatalSqlWithContext(allocator, db, msg, stderr_writer);
-        }
-        if (errmsg != null) c.sqlite3_free(errmsg);
-    }
-
-    return rows_inserted;
-}
-
 /// runColumns(args, allocator, io, stderr_writer, stdout_writer) → void
 /// Pre:  args is valid; allocator and writers are valid
 /// Post: column names from the input header (CSV/JSON/NDJSON) are written to stdout,
@@ -1741,7 +1265,7 @@ fn runColumns(
             var line_num: usize = 0;
             while (true) {
                 line_num += 1;
-                const line = readLine(allocator, &stdin_file_reader.interface) catch |err| switch (err) {
+                const line = json.readLine(allocator, &stdin_file_reader.interface) catch |err| switch (err) {
                     error.OutOfMemory => fatal("out of memory reading NDJSON", stderr_writer, .csv_error, .{}),
                     error.ReadFailed => fatal("line {d}: failed to read NDJSON", stderr_writer, .csv_error, .{line_num}),
                 } orelse fatal("empty NDJSON input", stderr_writer, .csv_error, .{});
@@ -1801,8 +1325,16 @@ fn run(
     // Load input into `t` — dispatch on input format
     const rows_inserted: usize = switch (parsed.input_format) {
         .csv => loadCsvInput(allocator, io, db, parsed, stderr_writer),
-        .json => loadJsonArray(allocator, io, db, parsed.max_rows, stderr_writer),
-        .ndjson => loadNdjsonInput(allocator, io, db, parsed.max_rows, stderr_writer),
+        .json => blk: {
+            var stdin_buf: [4096]u8 = undefined;
+            var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+            break :blk json.loadJsonArray(allocator, &stdin_reader.interface, db, parsed.max_rows, stderr_writer);
+        },
+        .ndjson => blk: {
+            var stdin_buf: [4096]u8 = undefined;
+            var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+            break :blk json.loadNdjsonInput(allocator, &stdin_reader.interface, db, parsed.max_rows, stderr_writer);
+        },
     };
 
     // Print row count and elapsed time to stderr when stderr is a TTY or --verbose is set.
