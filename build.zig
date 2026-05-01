@@ -34,6 +34,16 @@ pub fn build(b: *std.Build) void {
     build_options.addOption([]const u8, "version", version);
     exe.root_module.addOptions("build_options", build_options);
 
+    // Translate sqlite3.h to Zig declarations, exposed as @import("c").
+    // We always use lib/sqlite3.h for stable type declarations regardless of
+    // whether we bundle or link the system SQLite library.
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.path("lib/sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("c", translate_c.createModule());
+
     if (bundle_sqlite) {
         exe.root_module.addIncludePath(b.path("lib"));
         exe.root_module.addCSourceFile(.{
@@ -480,6 +490,154 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_output_sql_error_flush.step);
     test_output_bad_path.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_output_bad_path.step);
+
+    // ─── JSON / NDJSON input/output integration tests ────────────────────────
+
+    // Integration test 48: JSON array input → CSV output
+    const test_json_input_csv_out = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '[{"name":"Alice","age":30},{"name":"Bob","age":25}]' \
+        \\    | ./zig-out/bin/sql-pipe --input-format json 'SELECT name,age FROM t ORDER BY age')
+        \\expected=$(printf 'Bob,25\nAlice,30')
+        \\[ "$result" = "$expected" ]
+    });
+    test_json_input_csv_out.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_input_csv_out.step);
+
+    // Integration test 49: CSV input → JSON output (--json alias)
+    const test_csv_to_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe --json 'SELECT name,age FROM t ORDER BY age')
+        \\expected=$(printf '[{"name":"Bob","age":25},{"name":"Alice","age":30}]\n')
+        \\[ "$result" = "$expected" ]
+    });
+    test_csv_to_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_csv_to_json.step);
+
+    // Integration test 50: CSV input → JSON output (--output-format json)
+    const test_output_format_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' \
+        \\    | ./zig-out/bin/sql-pipe --output-format json 'SELECT * FROM t')
+        \\expected=$(printf '[{"name":"Alice","age":30}]\n')
+        \\[ "$result" = "$expected" ]
+    });
+    test_output_format_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_output_format_json.step);
+
+    // Integration test 51: CSV input → NDJSON output
+    const test_csv_to_ndjson = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe --output-format ndjson 'SELECT name,age FROM t ORDER BY age')
+        \\expected=$(printf '{"name":"Bob","age":25}\n{"name":"Alice","age":30}\n')
+        \\[ "$result" = "$expected" ]
+    });
+    test_csv_to_ndjson.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_csv_to_ndjson.step);
+
+    // Integration test 52: NDJSON input → CSV output
+    const test_ndjson_input_csv_out = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"name":"Alice","age":30}\n{"name":"Bob","age":25}\n' \
+        \\    | ./zig-out/bin/sql-pipe --input-format ndjson 'SELECT name,age FROM t ORDER BY age')
+        \\expected=$(printf 'Bob,25\nAlice,30')
+        \\[ "$result" = "$expected" ]
+    });
+    test_ndjson_input_csv_out.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_ndjson_input_csv_out.step);
+
+    // Integration test 53: NDJSON input → NDJSON output (-I / -O short flags)
+    const test_ndjson_roundtrip = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"name":"Alice","age":30}\n{"name":"Bob","age":25}\n' \
+        \\    | ./zig-out/bin/sql-pipe -I ndjson -O ndjson 'SELECT name FROM t WHERE age > 26')
+        \\expected=$(printf '{"name":"Alice"}\n')
+        \\[ "$result" = "$expected" ]
+    });
+    test_ndjson_roundtrip.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_ndjson_roundtrip.step);
+
+    // Integration test 54: JSON input with null value
+    const test_json_null_value = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '[{"name":"Alice","age":null}]' \
+        \\    | ./zig-out/bin/sql-pipe -I json -O json 'SELECT name, age FROM t')
+        \\expected=$(printf '[{"name":"Alice","age":null}]\n')
+        \\[ "$result" = "$expected" ]
+    });
+    test_json_null_value.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_null_value.step);
+
+    // Integration test 55: JSON input with boolean value (stored as 1/0)
+    const test_json_bool_value = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '[{"active":true},{"active":false}]' \
+        \\    | ./zig-out/bin/sql-pipe -I json 'SELECT active FROM t ORDER BY active')
+        \\expected=$(printf '0\n1')
+        \\[ "$result" = "$expected" ]
+    });
+    test_json_bool_value.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_bool_value.step);
+
+    // Integration test 56: empty JSON array → error exit 2
+    const test_json_empty_array = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '[]' | ./zig-out/bin/sql-pipe -I json 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'empty JSON array' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_json_empty_array.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_empty_array.step);
+
+    // Integration test 57: unknown input format → error exit 1
+    const test_bad_input_format = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --input-format xml 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'unknown input format' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_bad_input_format.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_bad_input_format.step);
+
+    // Integration test 58: unknown output format → error exit 1
+    const test_bad_output_format = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe --output-format xml 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'unknown output format' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_bad_output_format.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_bad_output_format.step);
+
+    // Integration test 59: --header with --output-format json → IncompatibleFlags error exit 1
+    const test_header_with_json_format = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe --header --output-format json 'SELECT * FROM t' 2>&1; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error:' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_header_with_json_format.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_header_with_json_format.step);
+
+    // Integration test 60: --columns with JSON input
+    const test_columns_json_input = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '[{"name":"Alice","age":30}]' \
+        \\    | ./zig-out/bin/sql-pipe --input-format json --columns)
+        \\expected=$(printf 'name\nage')
+        \\[ "$result" = "$expected" ]
+    });
+    test_columns_json_input.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_json_input.step);
+
+    // Integration test 61: --columns with NDJSON input
+    const test_columns_ndjson_input = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"name":"Alice","age":30}\n' \
+        \\    | ./zig-out/bin/sql-pipe -I ndjson --columns)
+        \\expected=$(printf 'name\nage')
+        \\[ "$result" = "$expected" ]
+    });
+    test_columns_ndjson_input.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_ndjson_input.step);
 
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
