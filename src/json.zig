@@ -20,7 +20,7 @@
 //!   readLine           — read one line from a reader (also used by runColumns in main).
 
 const std = @import("std");
-const c = @import("c.zig").c;
+const c = @import("c");
 
 /// SQLITE_STATIC: caller manages string lifetime; SQLite must not free it.
 const sqlite_static: c.sqlite3_destructor_type = null;

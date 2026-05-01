@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("c.zig").c;
+const c = @import("c");
 const csv = @import("csv.zig");
 const json = @import("json.zig");
 const build_options = @import("build_options");
