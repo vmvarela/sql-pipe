@@ -639,6 +639,110 @@ pub fn build(b: *std.Build) void {
     test_columns_ndjson_input.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_columns_ndjson_input.step);
 
+    // ─── TSV input/output integration tests ─────────────────────────────────
+
+    // Integration test 62: --input-format tsv reads tab-separated input correctly
+    const test_tsv_input_format = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\tage\nAlice\t30\nBob\t25\n' \
+        \\    | ./zig-out/bin/sql-pipe --input-format tsv 'SELECT name,age FROM t ORDER BY age')
+        \\expected=$(printf 'Bob,25\nAlice,30')
+        \\[ "$result" = "$expected" ]
+    });
+    test_tsv_input_format.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_tsv_input_format.step);
+
+    // Integration test 63: -I tsv short flag is equivalent to --input-format tsv
+    const test_tsv_input_short = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\tage\nAlice\t30\nBob\t25\n' \
+        \\    | ./zig-out/bin/sql-pipe -I tsv 'SELECT name FROM t ORDER BY name')
+        \\expected=$(printf 'Alice\nBob')
+        \\[ "$result" = "$expected" ]
+    });
+    test_tsv_input_short.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_tsv_input_short.step);
+
+    // Integration test 64: --output-format tsv produces tab-separated output
+    const test_tsv_output_format = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe --output-format tsv 'SELECT name,age FROM t ORDER BY age')
+        \\expected=$(printf 'Bob\t25\nAlice\t30')
+        \\[ "$result" = "$expected" ]
+    });
+    test_tsv_output_format.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_tsv_output_format.step);
+
+    // Integration test 65: -O tsv short flag is equivalent to --output-format tsv
+    const test_tsv_output_short = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' \
+        \\    | ./zig-out/bin/sql-pipe -O tsv 'SELECT name,age FROM t')
+        \\expected=$(printf 'Alice\t30')
+        \\[ "$result" = "$expected" ]
+    });
+    test_tsv_output_short.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_tsv_output_short.step);
+
+    // Integration test 66: TSV roundtrip (-I tsv -O tsv)
+    const test_tsv_roundtrip = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\tage\nAlice\t30\nBob\t25\n' \
+        \\    | ./zig-out/bin/sql-pipe -I tsv -O tsv 'SELECT name,age FROM t ORDER BY name')
+        \\expected=$(printf 'Alice\t30\nBob\t25')
+        \\[ "$result" = "$expected" ]
+    });
+    test_tsv_roundtrip.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_tsv_roundtrip.step);
+
+    // Integration test 67: CSV input, TSV output (cross-format)
+    const test_csv_to_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe -O tsv 'SELECT name,age FROM t ORDER BY name')
+        \\expected=$(printf 'Alice\t30\nBob\t25')
+        \\[ "$result" = "$expected" ]
+    });
+    test_csv_to_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_csv_to_tsv.step);
+
+    // Integration test 68: --header works with --output-format tsv
+    const test_header_tsv_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe --header -O tsv 'SELECT name,age FROM t ORDER BY age')
+        \\expected=$(printf 'name\tage\nBob\t25\nAlice\t30')
+        \\[ "$result" = "$expected" ]
+    });
+    test_header_tsv_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_header_tsv_output.step);
+
+    // Integration test 69: --columns with --input-format tsv
+    const test_columns_tsv_input_format = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'col1\tcol2\tcol3\n' \
+        \\    | ./zig-out/bin/sql-pipe --columns --input-format tsv)
+        \\expected=$(printf 'col1\ncol2\ncol3')
+        \\[ "$result" = "$expected" ]
+    });
+    test_columns_tsv_input_format.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_tsv_input_format.step);
+
+    // Integration test 70: TSV input with a quoted field containing a tab
+    // The tab inside a quoted field is unescaped during TSV parsing;
+    // the resulting value (hello<tab>world) is written verbatim in CSV output
+    // because comma is the output delimiter, not tab.
+    const test_tsv_quoted_tab = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\tnotes\nAlice\t"hello\tworld"\n' \
+        \\    | ./zig-out/bin/sql-pipe -I tsv 'SELECT name, notes FROM t')
+        \\expected=$(printf 'Alice,hello\tworld')
+        \\[ "$result" = "$expected" ]
+    });
+    test_tsv_quoted_tab.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_tsv_quoted_tab.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

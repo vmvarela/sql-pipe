@@ -61,10 +61,10 @@ const ExitCode = enum(u8) {
 };
 
 /// Supported input formats.
-const InputFormat = enum { csv, json, ndjson };
+const InputFormat = enum { csv, tsv, json, ndjson };
 
 /// Supported output formats.
-const OutputFormat = enum { csv, json, ndjson };
+const OutputFormat = enum { csv, tsv, json, ndjson };
 
 /// Parsed command-line arguments.
 const ParsedArgs = struct {
@@ -126,11 +126,11 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\Options:
         \\  -d, --delimiter <char>       Input field delimiter for CSV (default: ,)
         \\  --tsv                        Alias for --delimiter '\t'
-        \\  -I, --input-format <fmt>     Input format: csv (default), json, ndjson
-        \\  -O, --output-format <fmt>    Output format: csv (default), json, ndjson
+        \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson
+        \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson
         \\  --json                       Alias for --output-format json
         \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
-        \\  -H, --header                 Print column names as the first output row (CSV output only)
+        \\  -H, --header                 Print column names as the first output row (CSV/TSV output only)
         \\  --max-rows <n>               Stop if more than <n> data rows are read (exit 1)
         \\  -v, --verbose                Force row count to stderr (shown automatically on TTY)
         \\                               With --columns: show inferred type per column
@@ -172,9 +172,10 @@ fn parseDelimiter(value: []const u8) SqlPipeError!u8 {
 /// parseInputFormat(s) → InputFormat
 /// Pre:  s is the format string provided by the user
 /// Post: result is the matching InputFormat
-///       error.InvalidInputFormat when s is not "csv", "json", or "ndjson"
+///       error.InvalidInputFormat when s is not "csv", "tsv", "json", or "ndjson"
 fn parseInputFormat(s: []const u8) SqlPipeError!InputFormat {
     if (std.mem.eql(u8, s, "csv")) return .csv;
+    if (std.mem.eql(u8, s, "tsv")) return .tsv;
     if (std.mem.eql(u8, s, "json")) return .json;
     if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
     return error.InvalidInputFormat;
@@ -183,9 +184,10 @@ fn parseInputFormat(s: []const u8) SqlPipeError!InputFormat {
 /// parseOutputFormat(s) → OutputFormat
 /// Pre:  s is the format string provided by the user
 /// Post: result is the matching OutputFormat
-///       error.InvalidOutputFormat when s is not "csv", "json", or "ndjson"
+///       error.InvalidOutputFormat when s is not "csv", "tsv", "json", or "ndjson"
 fn parseOutputFormat(s: []const u8) SqlPipeError!OutputFormat {
     if (std.mem.eql(u8, s, "csv")) return .csv;
+    if (std.mem.eql(u8, s, "tsv")) return .tsv;
     if (std.mem.eql(u8, s, "json")) return .json;
     if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
     return error.InvalidOutputFormat;
@@ -199,7 +201,7 @@ fn parseOutputFormat(s: []const u8) SqlPipeError!OutputFormat {
 ///       result = .help when --help or -h is present
 ///       result = .version when --version or -V is present
 ///       error.MissingQuery when no non-flag argument is found
-///       error.IncompatibleFlags when a non-CSV output format is combined with --header
+///       error.IncompatibleFlags when a non-CSV/TSV output format is combined with --header
 fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
@@ -288,8 +290,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         }
     }
 
-    // Non-CSV output format is mutually exclusive with --header
-    if (output_format != .csv and header)
+    // Non-CSV/TSV output format is mutually exclusive with --header
+    if (output_format != .csv and output_format != .tsv and header)
         return error.IncompatibleFlags;
 
     // --output is mutually exclusive with --columns (--columns always writes to stdout)
@@ -653,27 +655,29 @@ fn insertRowTyped(
     if (c.sqlite3_step(stmt) != c.SQLITE_DONE) return error.StepFailed;
 }
 
-/// printRow(stmt, col_count, writer) → !void
+/// printRow(stmt, col_count, writer, delimiter) → !void
 /// Pre:  sqlite3_step returned SQLITE_ROW for stmt
 ///       col_count = sqlite3_column_count(stmt) > 0
-/// Post: one comma-separated CSV line written to writer with col_count values;
+///       delimiter is the field separator character (e.g. ',' or '\t')
+/// Post: one delimited line written to writer with col_count values;
 ///       NULL cells rendered as the literal string "NULL"
 fn printRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
     writer: *std.Io.Writer,
+    delimiter: u8,
 ) !void {
-    // Loop invariant I: columns 0..i-1 have been written, separated by commas
+    // Loop invariant I: columns 0..i-1 have been written, separated by delimiter
     // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
-        if (i > 0) try writer.writeByte(',');
+        if (i > 0) try writer.writeByte(delimiter);
         if (c.sqlite3_column_type(stmt, i) == c.SQLITE_NULL) {
             try writer.writeAll("NULL");
         } else {
             const ptr = c.sqlite3_column_text(stmt, i);
             if (ptr != null) {
-                try writeField(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
+                try writeField(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))), delimiter);
             } else {
                 try writer.writeAll("NULL");
             }
@@ -682,16 +686,17 @@ fn printRow(
     try writer.writeByte('\n');
 }
 
-/// writeField(writer, value) → !void
+/// writeField(writer, value, delimiter) → !void
 /// Pre:  writer is a valid writer, value is a valid UTF-8 slice
-/// Post: value is written to writer as a single CSV field:
-///       if value contains comma, double-quote, or newline, it is enclosed
+///       delimiter is the field separator character (e.g. ',' or '\t')
+/// Post: value is written to writer as a single delimited field:
+///       if value contains the delimiter, double-quote, or newline, it is enclosed
 ///       in double-quotes with internal quotes escaped as "" (RFC 4180);
 ///       otherwise it is written verbatim
-fn writeField(writer: *std.Io.Writer, value: []const u8) !void {
+fn writeField(writer: *std.Io.Writer, value: []const u8, delimiter: u8) !void {
     var needs_quoting = false;
     for (value) |ch| {
-        if (ch == ',' or ch == '"' or ch == '\n' or ch == '\r') {
+        if (ch == delimiter or ch == '"' or ch == '\n' or ch == '\r') {
             needs_quoting = true;
             break;
         }
@@ -708,25 +713,27 @@ fn writeField(writer: *std.Io.Writer, value: []const u8) !void {
     }
 }
 
-/// printHeaderRow(stmt, col_count, writer) → !void
+/// printHeaderRow(stmt, col_count, writer, delimiter) → !void
 /// Pre:  stmt is a prepared statement, col_count > 0
-/// Post: one CSV line with col_count column names written to writer;
+///       delimiter is the field separator character (e.g. ',' or '\t')
+/// Post: one delimited line with col_count column names written to writer;
 ///       names are obtained from sqlite3_column_name (alias or original);
 ///       fields are RFC 4180 quoted when they contain special characters
 fn printHeaderRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
     writer: *std.Io.Writer,
+    delimiter: u8,
 ) !void {
-    // Loop invariant I: columns 0..i-1 names have been written, separated by commas
+    // Loop invariant I: columns 0..i-1 names have been written, separated by delimiter
     // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
-        if (i > 0) try writer.writeByte(',');
+        if (i > 0) try writer.writeByte(delimiter);
         const name_ptr = c.sqlite3_column_name(stmt, i);
         if (name_ptr != null) {
             const name = std.mem.span(@as([*:0]const u8, @ptrCast(name_ptr)));
-            try writeField(writer, name);
+            try writeField(writer, name, delimiter);
         }
     }
     try writer.writeByte('\n');
@@ -737,10 +744,10 @@ fn printHeaderRow(
 ///       query is a valid SQL string (not null-terminated)
 ///       allocator is valid
 ///       when output_format = .json or .ndjson, header must not be set (caller's responsibility)
-/// Post: if output_format = .json,   results are written as a JSON array of objects
-///       if output_format = .ndjson, results are written as one JSON object per line
-///       if header = true (and output_format = .csv), column names written as the first CSV row
-///       all result rows written to writer as CSV lines via printRow (when output_format = .csv)
+/// Post: if output_format = .json,        results are written as a JSON array of objects
+///       if output_format = .ndjson,       results are written as one JSON object per line
+///       if output_format = .csv or .tsv,  results are written as delimited text;
+///         when header = true, column names are written as the first row
 ///       error.PrepareQueryFailed when sqlite3_prepare_v2 returns non-SQLITE_OK
 ///       propagates any writer I/O error
 fn execQuery(
@@ -795,16 +802,18 @@ fn execQuery(
                 try json.printNdjsonRow(stmt.?, col_count, col_names, writer);
             }
         },
-        .csv => {
+        .csv, .tsv => {
+            const out_delim: u8 = if (output_format == .tsv) '\t' else ',';
+
             // When header is requested, print column names before data rows
             if (header and col_count > 0) {
-                try printHeaderRow(stmt.?, col_count, writer);
+                try printHeaderRow(stmt.?, col_count, writer, out_delim);
             }
 
             // Loop invariant I: all SQLITE_ROW results returned so far have been printed
             // Bounding function: number of remaining rows in the result set (finite)
             while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-                try printRow(stmt.?, col_count, writer);
+                try printRow(stmt.?, col_count, writer, out_delim);
             }
         },
     }
@@ -1152,10 +1161,11 @@ fn runColumns(
     stdout_writer: *std.Io.Writer,
 ) void {
     switch (args.input_format) {
-        .csv => {
+        .csv, .tsv => {
+            const col_delim: u8 = if (args.input_format == .tsv) '\t' else args.delimiter;
             var stdin_buf: [4096]u8 = undefined;
             var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-            var csv_reader = csv.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, args.delimiter);
+            var csv_reader = csv.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, col_delim);
 
             const header_record = csv_reader.nextRecord() catch |err| switch (err) {
                 error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),
@@ -1325,6 +1335,12 @@ fn run(
     // Load input into `t` — dispatch on input format
     const rows_inserted: usize = switch (parsed.input_format) {
         .csv => loadCsvInput(allocator, io, db, parsed, stderr_writer),
+        .tsv => blk: {
+            // TSV is CSV with tab delimiter; override delimiter and reuse the CSV loader
+            var tsv_parsed = parsed;
+            tsv_parsed.delimiter = '\t';
+            break :blk loadCsvInput(allocator, io, db, tsv_parsed, stderr_writer);
+        },
         .json => blk: {
             var stdin_buf: [4096]u8 = undefined;
             var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
@@ -1386,7 +1402,7 @@ pub fn main(init: std.process.Init.Minimal) void {
         switch (err) {
             error.IncompatibleFlags => {
                 stderr_writer.writeAll(
-                    "error: --header cannot be combined with non-CSV output format\n",
+                    "error: --header cannot be combined with non-CSV/TSV output format\n",
                 ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
@@ -1400,14 +1416,14 @@ pub fn main(init: std.process.Init.Minimal) void {
             },
             error.InvalidInputFormat => {
                 stderr_writer.writeAll(
-                    "error: unknown input format; supported: csv, json, ndjson\n",
+                    "error: unknown input format; supported: csv, tsv, json, ndjson\n",
                 ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
             },
             error.InvalidOutputFormat => {
                 stderr_writer.writeAll(
-                    "error: unknown output format; supported: csv, json, ndjson\n",
+                    "error: unknown output format; supported: csv, tsv, json, ndjson\n",
                 ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
