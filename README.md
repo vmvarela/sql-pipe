@@ -57,7 +57,8 @@ Replace `VERSION` with the release version (e.g. `0.3.0`) and `amd64` with your 
 **Fedora / RHEL / openSUSE (RPM repository):**
 
 ```sh
-sudo dnf config-manager --add-repo https://vmvarela.github.io/rpm-packages/vmvarela.repo
+sudo curl -fsSL https://vmvarela.github.io/rpm-packages/vmvarela.repo \
+  -o /etc/yum.repos.d/vmvarela.repo
 sudo dnf install sql-pipe
 ```
 
