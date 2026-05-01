@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/vmvarela/sql-pipe)](https://github.com/vmvarela/sql-pipe/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`sql-pipe` reads CSV from stdin, loads it into an in-memory SQLite database, runs a SQL query, and prints the results as CSV. No server, no schema files, no setup.
+`sql-pipe` reads CSV, JSON, or NDJSON from stdin, loads it into an in-memory SQLite database, runs a SQL query, and prints the results. No server, no schema files, no setup.
 
 It exists because `awk` is cryptic, spinning up a Python interpreter for a one-liner feels wrong, and `sqlite3 :memory:` takes four commands before you can query anything. If you know SQL and work with CSV in the terminal, this is the tool you've been reaching for.
 
@@ -143,13 +143,21 @@ Binary lands at `./zig-out/bin/sql-pipe`. SQLite is compiled from the official a
 
 ## Usage
 
-The CSV comes from stdin. The first row must be a header — those column names become the schema for a table called `t`. Results go to stdout as comma-separated values.
+The input comes from stdin. For CSV and TSV, the first row must be a header — those column names become the schema for a table called `t`. Results go to stdout as comma-separated values by default.
 
 ```sh
 $ printf 'name,age\nAlice,30\nBob,25\nCarol,35' | sql-pipe 'SELECT * FROM t'
 Alice,30
 Bob,25
 Carol,35
+```
+
+For JSON and NDJSON input, pass `-I json` (reads an array of objects) or `-I ndjson` (one object per line). Column names are taken from the keys of the first object:
+
+```sh
+$ printf '[{"name":"Alice","score":95},{"name":"Bob","score":72}]' \
+  | sql-pipe -I json 'SELECT name, score FROM t WHERE score > 80'
+Alice,95
 ```
 
 Columns are auto-detected as `INTEGER`, `REAL`, or `TEXT` based on the first 100 rows. Use `--no-type-inference` to force all columns to `TEXT`:
@@ -183,11 +191,11 @@ $ printf 'name,age\nAlice,30\nBob,25' | sql-pipe --json 'SELECT * FROM t'
 
 `--json` is mutually exclusive with `-H`/`--header`. It can be combined with `-d`/`--delimiter` and `--tsv` to read non-comma-separated input.
 
-Chain queries by piping back in — useful for two-pass aggregations:
+Chain queries by piping back in — useful for two-pass aggregations. Pass `-H` to the first call so the second one sees column names:
 
 ```sh
 $ cat events.csv \
-  | sql-pipe 'SELECT user_id, COUNT(*) as n FROM t GROUP BY user_id' \
+  | sql-pipe -H 'SELECT user_id, COUNT(*) as n FROM t GROUP BY user_id' \
   | sql-pipe 'SELECT * FROM t WHERE n > 100'
 ```
 
@@ -197,9 +205,11 @@ $ cat events.csv \
 |------|-------------|
 | `-d`, `--delimiter <char>` | Input field delimiter (single character, default `,`) |
 | `--tsv` | Alias for `--delimiter '\t'` |
+| `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson` |
+| `-O`, `--output-format <fmt>` | Output format: `csv` (default), `tsv`, `json`, `ndjson` |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
 | `-H`, `--header` | Print column names as the first output row |
-| `--json` | Output results as a JSON array of objects (mutually exclusive with `-H`) |
+| `--json` | Alias for `--output-format json` (mutually exclusive with `-H`) |
 | `--max-rows <n>` | Stop if more than `n` data rows are read (exit 1) |
 | `--columns` | Read the CSV header row, print each column name on its own line, and exit 0. With `-v`/`--verbose`, also shows the inferred type per column (`name INTEGER`). Respects `--delimiter` and `--tsv`. Mutually exclusive with a query argument. |
 | `--output <file>` | Write results to the given file instead of stdout. Creates or overwrites the file. Exits 1 if the file cannot be created. |
@@ -287,6 +297,137 @@ $ cat products.csv | sql-pipe 'SELECT name, price, ROUND(price * 0.9, 2) as disc
 
 ```sh
 $ cat orders.csv | sql-pipe 'SELECT region, SUM(CASE WHEN status="paid" THEN amount ELSE 0 END) as paid, SUM(CASE WHEN status="refunded" THEN amount ELSE 0 END) as refunded FROM t GROUP BY region'
+```
+
+## Real-world examples
+
+These run against live public URLs — no local files needed.
+
+**La Liga: all-time home wins (1929–present)**
+
+The [engsoccerdata](https://github.com/jalapic/engsoccerdata) dataset covers
+Spanish first-division football since the inaugural season:
+
+```sh
+$ curl -s https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/spain.csv \
+  | sql-pipe 'SELECT home AS team, COUNT(*) AS wins
+              FROM t WHERE CAST(hgoal AS INTEGER) > CAST(vgoal AS INTEGER) AND tier=1
+              GROUP BY home ORDER BY wins DESC LIMIT 8'
+Real Madrid,1174
+FC Barcelona,1163
+Atletico Madrid,956
+Athletic Bilbao,942
+Valencia CF,917
+Sevilla FC,815
+Espanyol Barcelona,777
+Real Sociedad,721
+```
+
+**La Liga: highest-scoring seasons as JSON**
+
+Same dataset, different angle — output as JSON for downstream tools:
+
+```sh
+$ curl -s https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/spain.csv \
+  | sql-pipe --json \
+    'SELECT Season, COUNT(*) AS matches,
+            ROUND(CAST(SUM(CAST(hgoal AS INTEGER)+CAST(vgoal AS INTEGER)) AS REAL)/COUNT(*),2) AS avg_goals
+     FROM t WHERE tier=1 GROUP BY Season ORDER BY avg_goals DESC LIMIT 5'
+[{"Season":1929,"matches":90,"avg_goals":4.67},{"Season":1932,"matches":90,"avg_goals":4.44},...]
+```
+
+**OWID: countries by solar electricity share (2023)**
+
+[Our World in Data](https://github.com/owid/energy-data) publishes annual
+energy statistics for 200+ countries. Find who leads on solar:
+
+```sh
+$ curl -s https://raw.githubusercontent.com/owid/energy-data/refs/heads/master/owid-energy-data.csv \
+  | sql-pipe 'SELECT country, ROUND(solar_share_elec,1) AS solar_pct
+              FROM t WHERE year=2023 AND solar_share_elec IS NOT NULL
+                AND iso_code NOT LIKE "%OWID%"
+              ORDER BY solar_pct DESC LIMIT 8'
+Cook Islands,50.0
+Palestine,40.0
+Namibia,27.0
+Kiribati,25.0
+Lebanon,22.3
+Luxembourg,20.6
+Chile,20.1
+El Salvador,20.1
+```
+
+**OWID: wind + solar combined — two-pass query**
+
+Add wind and solar in a first pass, then filter above 30% in a second.
+`-H` passes column names through to the next stage. Spain sits at 40%:
+
+```sh
+$ ENERGY=https://raw.githubusercontent.com/owid/energy-data/refs/heads/master/owid-energy-data.csv
+$ curl -s "$ENERGY" \
+  | sql-pipe -H 'SELECT country,
+                        ROUND(solar_share_elec,1) AS solar,
+                        ROUND(wind_share_elec,1)  AS wind,
+                        ROUND(solar_share_elec+wind_share_elec,1) AS total
+                 FROM t WHERE year=2023 AND iso_code NOT LIKE "%OWID%"
+                   AND solar_share_elec IS NOT NULL AND wind_share_elec IS NOT NULL' \
+  | sql-pipe 'SELECT country, solar, wind, total FROM t
+              WHERE CAST(total AS REAL) >= 30 ORDER BY total DESC LIMIT 10'
+Denmark,10.8,57.2,68.0
+Lithuania,13.0,47.9,60.9
+Luxembourg,20.6,35.5,56.0
+Cook Islands,50.0,0.0,50.0
+Netherlands,16.3,24.6,41.0
+Uruguay,3.8,37.1,41.0
+Greece,18.2,22.5,40.7
+Spain,17.4,23.0,40.4
+Germany,12.6,27.7,40.3
+Palestine,40.0,0.0,40.0
+```
+
+**REST API: European population density**
+
+[restcountries.com](https://restcountries.com) returns a JSON array. Reshape
+with `jq` into NDJSON (one object per line) and query directly with `-I ndjson`:
+
+```sh
+$ curl -s https://restcountries.com/v3.1/region/europe \
+  | jq -c '.[] | {country: .name.common, pop: .population, area: .area}' \
+  | sql-pipe -I ndjson \
+    'SELECT country, pop, area, ROUND(CAST(pop AS REAL)/area,1) AS density
+     FROM t WHERE area > 0 ORDER BY density DESC LIMIT 8'
+Monaco,38423,2.02,19021.3
+Gibraltar,38000,6.0,6333.3
+Malta,574250,316.0,1817.2
+Vatican City,882,0.49,1800.0
+Jersey,103267,116.0,890.2
+Guernsey,64781,78.0,830.5
+San Marino,34132,61.0,559.5
+Netherlands,18100436,41865.0,432.4
+```
+
+**Live weather: 7-day Madrid forecast**
+
+[Open-Meteo](https://open-meteo.com) serves free forecasts as JSON. The daily
+arrays need transposing into objects — `jq` handles that, then `-I ndjson` loads
+the result:
+
+```sh
+$ curl -s "https://api.open-meteo.com/v1/forecast?latitude=40.4168&longitude=-3.7038\
+&daily=temperature_2m_max,temperature_2m_min,precipitation_sum\
+&timezone=Europe%2FMadrid&forecast_days=7" \
+  | jq -c '.daily
+    | [.time, .temperature_2m_max, .temperature_2m_min, .precipitation_sum]
+    | transpose
+    | .[] | {day:.[0], max_c:.[1], min_c:.[2], rain_mm:.[3]}' \
+  | sql-pipe -I ndjson 'SELECT day, max_c, min_c, rain_mm FROM t ORDER BY day'
+2026-05-01,24.3,11.8,0.0
+2026-05-02,19.2,14.5,3.9
+2026-05-03,20.5,12.5,7.0
+2026-05-04,19.3,11.3,0.2
+2026-05-05,16.9,9.1,1.8
+2026-05-06,19.7,7.3,0.0
+2026-05-07,19.6,10.7,2.1
 ```
 
 ## How it works
