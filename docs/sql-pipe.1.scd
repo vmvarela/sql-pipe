@@ -58,6 +58,18 @@ OPTIONS
 		code 1 and an error message. Use this to guard against
 		accidentally piping extremely large files into memory.
 
+	*-v, --verbose*
+		Print "Loaded <n> rows in <t>s" to standard error after all rows
+		are inserted. The message is shown automatically when stderr is a
+		TTY; this flag forces it unconditionally (e.g. in scripts or
+		pipes). Cannot be combined with *-s* / *--silent*.
+
+	*-s, --silent*
+		Suppress the "Loaded <n> rows in <t>s" message and the loading
+		progress counter from standard error unconditionally, even when
+		stderr is a TTY. Useful for producing clean stderr in interactive
+		terminals. Cannot be combined with *-v* / *--verbose*.
+
 	*--columns*
 		Read the CSV header row, print each column name on its own line to
 		standard output, and exit with code 0. When combined with *-v* /
