@@ -780,6 +780,44 @@ pub fn build(b: *std.Build) void {
     test_silent_v_conflict.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_silent_v_conflict.step);
 
+    // Integration test 75: --validate on valid CSV prints OK summary and exits 0
+    const test_validate_ok = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,name,amount\n1,Alice,3.14\n2,Bob,2.72\n' | ./zig-out/bin/sql-pipe --validate)
+        \\expected='OK: 2 rows, 3 columns (id INTEGER, name TEXT, amount REAL)'
+        \\[ "$result" = "$expected" ]
+    });
+    test_validate_ok.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_ok.step);
+
+    // Integration test 76: --validate on malformed CSV exits 2
+    const test_validate_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'id,name\n"unterminated' | ./zig-out/bin/sql-pipe --validate 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'row 2: unterminated quoted field' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_validate_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_error.step);
+
+    // Integration test 77: --validate with custom delimiter
+    const test_validate_delimiter = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id|name|amount\n1|Alice|3.14\n' | ./zig-out/bin/sql-pipe --validate --delimiter '|')
+        \\expected='OK: 1 rows, 3 columns (id INTEGER, name TEXT, amount REAL)'
+        \\[ "$result" = "$expected" ]
+    });
+    test_validate_delimiter.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_delimiter.step);
+
+    // Integration test 78: --validate with query argument exits 1
+    const test_validate_with_query = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --validate cannot be combined with a query argument' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_validate_with_query.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_with_query.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

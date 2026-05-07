@@ -70,6 +70,14 @@ OPTIONS
 		stderr is a TTY. Useful for producing clean stderr in interactive
 		terminals. Cannot be combined with *-v* / *--verbose*.
 
+	*--validate*
+		Parse the entire CSV input without executing a SQL query. On
+		success, prints a one-line summary to standard output:
+		*OK: <n> rows, <m> columns (<col> <TYPE>, ...)* and exits 0.
+		On CSV parse error, prints the error message and exits 2.
+		Compatible with *--delimiter*, *--tsv*, and
+		*--no-type-inference*. Mutually exclusive with a query argument.
+
 	*--columns*
 		Read the CSV header row, print each column name on its own line to
 		standard output, and exit with code 0. When combined with *-v* /
