@@ -780,6 +780,102 @@ pub fn build(b: *std.Build) void {
     test_silent_v_conflict.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_silent_v_conflict.step);
 
+    // Integration test 75: --validate on valid CSV prints OK summary and exits 0
+    const test_validate_ok = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,name,amount\n1,Alice,3.14\n2,Bob,2.72\n' | ./zig-out/bin/sql-pipe --validate)
+        \\expected='OK: 2 rows, 3 columns (id INTEGER, name TEXT, amount REAL)'
+        \\[ "$result" = "$expected" ]
+    });
+    test_validate_ok.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_ok.step);
+
+    // Integration test 76: --validate on malformed CSV exits 2
+    const test_validate_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'id,name\n"unterminated' | ./zig-out/bin/sql-pipe --validate 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'row 2: unterminated quoted field' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_validate_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_error.step);
+
+    // Integration test 77: --validate with custom delimiter
+    const test_validate_delimiter = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id|name|amount\n1|Alice|3.14\n' | ./zig-out/bin/sql-pipe --validate --delimiter '|')
+        \\expected='OK: 1 rows, 3 columns (id INTEGER, name TEXT, amount REAL)'
+        \\[ "$result" = "$expected" ]
+    });
+    test_validate_delimiter.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_delimiter.step);
+
+    // Integration test 78: --validate with query argument exits 1
+    const test_validate_with_query = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --validate cannot be combined with a query argument' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_validate_with_query.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_with_query.step);
+
+    // Integration test 79: --validate on valid JSON array
+    const test_validate_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]' \
+        \\  | ./zig-out/bin/sql-pipe --validate -I json)
+        \\expected='OK: 2 rows, 2 columns (id TEXT, name TEXT)'
+        \\[ "$result" = "$expected" ]
+    });
+    test_validate_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_json.step);
+
+    // Integration test 80: --validate on valid NDJSON
+    const test_validate_ndjson = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"id":1,"name":"Alice"}\n{"id":2,"name":"Bob"}\n' \
+        \\  | ./zig-out/bin/sql-pipe --validate -I ndjson)
+        \\expected='OK: 2 rows, 2 columns (id TEXT, name TEXT)'
+        \\[ "$result" = "$expected" ]
+    });
+    test_validate_ndjson.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_ndjson.step);
+
+    // Integration test 81: --validate on invalid JSON exits 2
+    const test_validate_json_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '[{"id":1, broken}]' | ./zig-out/bin/sql-pipe --validate -I json 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_validate_json_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_json_error.step);
+
+    // Integration test 82: --validate --output exits 1 with error
+    const test_validate_output_conflict = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate --output /tmp/x 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --output cannot be combined with --validate' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_validate_output_conflict.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_output_conflict.step);
+
+    // Integration test 83: --validate --columns exits 1 with error
+    const test_validate_columns_conflict = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate --columns 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --validate cannot be combined with --columns' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_validate_columns_conflict.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_columns_conflict.step);
+
+    // Integration test 84: --validate on invalid NDJSON exits 2
+    const test_validate_ndjson_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '{"id":1}\n{broken}\n' | ./zig-out/bin/sql-pipe --validate -I ndjson 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_validate_ndjson_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_ndjson_error.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
