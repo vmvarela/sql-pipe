@@ -71,12 +71,14 @@ OPTIONS
 		terminals. Cannot be combined with *-v* / *--verbose*.
 
 	*--validate*
-		Parse the entire CSV input without executing a SQL query. On
-		success, prints a one-line summary to standard output:
+		Parse the entire input without executing a SQL query. On success,
+		prints a one-line summary to standard output:
 		*OK: <n> rows, <m> columns (<col> <TYPE>, ...)* and exits 0.
-		On CSV parse error, prints the error message and exits 2.
-		Compatible with *--delimiter*, *--tsv*, and
-		*--no-type-inference*. Mutually exclusive with a query argument.
+		On parse error, prints the error message and exits 2. Compatible
+		with *--delimiter*, *--tsv*, *--no-type-inference*, and
+		*-I* / *--input-format* (csv, tsv, json, ndjson). JSON and NDJSON
+		columns are reported as TEXT. Mutually exclusive with a query
+		argument.
 
 	*--columns*
 		Read the CSV header row, print each column name on its own line to

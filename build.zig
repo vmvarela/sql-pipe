@@ -818,6 +818,37 @@ pub fn build(b: *std.Build) void {
     test_validate_with_query.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_validate_with_query.step);
 
+    // Integration test 79: --validate on valid JSON array
+    const test_validate_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]' \
+        \\  | ./zig-out/bin/sql-pipe --validate -I json)
+        \\expected='OK: 2 rows, 2 columns (id TEXT, name TEXT)'
+        \\[ "$result" = "$expected" ]
+    });
+    test_validate_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_json.step);
+
+    // Integration test 80: --validate on valid NDJSON
+    const test_validate_ndjson = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"id":1,"name":"Alice"}\n{"id":2,"name":"Bob"}\n' \
+        \\  | ./zig-out/bin/sql-pipe --validate -I ndjson)
+        \\expected='OK: 2 rows, 2 columns (id TEXT, name TEXT)'
+        \\[ "$result" = "$expected" ]
+    });
+    test_validate_ndjson.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_ndjson.step);
+
+    // Integration test 81: --validate on invalid JSON exits 2
+    const test_validate_json_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '[{"id":1, broken}]' | ./zig-out/bin/sql-pipe --validate -I json 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_validate_json_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_json_error.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

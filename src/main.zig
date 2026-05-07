@@ -151,10 +151,10 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\                               With --columns: show inferred type per column
         \\  -s, --silent                 Suppress row count output unconditionally
         \\                               Cannot be combined with -v/--verbose
-        \\  --validate                   Parse the entire CSV input and print a summary to stdout
+        \\  --validate                   Parse the entire input and print a summary to stdout
         \\                               (OK: <n> rows, <m> columns (<col> <TYPE>, ...))
-        \\                               Exit 0 on success, exit 2 on CSV error. No query required.
-        \\                               Compatible with --delimiter, --tsv, --no-type-inference.
+        \\                               Exit 0 on success, exit 2 on parse error. No query required.
+        \\                               Compatible with --delimiter, --tsv, --no-type-inference, -I.
         \\  --columns                    List column names from input header (one per line) and exit
         \\                               Combine with -v/--verbose to include inferred types
         \\                               Cannot be combined with --output or a query argument
@@ -1484,9 +1484,142 @@ fn runValidate(
                 std.process.exit(@intFromEnum(ExitCode.usage));
             };
         },
-        .json, .ndjson => {
-            // --validate is only meaningful for CSV/TSV input
-            fatal("--validate is only supported for CSV and TSV input", stderr_writer, .usage, .{});
+        .json => {
+            var stdin_buf: [4096]u8 = undefined;
+            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+
+            var buf: std.ArrayList(u8) = .empty;
+            defer buf.deinit(allocator);
+            while (true) {
+                const byte = stdin_file_reader.interface.takeByte() catch |err| switch (err) {
+                    error.EndOfStream => break,
+                    error.ReadFailed => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
+                };
+                buf.append(allocator, byte) catch fatal("out of memory reading JSON", stderr_writer, .csv_error, .{});
+            }
+            if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
+
+            var parsed = std.json.parseFromSlice(std.json.Value, allocator, buf.items, .{}) catch
+                fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
+            defer parsed.deinit();
+
+            const array = switch (parsed.value) {
+                .array => |a| a,
+                else => fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
+            };
+            if (array.items.len == 0) fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});
+
+            const first_obj = switch (array.items[0]) {
+                .object => |o| o,
+                else => fatal("JSON array elements must be objects", stderr_writer, .csv_error, .{}),
+            };
+
+            var num_cols: usize = 0;
+            var ki = first_obj.iterator();
+            while (ki.next()) |_| num_cols += 1;
+
+            var count_buf: [32]u8 = undefined;
+            const count_str = fmtThousands(&count_buf, array.items.len);
+            stdout_writer.print("OK: {s} rows, {d} columns (", .{ count_str, num_cols }) catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
+            ki = first_obj.iterator();
+            var col_i: usize = 0;
+            while (ki.next()) |entry| : (col_i += 1) {
+                if (col_i > 0) stdout_writer.writeAll(", ") catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+                stdout_writer.print("{s} TEXT", .{entry.key_ptr.*}) catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+            }
+            stdout_writer.writeAll(")\n") catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
+        },
+        .ndjson => {
+            var stdin_buf: [4096]u8 = undefined;
+            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+
+            var line_num: usize = 0;
+            var row_count: usize = 0;
+            var cols_owned: ?[][]u8 = null;
+            defer if (cols_owned) |cs| {
+                for (cs) |col| allocator.free(col);
+                allocator.free(cs);
+            };
+
+            while (true) {
+                line_num += 1;
+                const line = json.readLine(allocator, &stdin_file_reader.interface) catch |err| switch (err) {
+                    error.OutOfMemory => fatal("out of memory reading NDJSON", stderr_writer, .csv_error, .{}),
+                    error.ReadFailed => fatal("line {d}: failed to read NDJSON", stderr_writer, .csv_error, .{line_num}),
+                } orelse break;
+                defer allocator.free(line);
+
+                const trimmed = std.mem.trim(u8, line, " \t\r");
+                if (trimmed.len == 0) {
+                    line_num -= 1;
+                    continue;
+                }
+
+                var parsed_line = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch
+                    fatal("line {d}: failed to parse NDJSON", stderr_writer, .csv_error, .{line_num});
+                defer parsed_line.deinit();
+
+                const obj = switch (parsed_line.value) {
+                    .object => |o| o,
+                    else => fatal("line {d}: NDJSON element must be a JSON object", stderr_writer, .csv_error, .{line_num}),
+                };
+
+                if (cols_owned == null) {
+                    var col_list: std.ArrayList([]u8) = .empty;
+                    errdefer {
+                        for (col_list.items) |col| allocator.free(col);
+                        col_list.deinit(allocator);
+                    }
+                    var ki = obj.iterator();
+                    while (ki.next()) |entry| {
+                        const owned_key = allocator.dupe(u8, entry.key_ptr.*) catch
+                            fatal("out of memory building column list", stderr_writer, .csv_error, .{});
+                        col_list.append(allocator, owned_key) catch
+                            fatal("out of memory building column list", stderr_writer, .csv_error, .{});
+                    }
+                    if (col_list.items.len == 0)
+                        fatal("line 1: first NDJSON object has no keys", stderr_writer, .csv_error, .{});
+                    cols_owned = col_list.toOwnedSlice(allocator) catch
+                        fatal("out of memory", stderr_writer, .csv_error, .{});
+                }
+                row_count += 1;
+            }
+
+            if (cols_owned == null) fatal("empty NDJSON input", stderr_writer, .csv_error, .{});
+
+            const cols = cols_owned.?;
+            var count_buf: [32]u8 = undefined;
+            const count_str = fmtThousands(&count_buf, row_count);
+            stdout_writer.print("OK: {s} rows, {d} columns (", .{ count_str, cols.len }) catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
+            for (cols, 0..) |col, i| {
+                if (i > 0) stdout_writer.writeAll(", ") catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+                stdout_writer.print("{s} TEXT", .{col}) catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+            }
+            stdout_writer.writeAll(")\n") catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
         },
     }
 }
