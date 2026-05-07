@@ -84,6 +84,8 @@ pub const CsvReader = struct {
     ///       All returned memory must be freed with freeRecord.
     pub fn nextRecord(self: *CsvReader) !?[][]u8 {
         if (self.done) return null;
+        // Reset any stale partial-delimiter state from a prior error-interrupted call.
+        self.partial_delim = 0;
 
         var fields = std.ArrayList([]u8).empty;
         errdefer {
@@ -557,4 +559,82 @@ test "quoted field containing multi-char delimiter is preserved" {
     try std.testing.expectEqual(@as(usize, 2), r.len);
     try std.testing.expectEqualStrings("a||b", r[0]);
     try std.testing.expectEqualStrings("c", r[1]);
+}
+
+test "multi-char delimiter: empty first field" {
+    const input = "||b||c\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 3), r.len);
+    try std.testing.expectEqualStrings("", r[0]);
+    try std.testing.expectEqualStrings("b", r[1]);
+    try std.testing.expectEqualStrings("c", r[2]);
+}
+
+test "multi-char delimiter: empty last field, no trailing newline" {
+    const input = "a||b||";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 3), r.len);
+    try std.testing.expectEqualStrings("a", r[0]);
+    try std.testing.expectEqualStrings("b", r[1]);
+    try std.testing.expectEqualStrings("", r[2]);
+}
+
+test "multi-char delimiter: only delimiter produces two empty fields" {
+    const input = "||\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqualStrings("", r[0]);
+    try std.testing.expectEqualStrings("", r[1]);
+}
+
+test "multi-char delimiter: EOF without trailing newline" {
+    const input = "a||b";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqualStrings("a", r[0]);
+    try std.testing.expectEqualStrings("b", r[1]);
+
+    try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
+}
+
+test "multi-char delimiter: partial delimiter at EOF treated as field content" {
+    // '|' alone is not delimiter '||'; at EOF it becomes literal field content.
+    const input = "a|";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 1), r.len);
+    try std.testing.expectEqualStrings("a|", r[0]);
+}
+
+test "multi-char delimiter: greedy left-to-right matching" {
+    // Delimiter "||" in "a|||b": greedy match finds "||" at position 1,
+    // leaving "|b" as the second field.
+    const input = "a|||b\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqualStrings("a", r[0]);
+    try std.testing.expectEqualStrings("|b", r[1]);
 }
