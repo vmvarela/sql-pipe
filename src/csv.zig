@@ -3,11 +3,16 @@
 //! No full-input buffering: every byte is processed exactly once.
 //! Supports:
 //!   - Quoted fields enclosed in double-quotes
-//!   - Embedded delimiters inside quoted fields
+//!   - Embedded delimiters inside quoted fields (single or multi-character)
 //!   - Escaped double-quotes ("") inside quoted fields → decoded to "
 //!   - Embedded newlines (\n, \r\n) inside quoted fields → multi-line value
 //!   - Both \r\n and \n record terminators (outside quoted fields)
 //!   - Unchanged behaviour for unquoted fields
+//!   - Multi-character delimiters up to 8 bytes (e.g. "||", ";;", "  ")
+//!
+//! Note: multi-character delimiter matching uses a simple byte-by-byte
+//! partial-match approach. Overlapping delimiter patterns (e.g. delimiter "aa"
+//! within "aaa") follow a greedy left-to-right strategy.
 
 const std = @import("std");
 
@@ -55,10 +60,14 @@ const State = enum {
 pub const CsvReader = struct {
     reader: *std.Io.Reader,
     allocator: std.mem.Allocator,
-    delimiter: u8,
+    /// Field delimiter — one to eight bytes (e.g. ",", "||", "\t").
+    delimiter: []const u8,
     done: bool = false,
+    /// Number of delimiter bytes matched in the current in-progress match attempt.
+    /// Zero when no match is in progress.
+    partial_delim: usize = 0,
 
-    pub fn init(allocator: std.mem.Allocator, reader: *std.Io.Reader, delimiter: u8) CsvReader {
+    pub fn init(allocator: std.mem.Allocator, reader: *std.Io.Reader, delimiter: []const u8) CsvReader {
         return .{ .reader = reader, .allocator = allocator, .delimiter = delimiter };
     }
 
@@ -75,6 +84,8 @@ pub const CsvReader = struct {
     ///       All returned memory must be freed with freeRecord.
     pub fn nextRecord(self: *CsvReader) !?[][]u8 {
         if (self.done) return null;
+        // Reset any stale partial-delimiter state from a prior error-interrupted call.
+        self.partial_delim = 0;
 
         var fields = std.ArrayList([]u8).empty;
         errdefer {
@@ -99,6 +110,11 @@ pub const CsvReader = struct {
         while (true) {
             const byte = self.reader.takeByte() catch |err| switch (err) {
                 error.EndOfStream => {
+                    // Flush any pending partial delimiter bytes as field content.
+                    if (self.partial_delim > 0) {
+                        try field.appendSlice(self.allocator, self.delimiter[0..self.partial_delim]);
+                        self.partial_delim = 0;
+                    }
                     // EOF: flush whatever pending data we have.
                     if (!has_data and fields.items.len == 0) {
                         field.deinit(self.allocator);
@@ -122,10 +138,16 @@ pub const CsvReader = struct {
 
             switch (state) {
                 .field_start => {
-                    if (byte == self.delimiter) {
-                        // Empty unquoted field before delimiter.
-                        try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                        state = .field_start;
+                    if (byte == self.delimiter[0]) {
+                        if (self.delimiter.len == 1) {
+                            // Single-char delimiter: immediate match → empty field.
+                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                            state = .field_start;
+                        } else {
+                            // First byte of a potential multi-char delimiter.
+                            self.partial_delim = 1;
+                            state = .unquoted;
+                        }
                     } else switch (byte) {
                         '"' => {
                             state = .quoted;
@@ -146,9 +168,45 @@ pub const CsvReader = struct {
                 },
 
                 .unquoted => {
-                    if (byte == self.delimiter) {
-                        try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                        state = .field_start;
+                    if (self.partial_delim > 0) {
+                        // Ongoing potential delimiter match.
+                        if (byte == self.delimiter[self.partial_delim]) {
+                            self.partial_delim += 1;
+                            if (self.partial_delim == self.delimiter.len) {
+                                // Full delimiter matched: flush field, return to field_start.
+                                self.partial_delim = 0;
+                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                                state = .field_start;
+                            }
+                            // else: keep accumulating; byte is not yet emitted to field.
+                        } else {
+                            // Partial match failed: emit consumed prefix as field content.
+                            try field.appendSlice(self.allocator, self.delimiter[0..self.partial_delim]);
+                            self.partial_delim = 0;
+                            // Process current byte as fresh unquoted input.
+                            if (byte == self.delimiter[0]) {
+                                if (self.delimiter.len == 1) {
+                                    try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                                    state = .field_start;
+                                } else {
+                                    self.partial_delim = 1;
+                                }
+                            } else switch (byte) {
+                                '\r' => {},
+                                '\n' => {
+                                    try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                                    return try fields.toOwnedSlice(self.allocator);
+                                },
+                                else => try field.append(self.allocator, byte),
+                            }
+                        }
+                    } else if (byte == self.delimiter[0]) {
+                        if (self.delimiter.len == 1) {
+                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                            state = .field_start;
+                        } else {
+                            self.partial_delim = 1;
+                        }
                     } else switch (byte) {
                         '\r' => {
                             // Strip \r before the \n record terminator.
@@ -175,10 +233,47 @@ pub const CsvReader = struct {
                 },
 
                 .quote_saw => {
-                    if (byte == self.delimiter) {
-                        // Closing quote followed by field delimiter.
-                        try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
-                        state = .field_start;
+                    if (self.partial_delim > 0) {
+                        // Ongoing delimiter match started after a closing quote.
+                        if (byte == self.delimiter[self.partial_delim]) {
+                            self.partial_delim += 1;
+                            if (self.partial_delim == self.delimiter.len) {
+                                // Full delimiter matched.
+                                self.partial_delim = 0;
+                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                                state = .field_start;
+                            }
+                        } else {
+                            // Partial match failed: emit prefix, continue as unquoted.
+                            try field.appendSlice(self.allocator, self.delimiter[0..self.partial_delim]);
+                            self.partial_delim = 0;
+                            state = .unquoted;
+                            // Process current byte as fresh unquoted input.
+                            if (byte == self.delimiter[0]) {
+                                if (self.delimiter.len == 1) {
+                                    try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                                    state = .field_start;
+                                } else {
+                                    self.partial_delim = 1;
+                                }
+                            } else switch (byte) {
+                                '\r' => {},
+                                '\n' => {
+                                    try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                                    return try fields.toOwnedSlice(self.allocator);
+                                },
+                                else => try field.append(self.allocator, byte),
+                            }
+                        }
+                    } else if (byte == self.delimiter[0]) {
+                        if (self.delimiter.len == 1) {
+                            // Closing quote followed by field delimiter.
+                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                            state = .field_start;
+                        } else {
+                            // Start of potential multi-char delimiter after closing quote.
+                            self.partial_delim = 1;
+                        }
                     } else switch (byte) {
                         '"' => {
                             // Escaped double-quote: "" → single "
@@ -219,11 +314,11 @@ pub const CsvReader = struct {
 
 /// Convenience constructor — comma delimiter.
 pub fn csvReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) CsvReader {
-    return csvReaderWithDelimiter(allocator, reader, ',');
+    return csvReaderWithDelimiter(allocator, reader, ",");
 }
 
-/// Convenience constructor with custom input delimiter.
-pub fn csvReaderWithDelimiter(allocator: std.mem.Allocator, reader: *std.Io.Reader, delimiter: u8) CsvReader {
+/// Convenience constructor with custom input delimiter (1–8 bytes).
+pub fn csvReaderWithDelimiter(allocator: std.mem.Allocator, reader: *std.Io.Reader, delimiter: []const u8) CsvReader {
     return CsvReader.init(allocator, reader, delimiter);
 }
 
@@ -371,7 +466,7 @@ test "entirely empty input returns null" {
 test "custom pipe delimiter" {
     const input = "a|b|c\n1|2|3\n";
     var input_reader: std.Io.Reader = .fixed(input);
-    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, '|');
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "|");
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
@@ -391,7 +486,7 @@ test "custom pipe delimiter" {
 test "custom tab delimiter" {
     const input = "name\tage\nAlice\t30\n";
     var input_reader: std.Io.Reader = .fixed(input);
-    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, '\t');
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "\t");
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
@@ -404,4 +499,142 @@ test "custom tab delimiter" {
     try std.testing.expectEqual(@as(usize, 2), r2.len);
     try std.testing.expectEqualStrings("Alice", r2[0]);
     try std.testing.expectEqualStrings("30", r2[1]);
+}
+
+test "2-char delimiter (||) splits fields correctly" {
+    const input = "a||b||c\n1||2||3\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r1 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r1);
+    try std.testing.expectEqual(@as(usize, 3), r1.len);
+    try std.testing.expectEqualStrings("a", r1[0]);
+    try std.testing.expectEqualStrings("b", r1[1]);
+    try std.testing.expectEqualStrings("c", r1[2]);
+
+    const r2 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r2);
+    try std.testing.expectEqual(@as(usize, 3), r2.len);
+    try std.testing.expectEqualStrings("1", r2[0]);
+    try std.testing.expectEqualStrings("2", r2[1]);
+    try std.testing.expectEqualStrings("3", r2[2]);
+
+    try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
+}
+
+test "3-char delimiter (;;;) splits fields correctly" {
+    const input = "foo;;;bar;;;baz\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, ";;;");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 3), r.len);
+    try std.testing.expectEqualStrings("foo", r[0]);
+    try std.testing.expectEqualStrings("bar", r[1]);
+    try std.testing.expectEqualStrings("baz", r[2]);
+}
+
+test "multi-char delimiter: partial match bytes emitted as field content" {
+    // '|' alone is NOT a delimiter; only '||' is.
+    const input = "a|b||c\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqualStrings("a|b", r[0]);
+    try std.testing.expectEqualStrings("c", r[1]);
+}
+
+test "quoted field containing multi-char delimiter is preserved" {
+    const input = "\"a||b\"||c\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqualStrings("a||b", r[0]);
+    try std.testing.expectEqualStrings("c", r[1]);
+}
+
+test "multi-char delimiter: empty first field" {
+    const input = "||b||c\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 3), r.len);
+    try std.testing.expectEqualStrings("", r[0]);
+    try std.testing.expectEqualStrings("b", r[1]);
+    try std.testing.expectEqualStrings("c", r[2]);
+}
+
+test "multi-char delimiter: empty last field, no trailing newline" {
+    const input = "a||b||";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 3), r.len);
+    try std.testing.expectEqualStrings("a", r[0]);
+    try std.testing.expectEqualStrings("b", r[1]);
+    try std.testing.expectEqualStrings("", r[2]);
+}
+
+test "multi-char delimiter: only delimiter produces two empty fields" {
+    const input = "||\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqualStrings("", r[0]);
+    try std.testing.expectEqualStrings("", r[1]);
+}
+
+test "multi-char delimiter: EOF without trailing newline" {
+    const input = "a||b";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqualStrings("a", r[0]);
+    try std.testing.expectEqualStrings("b", r[1]);
+
+    try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
+}
+
+test "multi-char delimiter: partial delimiter at EOF treated as field content" {
+    // '|' alone is not delimiter '||'; at EOF it becomes literal field content.
+    const input = "a|";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 1), r.len);
+    try std.testing.expectEqualStrings("a|", r[0]);
+}
+
+test "multi-char delimiter: greedy left-to-right matching" {
+    // Delimiter "||" in "a|||b": greedy match finds "||" at position 1,
+    // leaving "|b" as the second field.
+    const input = "a|||b\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReaderWithDelimiter(std.testing.allocator, &input_reader, "||");
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqualStrings("a", r[0]);
+    try std.testing.expectEqualStrings("|b", r[1]);
 }

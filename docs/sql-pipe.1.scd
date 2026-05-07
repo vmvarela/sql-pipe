@@ -22,17 +22,18 @@ DESCRIPTION
 	behavior and treat all columns as TEXT.
 
 	By default, input fields are parsed as comma-separated values. Use
-	*--delimiter* (or *-d*) to parse other single-character delimiters, or *--tsv*
+	*--delimiter* (or *-d*) to parse other delimiters (1–8 characters), or *--tsv*
 	for tab-separated input.
 
 	Exit codes follow a structured convention for scripting integration (see EXIT CODES
 	section).
 
 OPTIONS
-	*-d, --delimiter* <char>
-		Use a custom single-character input field delimiter instead of comma.
+	*-d, --delimiter* <string>
+		Use a custom input field delimiter (1–8 bytes) instead of comma.
 		Examples: *-d '|'* for pipe-separated files, *--delimiter '\\t'* for
-		tab-separated files.
+		tab-separated files, *-d '||'* for double-pipe-separated files.
+		Produces a usage error if the value is empty or longer than 8 bytes.
 
 	*--tsv*
 		Alias for *--delimiter '\\t'*. Parses tab-separated input.
