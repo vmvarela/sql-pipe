@@ -593,7 +593,7 @@ pub fn build(b: *std.Build) void {
     // Integration test 57: unknown input format → error exit 1
     const test_bad_input_format = b.addSystemCommand(&.{
         "bash", "-c",
-        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --input-format xml 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --input-format parquet 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
         \\echo "$msg" | grep -q 'unknown input format' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_bad_input_format.step.dependOn(b.getInstallStep());
@@ -602,7 +602,7 @@ pub fn build(b: *std.Build) void {
     // Integration test 58: unknown output format → error exit 1
     const test_bad_output_format = b.addSystemCommand(&.{
         "bash", "-c",
-        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe --output-format xml 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe --output-format parquet 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
         \\echo "$msg" | grep -q 'unknown output format' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_bad_output_format.step.dependOn(b.getInstallStep());
@@ -1010,6 +1010,71 @@ pub fn build(b: *std.Build) void {
     });
     test_delimiter_too_long_error.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_delimiter_too_long_error.step);
+
+    // ─── XML input/output integration tests ─────────────────────────────────
+
+    // Integration test 99: XML output format emits correct structure
+    const test_xml_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe --output-format xml 'SELECT * FROM t ORDER BY name')
+        \\expected=$(printf '<?xml version="1.0" encoding="UTF-8"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n<row><name>Bob</name><age>25</age></row>\n</results>')
+        \\[ "$result" = "$expected" ]
+    });
+    test_xml_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_output.step);
+
+    // Integration test 100: XML input can be queried
+    const test_xml_input = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n<row><name>Bob</name><age>25</age></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe --input-format xml 'SELECT name FROM t ORDER BY name')
+        \\expected=$(printf 'Alice\nBob')
+        \\[ "$result" = "$expected" ]
+    });
+    test_xml_input.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_input.step);
+
+    // Integration test 101: XML roundtrip (xml in → xml out)
+    const test_xml_roundtrip = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml -O xml 'SELECT * FROM t')
+        \\echo "$result" | grep -q '<name>Alice</name>' && echo "$result" | grep -q '<age>30</age>'
+    });
+    test_xml_roundtrip.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_roundtrip.step);
+
+    // Integration test 102: --columns with XML input lists column names
+    const test_xml_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml --columns)
+        \\expected=$(printf 'name\nage')
+        \\[ "$result" = "$expected" ]
+    });
+    test_xml_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_columns.step);
+
+    // Integration test 103: --validate with XML input prints summary
+    const test_xml_validate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n<row><name>Bob</name><age>25</age></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml --validate)
+        \\echo "$result" | grep -q 'OK: 2 rows'
+    });
+    test_xml_validate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_validate.step);
+
+    // Integration test 104: --xml-root and --xml-row customize element names
+    const test_xml_custom_elements = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' \
+        \\    | ./zig-out/bin/sql-pipe -O xml --xml-root data --xml-row record 'SELECT * FROM t')
+        \\echo "$result" | grep -q '<data>' && echo "$result" | grep -q '<record>' && echo "$result" | grep -q '</data>'
+    });
+    test_xml_custom_elements.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_custom_elements.step);
 
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
