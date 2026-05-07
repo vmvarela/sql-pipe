@@ -593,7 +593,7 @@ pub fn build(b: *std.Build) void {
     // Integration test 57: unknown input format → error exit 1
     const test_bad_input_format = b.addSystemCommand(&.{
         "bash", "-c",
-        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --input-format xml 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --input-format parquet 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
         \\echo "$msg" | grep -q 'unknown input format' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_bad_input_format.step.dependOn(b.getInstallStep());
@@ -602,7 +602,7 @@ pub fn build(b: *std.Build) void {
     // Integration test 58: unknown output format → error exit 1
     const test_bad_output_format = b.addSystemCommand(&.{
         "bash", "-c",
-        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe --output-format xml 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe --output-format parquet 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
         \\echo "$msg" | grep -q 'unknown output format' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_bad_output_format.step.dependOn(b.getInstallStep());
@@ -1011,6 +1011,157 @@ pub fn build(b: *std.Build) void {
     test_delimiter_too_long_error.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_delimiter_too_long_error.step);
 
+    // ─── XML input/output integration tests ─────────────────────────────────
+
+    // Integration test 99: XML output format emits correct structure
+    const test_xml_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe --output-format xml 'SELECT * FROM t ORDER BY name')
+        \\expected=$(printf '<?xml version="1.0" encoding="UTF-8"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n<row><name>Bob</name><age>25</age></row>\n</results>')
+        \\[ "$result" = "$expected" ]
+    });
+    test_xml_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_output.step);
+
+    // Integration test 100: XML input can be queried
+    const test_xml_input = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n<row><name>Bob</name><age>25</age></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe --input-format xml 'SELECT name FROM t ORDER BY name')
+        \\expected=$(printf 'Alice\nBob')
+        \\[ "$result" = "$expected" ]
+    });
+    test_xml_input.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_input.step);
+
+    // Integration test 101: XML roundtrip (xml in → xml out)
+    const test_xml_roundtrip = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml -O xml 'SELECT * FROM t')
+        \\echo "$result" | grep -q '<name>Alice</name>' && echo "$result" | grep -q '<age>30</age>'
+    });
+    test_xml_roundtrip.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_roundtrip.step);
+
+    // Integration test 102: --columns with XML input lists column names
+    const test_xml_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml --columns)
+        \\expected=$(printf 'name\nage')
+        \\[ "$result" = "$expected" ]
+    });
+    test_xml_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_columns.step);
+
+    // Integration test 103: --validate with XML input prints summary
+    const test_xml_validate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n<row><name>Bob</name><age>25</age></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml --validate)
+        \\echo "$result" | grep -q 'OK: 2 rows'
+    });
+    test_xml_validate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_validate.step);
+
+    // Integration test 104: --xml-root and --xml-row customize element names
+    const test_xml_custom_elements = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' \
+        \\    | ./zig-out/bin/sql-pipe -O xml --xml-root data --xml-row record 'SELECT * FROM t')
+        \\echo "$result" | grep -q '<data>' && echo "$result" | grep -q '<record>' && echo "$result" | grep -q '</data>'
+    });
+    test_xml_custom_elements.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_custom_elements.step);
+
+    // Integration test 105: XML entities en input — roundtrip correcto
+    const test_xml_entities_input = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice &amp; Bob</name></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml 'SELECT name FROM t')
+        \\[ "$result" = "Alice & Bob" ]
+    });
+    test_xml_entities_input.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_entities_input.step);
+
+    // Integration test 106: NULL en output XML → elemento vacío, no "NULL"
+    const test_xml_null_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\nAlice\n' \
+        \\    | ./zig-out/bin/sql-pipe -O xml 'SELECT name, NULL as age FROM t')
+        \\echo "$result" | grep -q '<age></age>'
+    });
+    test_xml_null_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_null_output.step);
+
+    // Integration test 107: Documento XML vacío → error con "empty input"
+    const test_xml_empty_input = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '' | ./zig-out/bin/sql-pipe -I xml 'SELECT 1' 2>&1; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'empty input' && echo "$msg" | grep -qv 'EXIT:0'
+    });
+    test_xml_empty_input.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_empty_input.step);
+
+    // Integration test 108: Root sin rows → error con "no row elements"
+    const test_xml_no_rows = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '<root></root>' | ./zig-out/bin/sql-pipe -I xml 'SELECT 1' 2>&1; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'no row elements' && echo "$msg" | grep -qv 'EXIT:0'
+    });
+    test_xml_no_rows.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_no_rows.step);
+
+    // Integration test 109: --sample rechazado con XML → exit no-cero con mensaje claro
+    const test_xml_sample_rejected = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '<r><row><a>1</a></row></r>' | ./zig-out/bin/sql-pipe -I xml --sample 2>&1; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'sample' && echo "$msg" | grep -qv 'EXIT:0'
+    });
+    test_xml_sample_rejected.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_sample_rejected.step);
+
+    // Integration test 110: Self-closing column → NULL en SQLite (SELECT devuelve vacío)
+    const test_xml_self_closing_null = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name/><age>30</age></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml 'SELECT COALESCE(name, "NULL_VALUE") FROM t')
+        \\[ "$result" = "NULL_VALUE" ]
+    });
+    test_xml_self_closing_null.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_self_closing_null.step);
+
+    // Integration test 111: Columnas en orden distinto entre rows → bind-by-name correcto
+    const test_xml_column_order = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row><name>Alice</name><age>30</age></row>\n<row><age>25</age><name>Bob</name></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml 'SELECT name || ":" || age FROM t ORDER BY name')
+        \\[ "$result" = "$(printf 'Alice:30\nBob:25')" ]
+    });
+    test_xml_column_order.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_column_order.step);
+
+    // Integration test 112: Atributos en elementos → ignorados, contenido preservado
+    const test_xml_attrs_ignored = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<?xml version="1.0"?>\n<results>\n<row id="1"><name class="primary">Alice</name></row>\n</results>\n' \
+        \\    | ./zig-out/bin/sql-pipe -I xml 'SELECT name FROM t')
+        \\[ "$result" = "Alice" ]
+    });
+    test_xml_attrs_ignored.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_attrs_ignored.step);
+
+    // Integration test 113: Float-as-integer → emitido como entero en XML
+    const test_xml_float_as_int = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'x\n1\n' | ./zig-out/bin/sql-pipe -O xml 'SELECT CAST(30.0 AS REAL) as val')
+        \\echo "$result" | grep -q '<val>30</val>'
+    });
+    test_xml_float_as_int.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_float_as_int.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1022,4 +1173,27 @@ pub fn build(b: *std.Build) void {
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const unit_test_step = b.step("unit-test", "Run CSV unit tests");
     unit_test_step.dependOn(&run_unit_tests.step);
+
+    // Unit tests for the XML parser (src/xml.zig)
+    const xml_unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/xml.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    xml_unit_tests.root_module.addImport("c", translate_c.createModule());
+    if (bundle_sqlite) {
+        xml_unit_tests.root_module.addIncludePath(b.path("lib"));
+        xml_unit_tests.root_module.addCSourceFile(.{
+            .file = b.path("lib/sqlite3.c"),
+            .flags = &.{"-DSQLITE_OMIT_LOAD_EXTENSION=1"},
+        });
+    } else {
+        xml_unit_tests.root_module.linkSystemLibrary("sqlite3", .{});
+    }
+    const run_xml_unit_tests = b.addRunArtifact(xml_unit_tests);
+    test_step.dependOn(&run_xml_unit_tests.step);
+    unit_test_step.dependOn(&run_xml_unit_tests.step);
 }

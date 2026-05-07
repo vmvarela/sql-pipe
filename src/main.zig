@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("c");
 const csv = @import("csv.zig");
 const json = @import("json.zig");
+const xml = @import("xml.zig");
 const build_options = @import("build_options");
 
 const VERSION: []const u8 = build_options.version;
@@ -26,6 +27,8 @@ const SqlPipeError = error{
     InvalidMaxRows,
     InvalidInputFormat,
     InvalidOutputFormat,
+    MissingXmlFlagValue,
+    InvalidXmlName,
     OpenDbFailed,
     EmptyInput,
     EmptyColumnName,
@@ -70,10 +73,10 @@ const ExitCode = enum(u8) {
 };
 
 /// Supported input formats.
-const InputFormat = enum { csv, tsv, json, ndjson };
+const InputFormat = enum { csv, tsv, json, ndjson, xml };
 
 /// Supported output formats.
-const OutputFormat = enum { csv, tsv, json, ndjson };
+const OutputFormat = enum { csv, tsv, json, ndjson, xml };
 
 /// Parsed command-line arguments.
 const ParsedArgs = struct {
@@ -98,6 +101,10 @@ const ParsedArgs = struct {
     silent: bool,
     /// Write results to this file path instead of stdout; null = write to stdout.
     output: ?[]const u8,
+    /// Root element name for XML output (default: "results").
+    xml_root: []const u8,
+    /// Row element name for XML output (default: "row").
+    xml_row: []const u8,
 };
 
 /// Arguments for `--columns` mode.
@@ -163,8 +170,8 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\Options:
         \\  -d, --delimiter <string>     Input field delimiter for CSV: 1–8 chars (default: ,)
         \\  --tsv                        Alias for --delimiter '\t'
-        \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson
-        \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson
+        \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml
+        \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml
         \\  --json                       Alias for --output-format json
         \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
         \\  -H, --header                 Print column names as the first output row (CSV/TSV output only)
@@ -185,6 +192,8 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\                               Implies --header. Compatible with --delimiter and --tsv.
         \\                               Incompatible with --json and with a query argument.
         \\  --output <file>              Write results to file instead of stdout
+        \\  --xml-root <name>            Root element name for XML I/O (default: results)
+        \\  --xml-row <name>             Row element name for XML I/O (default: row)
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
         \\
@@ -227,6 +236,7 @@ fn parseInputFormat(s: []const u8) SqlPipeError!InputFormat {
     if (std.mem.eql(u8, s, "tsv")) return .tsv;
     if (std.mem.eql(u8, s, "json")) return .json;
     if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
+    if (std.mem.eql(u8, s, "xml")) return .xml;
     return error.InvalidInputFormat;
 }
 
@@ -239,7 +249,28 @@ fn parseOutputFormat(s: []const u8) SqlPipeError!OutputFormat {
     if (std.mem.eql(u8, s, "tsv")) return .tsv;
     if (std.mem.eql(u8, s, "json")) return .json;
     if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
+    if (std.mem.eql(u8, s, "xml")) return .xml;
     return error.InvalidOutputFormat;
+}
+
+/// isValidXmlName(s) → bool
+///
+/// Returns true iff s is a valid XML Name:
+///   NameStartChar: letter, '_', ':'
+///   NameChar: NameStartChar | digit | '-' | '.'
+fn isValidXmlName(s: []const u8) bool {
+    if (s.len == 0) return false;
+    switch (s[0]) {
+        'a'...'z', 'A'...'Z', '_', ':' => {},
+        else => return false,
+    }
+    for (s[1..]) |ch| {
+        switch (ch) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '.', '_', ':' => {},
+            else => return false,
+        }
+    }
+    return true;
 }
 
 /// parseArgs(args) → ArgsResult
@@ -265,6 +296,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var list_columns = false;
     var validate = false;
     var output: ?[]const u8 = null;
+    var xml_root: []const u8 = "results";
+    var xml_row: []const u8 = "row";
     var sample_mode = false;
     var sample_n: usize = 10;
 
@@ -363,6 +396,18 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             const trimmed = std.mem.trim(u8, arg["--output=".len..], " \t");
             if (trimmed.len == 0) return error.InvalidOutputPath;
             output = trimmed;
+        } else if (std.mem.eql(u8, arg, "--xml-root")) {
+            i += 1;
+            if (i >= args.len) return error.MissingXmlFlagValue;
+            xml_root = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--xml-root=")) {
+            xml_root = arg["--xml-root=".len..];
+        } else if (std.mem.eql(u8, arg, "--xml-row")) {
+            i += 1;
+            if (i >= args.len) return error.MissingXmlFlagValue;
+            xml_row = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--xml-row=")) {
+            xml_row = arg["--xml-row=".len..];
         } else {
             if (query == null) query = arg;
         }
@@ -416,6 +461,10 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     if (silent and verbose)
         return error.SilentVerboseConflict;
 
+    // --xml-root and --xml-row must be valid XML element names
+    if (!isValidXmlName(xml_root) or !isValidXmlName(xml_row))
+        return error.InvalidXmlName;
+
     // --columns mode: list headers and exit
     if (list_columns)
         return .{ .columns = ColumnsArgs{
@@ -452,6 +501,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         .verbose = verbose,
         .silent = silent,
         .output = output,
+        .xml_root = xml_root,
+        .xml_row = xml_row,
     } };
 }
 
@@ -884,6 +935,8 @@ fn execQuery(
     writer: *std.Io.Writer,
     header: bool,
     output_format: OutputFormat,
+    xml_root: []const u8,
+    xml_row: []const u8,
 ) (SqlPipeError || std.mem.Allocator.Error || std.Io.Writer.Error)!void {
     const query_z = try allocator.dupeZ(u8, query);
     defer allocator.free(query_z);
@@ -942,6 +995,23 @@ fn execQuery(
             while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
                 try printRow(stmt.?, col_count, writer, out_delim);
             }
+        },
+        .xml => {
+            // Collect column names before stepping
+            var col_names = try allocator.alloc([*:0]const u8, @intCast(col_count));
+            defer allocator.free(col_names);
+            var ci: c_int = 0;
+            while (ci < col_count) : (ci += 1) {
+                col_names[@intCast(ci)] = c.sqlite3_column_name(stmt, ci);
+            }
+
+            try xml.writeXmlHeader(writer, xml_root);
+            // Loop invariant I: all SQLITE_ROW results returned so far have been written as XML rows
+            // Bounding function: number of remaining rows in the result set (finite)
+            while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+                try xml.writeXmlRow(stmt.?, col_count, col_names, writer, xml_row);
+            }
+            try xml.writeXmlFooter(writer, xml_root);
         },
     }
 }
@@ -1435,6 +1505,27 @@ fn runColumns(
                 break;
             }
         },
+        .xml => {
+            var stdin_buf: [4096]u8 = undefined;
+            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+
+            const names = xml.getXmlColumnNames(allocator, &stdin_file_reader.interface, stderr_writer);
+            defer {
+                for (names) |name| allocator.free(name);
+                allocator.free(names);
+            }
+            for (names) |name| {
+                if (args.verbose) {
+                    stdout_writer.print("{s} TEXT\n", .{name}) catch |err| {
+                        std.log.err("failed to write output: {}", .{err});
+                    };
+                } else {
+                    stdout_writer.print("{s}\n", .{name}) catch |err| {
+                        std.log.err("failed to write output: {}", .{err});
+                    };
+                }
+            }
+        },
     }
 }
 
@@ -1704,6 +1795,37 @@ fn runValidate(
                 std.process.exit(@intFromEnum(ExitCode.usage));
             };
         },
+        .xml => {
+            var stdin_buf: [4096]u8 = undefined;
+            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+
+            const summary = xml.summarizeXml(allocator, &stdin_file_reader.interface, stderr_writer);
+            defer {
+                for (summary.col_names) |name| allocator.free(name);
+                allocator.free(summary.col_names);
+            }
+
+            var count_buf: [32]u8 = undefined;
+            const count_str = fmtThousands(&count_buf, summary.row_count);
+            stdout_writer.print("OK: {s} rows, {d} columns (", .{ count_str, summary.col_names.len }) catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
+            for (summary.col_names, 0..) |name, i| {
+                if (i > 0) stdout_writer.writeAll(", ") catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+                stdout_writer.print("{s} TEXT", .{name}) catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+            }
+            stdout_writer.writeAll(")\n") catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
+        },
     }
 }
 
@@ -1721,8 +1843,8 @@ fn runSample(
     stdout_writer: *std.Io.Writer,
 ) void {
     switch (args.input_format) {
-        .json, .ndjson => fatal(
-            "--sample only supports CSV and TSV input; use -I csv (default) or --tsv",
+        .json, .ndjson, .xml => fatal(
+            "--sample is only supported with CSV and TSV input",
             stderr_writer,
             .usage,
             .{},
@@ -1894,6 +2016,11 @@ fn run(
             var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
             break :blk json.loadNdjsonInput(allocator, &stdin_reader.interface, db, parsed.max_rows, stderr_writer);
         },
+        .xml => blk: {
+            var stdin_buf: [4096]u8 = undefined;
+            var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+            break :blk xml.loadXmlInput(allocator, &stdin_reader.interface, db, parsed.max_rows, stderr_writer);
+        },
     };
 
     // Print row count and elapsed time to stderr when stderr is a TTY or --verbose is set.
@@ -1915,7 +2042,7 @@ fn run(
         stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
     }
 
-    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format) catch {
+    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row) catch {
         stdout_writer.flush() catch |err| std.log.err("failed to flush output before fatal: {}", .{err});
         fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
     };
@@ -1966,14 +2093,14 @@ pub fn main(init: std.process.Init.Minimal) void {
             },
             error.InvalidInputFormat => {
                 stderr_writer.writeAll(
-                    "error: unknown input format; supported: csv, tsv, json, ndjson\n",
+                    "error: unknown input format; supported: csv, tsv, json, ndjson, xml\n",
                 ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
             },
             error.InvalidOutputFormat => {
                 stderr_writer.writeAll(
-                    "error: unknown output format; supported: csv, tsv, json, ndjson\n",
+                    "error: unknown output format; supported: csv, tsv, json, ndjson, xml\n",
                 ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
@@ -2059,6 +2186,20 @@ pub fn main(init: std.process.Init.Minimal) void {
                 stderr_writer.writeAll("error: --sample requires a positive integer value\n") catch |werr| {
                     std.log.err("failed to write error message: {}", .{werr});
                 };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.MissingXmlFlagValue => {
+                stderr_writer.writeAll(
+                    "error: --xml-root and --xml-row require a value\n",
+                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.InvalidXmlName => {
+                stderr_writer.writeAll(
+                    "error: --xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)\n",
+                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
             },

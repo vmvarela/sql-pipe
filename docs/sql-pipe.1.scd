@@ -72,22 +72,33 @@ OPTIONS
 		stderr is a TTY. Useful for producing clean stderr in interactive
 		terminals. Cannot be combined with *-v* / *--verbose*.
 
+	*--xml-root* <name>
+		Root element name used when reading or writing XML (default: *results*).
+		The output document is wrapped in *<name>...</name>*. Also used as the
+		expected root tag when parsing XML input.
+
+	*--xml-row* <name>
+		Row element name used when reading or writing XML (default: *row*).
+		Each result row is emitted as *<name><col>value</col>...</name>*.
+
 	*--validate*
 		Parse the entire input without executing a SQL query. On success,
 		prints a one-line summary to standard output:
 		*OK: <n> rows, <m> columns (<col> <TYPE>, ...)* and exits 0.
 		On parse error, prints the error message and exits 2. Compatible
 		with *--delimiter*, *--tsv*, *--no-type-inference*, and
-		*-I* / *--input-format* (csv, tsv, json, ndjson). JSON and NDJSON
-		columns are reported as TEXT. Mutually exclusive with a query
+		*-I* / *--input-format* (csv, tsv, json, ndjson, xml). JSON, NDJSON,
+		and XML columns are reported as TEXT. Mutually exclusive with a query
 		argument.
 
 	*--columns*
-		Read the CSV header row, print each column name on its own line to
-		standard output, and exit with code 0. When combined with *-v* /
-		*--verbose*, also shows the inferred type (INTEGER, REAL, or TEXT)
-		for each column, using the first 100 data rows for inference. Respects
-		*--delimiter* and *--tsv*. Mutually exclusive with a query argument.
+		Read the input header, print each column name on its own line to
+		standard output, and exit with code 0. Supported for CSV, TSV,
+		JSON, NDJSON, and XML input. When combined with *-v* / *--verbose*,
+		also shows the inferred type (INTEGER, REAL, or TEXT) for each column
+		(CSV/TSV only; other formats always show TEXT), using the first 100
+		data rows for inference. Respects *--delimiter* and *--tsv*.
+		Mutually exclusive with a query argument.
 
 	*--sample* [<n>]
 		Print a schema comment block to standard error and the first <n> data
@@ -156,6 +167,21 @@ EXAMPLES
 
 	Output:++
 	[{"name":"Alice","age":30},{"name":"Bob","age":25}]
+
+	Convert CSV to XML:
+
+		$ printf 'name,age\nAlice,30\nBob,25' | sql-pipe -O xml 'SELECT \* FROM t'
+
+	Output:++
+	<?xml version="1.0" encoding="UTF-8"?>++
+	<results>++
+	<row><name>Alice</name><age>30</age></row>++
+	<row><name>Bob</name><age>25</age></row>++
+	</results>
+
+	Query XML input:
+
+		$ cat data.xml | sql-pipe -I xml 'SELECT name FROM t WHERE age > 25'
 
 	Preview schema and first 3 rows of a CSV file:
 
