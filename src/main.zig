@@ -18,6 +18,7 @@ const SqlPipeError = error{
     MissingQuery,
     InvalidDelimiter,
     IncompatibleFlags,
+    SilentVerboseConflict,
     ColumnsWithQuery,
     InvalidMaxRows,
     InvalidInputFormat,
@@ -31,7 +32,6 @@ const SqlPipeError = error{
     PrepareInsertFailed,
     BindFailed,
     StepFailed,
-    CommitFailed,
     PrepareQueryFailed,
     InvalidOutputPath,
     OutputWithColumns,
@@ -85,6 +85,8 @@ const ParsedArgs = struct {
     /// Print "Loaded <n> rows" to stderr after all rows are inserted when true.
     /// When false, the message is still shown automatically when stderr is a TTY.
     verbose: bool,
+    /// Suppress "Loaded <n> rows" unconditionally.
+    silent: bool,
     /// Write results to this file path instead of stdout; null = write to stdout.
     output: ?[]const u8,
 };
@@ -134,6 +136,8 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  --max-rows <n>               Stop if more than <n> data rows are read (exit 1)
         \\  -v, --verbose                Force row count to stderr (shown automatically on TTY)
         \\                               With --columns: show inferred type per column
+        \\  -s, --silent                 Suppress row count output unconditionally
+        \\                               Cannot be combined with -v/--verbose
         \\  --columns                    List column names from input header (one per line) and exit
         \\                               Combine with -v/--verbose to include inferred types
         \\                               Cannot be combined with --output or a query argument
@@ -212,6 +216,7 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
 
     var max_rows: ?usize = null;
     var verbose = false;
+    var silent = false;
     var list_columns = false;
     var output: ?[]const u8 = null;
 
@@ -273,6 +278,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             if (max_rows.? == 0) return error.InvalidMaxRows;
         } else if (std.mem.eql(u8, arg, "--verbose") or std.mem.eql(u8, arg, "-v")) {
             verbose = true;
+        } else if (std.mem.eql(u8, arg, "--silent") or std.mem.eql(u8, arg, "-s")) {
+            silent = true;
         } else if (std.mem.eql(u8, arg, "--columns")) {
             list_columns = true;
         } else if (std.mem.eql(u8, arg, "--output")) {
@@ -302,6 +309,10 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     if (list_columns and query != null)
         return error.ColumnsWithQuery;
 
+    // --silent and --verbose are mutually exclusive
+    if (silent and verbose)
+        return error.SilentVerboseConflict;
+
     // --columns mode: list headers and exit
     if (list_columns)
         return .{ .columns = ColumnsArgs{
@@ -319,6 +330,7 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         .output_format = output_format,
         .max_rows = max_rows,
         .verbose = verbose,
+        .silent = silent,
         .output = output,
     } };
 }
@@ -1355,7 +1367,7 @@ fn run(
 
     // Print row count and elapsed time to stderr when stderr is a TTY or --verbose is set.
     const is_tty = std.Io.File.isTty(std.Io.File.stderr(), io) catch false;
-    if (parsed.verbose or is_tty) {
+    if (!parsed.silent and (parsed.verbose or is_tty)) {
         const end_ts = std.Io.Timestamp.now(io, .awake);
         const elapsed_ns: i96 = end_ts.nanoseconds - start_ts.nanoseconds;
         const elapsed_ms: u64 = @intCast(@max(@as(i96, 0), @divTrunc(elapsed_ns, std.time.ns_per_ms)));
@@ -1403,6 +1415,13 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.IncompatibleFlags => {
                 stderr_writer.writeAll(
                     "error: --header cannot be combined with non-CSV/TSV output format\n",
+                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.SilentVerboseConflict => {
+                stderr_writer.writeAll(
+                    "error: --silent cannot be combined with --verbose\n",
                 ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));

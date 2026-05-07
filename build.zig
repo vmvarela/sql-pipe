@@ -743,6 +743,43 @@ pub fn build(b: *std.Build) void {
     test_tsv_quoted_tab.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_tsv_quoted_tab.step);
 
+    // Integration test 71: --silent suppresses row count output to stderr
+    const test_silent = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\out=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --silent 'SELECT name FROM t' 2>&1 >/dev/null)
+        \\test -z "$out"
+    });
+    test_silent.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_silent.step);
+
+    // Integration test 72: -s is an alias for --silent
+    const test_silent_short = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe -s 'SELECT name FROM t')
+        \\expected=$(printf 'Alice\n')
+        \\[ "$result" = "$expected" ]
+    });
+    test_silent_short.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_silent_short.step);
+
+    // Integration test 73: --silent combined with --verbose exits 1 with error
+    const test_silent_verbose_conflict = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe --silent --verbose 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --silent cannot be combined with --verbose' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_silent_verbose_conflict.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_silent_verbose_conflict.step);
+
+    // Integration test 74: --silent combined with -v exits 1 with error
+    const test_silent_v_conflict = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a\n1\n' | ./zig-out/bin/sql-pipe --silent -v 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --silent cannot be combined with --verbose' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_silent_v_conflict.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_silent_v_conflict.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
