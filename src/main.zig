@@ -21,6 +21,8 @@ const SqlPipeError = error{
     SilentVerboseConflict,
     ColumnsWithQuery,
     ValidateWithQuery,
+    ValidateWithColumns,
+    OutputWithValidate,
     InvalidMaxRows,
     InvalidInputFormat,
     InvalidOutputFormat,
@@ -122,7 +124,7 @@ const ArgsResult = union(enum) {
     version,
     /// User requested --columns: list column names and exit.
     columns: ColumnsArgs,
-    /// User requested --validate: parse CSV and print summary.
+    /// User requested --validate: parse input and print summary.
     validate: ValidateArgs,
 };
 
@@ -324,6 +326,14 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     // --output is mutually exclusive with --columns (--columns always writes to stdout)
     if (output != null and list_columns)
         return error.OutputWithColumns;
+
+    // --output is mutually exclusive with --validate (--validate always writes to stdout)
+    if (output != null and validate)
+        return error.OutputWithValidate;
+
+    // --validate is mutually exclusive with --columns
+    if (validate and list_columns)
+        return error.ValidateWithColumns;
 
     // --columns is mutually exclusive with a query argument
     if (list_columns and query != null)
@@ -1357,9 +1367,9 @@ fn runColumns(
 
 /// runValidate(args, allocator, io, stderr_writer, stdout_writer) → void
 /// Pre:  args is valid; allocator and writers are valid
-/// Post: the entire CSV/TSV input has been parsed; on success prints
-///       "OK: <n> rows, <m> columns (<col> <TYPE>, ...)" to stdout and exits 0.
-///       On CSV parse error, prints the error message to stderr and exits 2.
+/// Post: the entire input has been parsed (CSV, TSV, JSON, or NDJSON);
+///       on success prints "OK: <n> rows, <m> columns (<col> <TYPE>, ...)" to stdout.
+///       On parse error, prints the error message to stderr and exits 2.
 fn runValidate(
     args: ValidateArgs,
     allocator: std.mem.Allocator,
@@ -1771,6 +1781,20 @@ pub fn main(init: std.process.Init.Minimal) void {
             },
             error.OutputWithColumns => {
                 stderr_writer.writeAll("error: --output cannot be combined with --columns\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.OutputWithValidate => {
+                stderr_writer.writeAll("error: --output cannot be combined with --validate\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.ValidateWithColumns => {
+                stderr_writer.writeAll("error: --validate cannot be combined with --columns\n") catch |werr| {
                     std.log.err("failed to write error message: {}", .{werr});
                 };
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});

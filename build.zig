@@ -849,6 +849,33 @@ pub fn build(b: *std.Build) void {
     test_validate_json_error.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_validate_json_error.step);
 
+    // Integration test 82: --validate --output exits 1 with error
+    const test_validate_output_conflict = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate --output /tmp/x 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --output cannot be combined with --validate' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_validate_output_conflict.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_output_conflict.step);
+
+    // Integration test 83: --validate --columns exits 1 with error
+    const test_validate_columns_conflict = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate --columns 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --validate cannot be combined with --columns' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_validate_columns_conflict.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_columns_conflict.step);
+
+    // Integration test 84: --validate on invalid NDJSON exits 2
+    const test_validate_ndjson_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '{"id":1}\n{broken}\n' | ./zig-out/bin/sql-pipe --validate -I ndjson 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_validate_ndjson_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_ndjson_error.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
