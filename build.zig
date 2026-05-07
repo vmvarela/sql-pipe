@@ -977,6 +977,40 @@ pub fn build(b: *std.Build) void {
     test_sample_fewer_rows.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_sample_fewer_rows.step);
 
+    // Integration test 95: 2-char delimiter (||) splits fields correctly
+    const test_delimiter_double_pipe = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name||age\nAlice||30\nBob||25\n' | ./zig-out/bin/sql-pipe --delimiter '||' 'SELECT name, age FROM t ORDER BY age' | diff - <(printf 'Bob,25\nAlice,30\n')
+    });
+    test_delimiter_double_pipe.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_delimiter_double_pipe.step);
+
+    // Integration test 96: 3-char delimiter (;;;) splits fields correctly
+    const test_delimiter_three_char = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name;;;age\nAlice;;;30\nBob;;;25\n' | ./zig-out/bin/sql-pipe --delimiter ';;;' 'SELECT name, age FROM t ORDER BY age' | diff - <(printf 'Bob,25\nAlice,30\n')
+    });
+    test_delimiter_three_char.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_delimiter_three_char.step);
+
+    // Integration test 97: empty delimiter string exits 1 with error
+    const test_delimiter_empty_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe -d '' 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_delimiter_empty_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_delimiter_empty_error.step);
+
+    // Integration test 98: delimiter longer than 8 chars exits 1 with error
+    const test_delimiter_too_long_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe -d '123456789' 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_delimiter_too_long_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_delimiter_too_long_error.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

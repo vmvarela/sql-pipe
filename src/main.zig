@@ -81,8 +81,8 @@ const ParsedArgs = struct {
     query: []const u8,
     /// Infer column types from the first 100 buffered rows when true.
     type_inference: bool,
-    /// CSV field delimiter (default: ',').
-    delimiter: u8,
+    /// CSV field delimiter — 1 to 8 bytes (default: ",").
+    delimiter: []const u8,
     /// Emit column names as first output row when true (CSV output only).
     header: bool,
     /// Input format (default: csv).
@@ -102,8 +102,8 @@ const ParsedArgs = struct {
 
 /// Arguments for `--columns` mode.
 const ColumnsArgs = struct {
-    /// CSV field delimiter (default: ',').
-    delimiter: u8,
+    /// CSV field delimiter — 1 to 8 bytes (default: ",").
+    delimiter: []const u8,
     /// Show inferred type alongside name when true.
     verbose: bool,
     /// Input format (default: csv).
@@ -112,8 +112,8 @@ const ColumnsArgs = struct {
 
 /// Arguments for `--validate` mode.
 const ValidateArgs = struct {
-    /// CSV field delimiter (default: ',').
-    delimiter: u8,
+    /// CSV field delimiter — 1 to 8 bytes (default: ",").
+    delimiter: []const u8,
     /// Infer column types from the first 100 buffered rows when true.
     type_inference: bool,
     /// Input format (default: csv).
@@ -122,8 +122,8 @@ const ValidateArgs = struct {
 
 /// Arguments for `--sample` mode.
 const SampleArgs = struct {
-    /// CSV field delimiter (default: ',').
-    delimiter: u8,
+    /// CSV field delimiter — 1 to 8 bytes (default: ",").
+    delimiter: []const u8,
     /// Input format (default: csv).
     input_format: InputFormat,
     /// Number of sample rows to print (default: 10).
@@ -161,7 +161,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\runs <query>, and prints results to stdout.
         \\
         \\Options:
-        \\  -d, --delimiter <char>       Input field delimiter for CSV (default: ,)
+        \\  -d, --delimiter <string>     Input field delimiter for CSV: 1–8 chars (default: ,)
         \\  --tsv                        Alias for --delimiter '\t'
         \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson
         \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson
@@ -207,14 +207,15 @@ fn printUsage(writer: *std.Io.Writer) !void {
     );
 }
 
-/// parseDelimiter(value) → u8
+/// parseDelimiter(value) → []const u8
 /// Pre:  value is the delimiter token provided by the user
-/// Post: result is a single-byte delimiter, or '\t' when value = "\\t"
-///       error.InvalidDelimiter when value is empty or has more than one char
-fn parseDelimiter(value: []const u8) SqlPipeError!u8 {
-    if (std.mem.eql(u8, value, "\\t")) return '\t';
-    if (value.len != 1) return error.InvalidDelimiter;
-    return value[0];
+/// Post: result is a 1–8 byte delimiter string, or "\t" when value = "\\t"
+///       error.InvalidDelimiter when value is empty or longer than 8 bytes
+fn parseDelimiter(value: []const u8) SqlPipeError![]const u8 {
+    if (std.mem.eql(u8, value, "\\t")) return "\t";
+    if (value.len == 0) return error.InvalidDelimiter;
+    if (value.len > 8) return error.InvalidDelimiter;
+    return value;
 }
 
 /// parseInputFormat(s) → InputFormat
@@ -253,7 +254,7 @@ fn parseOutputFormat(s: []const u8) SqlPipeError!OutputFormat {
 fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
-    var delimiter: u8 = ',';
+    var delimiter: []const u8 = ",";
     var header = false;
     var input_format: InputFormat = .csv;
     var output_format: OutputFormat = .csv;
@@ -284,7 +285,7 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) {
             return .version;
         } else if (std.mem.eql(u8, arg, "--tsv")) {
-            delimiter = '\t';
+            delimiter = "\t";
         } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--delimiter")) {
             i += 1;
             if (i >= args.len) return error.InvalidDelimiter;
@@ -789,20 +790,20 @@ fn insertRowTyped(
 /// printRow(stmt, col_count, writer, delimiter) → !void
 /// Pre:  sqlite3_step returned SQLITE_ROW for stmt
 ///       col_count = sqlite3_column_count(stmt) > 0
-///       delimiter is the field separator character (e.g. ',' or '\t')
+///       delimiter is the field separator string (e.g. "," or "\t")
 /// Post: one delimited line written to writer with col_count values;
 ///       NULL cells rendered as the literal string "NULL"
 fn printRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
     writer: *std.Io.Writer,
-    delimiter: u8,
+    delimiter: []const u8,
 ) !void {
     // Loop invariant I: columns 0..i-1 have been written, separated by delimiter
     // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
-        if (i > 0) try writer.writeByte(delimiter);
+        if (i > 0) try writer.writeAll(delimiter);
         if (c.sqlite3_column_type(stmt, i) == c.SQLITE_NULL) {
             try writer.writeAll("NULL");
         } else {
@@ -819,19 +820,14 @@ fn printRow(
 
 /// writeField(writer, value, delimiter) → !void
 /// Pre:  writer is a valid writer, value is a valid UTF-8 slice
-///       delimiter is the field separator character (e.g. ',' or '\t')
+///       delimiter is the field separator string (e.g. "," or "\t" or "||")
 /// Post: value is written to writer as a single delimited field:
-///       if value contains the delimiter, double-quote, or newline, it is enclosed
-///       in double-quotes with internal quotes escaped as "" (RFC 4180);
+///       if value contains the delimiter string, double-quote, or newline, it is
+///       enclosed in double-quotes with internal quotes escaped as "" (RFC 4180);
 ///       otherwise it is written verbatim
-fn writeField(writer: *std.Io.Writer, value: []const u8, delimiter: u8) !void {
-    var needs_quoting = false;
-    for (value) |ch| {
-        if (ch == delimiter or ch == '"' or ch == '\n' or ch == '\r') {
-            needs_quoting = true;
-            break;
-        }
-    }
+fn writeField(writer: *std.Io.Writer, value: []const u8, delimiter: []const u8) !void {
+    const needs_quoting = std.mem.indexOf(u8, value, delimiter) != null or
+        std.mem.indexOfAny(u8, value, "\"\n\r") != null;
     if (needs_quoting) {
         try writer.writeByte('"');
         for (value) |ch| {
@@ -846,7 +842,7 @@ fn writeField(writer: *std.Io.Writer, value: []const u8, delimiter: u8) !void {
 
 /// printHeaderRow(stmt, col_count, writer, delimiter) → !void
 /// Pre:  stmt is a prepared statement, col_count > 0
-///       delimiter is the field separator character (e.g. ',' or '\t')
+///       delimiter is the field separator string (e.g. "," or "\t")
 /// Post: one delimited line with col_count column names written to writer;
 ///       names are obtained from sqlite3_column_name (alias or original);
 ///       fields are RFC 4180 quoted when they contain special characters
@@ -854,13 +850,13 @@ fn printHeaderRow(
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
     writer: *std.Io.Writer,
-    delimiter: u8,
+    delimiter: []const u8,
 ) !void {
     // Loop invariant I: columns 0..i-1 names have been written, separated by delimiter
     // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
-        if (i > 0) try writer.writeByte(delimiter);
+        if (i > 0) try writer.writeAll(delimiter);
         const name_ptr = c.sqlite3_column_name(stmt, i);
         if (name_ptr != null) {
             const name = std.mem.span(@as([*:0]const u8, @ptrCast(name_ptr)));
@@ -934,7 +930,7 @@ fn execQuery(
             }
         },
         .csv, .tsv => {
-            const out_delim: u8 = if (output_format == .tsv) '\t' else ',';
+            const out_delim: []const u8 = if (output_format == .tsv) "\t" else ",";
 
             // When header is requested, print column names before data rows
             if (header and col_count > 0) {
@@ -1293,7 +1289,7 @@ fn runColumns(
 ) void {
     switch (args.input_format) {
         .csv, .tsv => {
-            const col_delim: u8 = if (args.input_format == .tsv) '\t' else args.delimiter;
+            const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
             var stdin_buf: [4096]u8 = undefined;
             var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
             var csv_reader = csv.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, col_delim);
@@ -1456,7 +1452,7 @@ fn runValidate(
 ) void {
     switch (args.input_format) {
         .csv, .tsv => {
-            const col_delim: u8 = if (args.input_format == .tsv) '\t' else args.delimiter;
+            const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
             var stdin_buf: [4096]u8 = undefined;
             var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
             var csv_reader = csv.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, col_delim);
@@ -1732,7 +1728,7 @@ fn runSample(
             .{},
         ),
         .csv, .tsv => {
-            const col_delim: u8 = if (args.input_format == .tsv) '\t' else args.delimiter;
+            const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
             var stdin_buf: [4096]u8 = undefined;
             var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
             var csv_reader = csv.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, col_delim);
@@ -1828,7 +1824,7 @@ fn runSample(
             // Loop invariant I: cols[0..i] names have been written, separated by col_delim
             // Bounding function: cols.len - i
             for (cols, 0..) |col, i| {
-                if (i > 0) stdout_writer.writeByte(col_delim) catch
+                if (i > 0) stdout_writer.writeAll(col_delim) catch
                     fatal("failed to write header", stderr_writer, .csv_error, .{});
                 writeField(stdout_writer, col, col_delim) catch
                     fatal("failed to write header", stderr_writer, .csv_error, .{});
@@ -1845,7 +1841,7 @@ fn runSample(
                 // Loop invariant I: cols[0..col_idx] fields have been written for this row
                 // Bounding function: cols.len - col_idx
                 while (col_idx < cols.len) : (col_idx += 1) {
-                    if (col_idx > 0) stdout_writer.writeByte(col_delim) catch
+                    if (col_idx > 0) stdout_writer.writeAll(col_delim) catch
                         fatal("failed to write field separator", stderr_writer, .csv_error, .{});
                     const val: []const u8 = if (col_idx < row.len) row[col_idx] else "";
                     writeField(stdout_writer, val, col_delim) catch
@@ -1885,7 +1881,7 @@ fn run(
         .tsv => blk: {
             // TSV is CSV with tab delimiter; override delimiter and reuse the CSV loader
             var tsv_parsed = parsed;
-            tsv_parsed.delimiter = '\t';
+            tsv_parsed.delimiter = "\t";
             break :blk loadCsvInput(allocator, io, db, tsv_parsed, stderr_writer);
         },
         .json => blk: {

@@ -173,13 +173,16 @@ Column names with spaces work — quote them in SQL:
 $ cat report.csv | sql-pipe 'SELECT "first name", "last name" FROM t WHERE "dept id" = "42"'
 ```
 
-Use a custom input delimiter with `-d` / `--delimiter` (single character), or `--tsv` for tab-separated files:
+Use a custom input delimiter with `-d` / `--delimiter` (1–8 characters), or `--tsv` for tab-separated files:
 
 ```sh
 $ cat data.psv | sql-pipe -d '|' 'SELECT * FROM t'
 $ cat data.tsv | sql-pipe --tsv 'SELECT * FROM t'
 # equivalent:
 $ cat data.tsv | sql-pipe --delimiter '\t' 'SELECT * FROM t'
+# multi-character delimiters:
+$ cat data.psv | sql-pipe -d '||' 'SELECT * FROM t'
+$ cat report.txt | sql-pipe --delimiter '  ' 'SELECT * FROM t'   # two spaces
 ```
 
 Output results as a JSON array of objects with `--json`:
