@@ -1,35 +1,8 @@
-# Labels are applied based on PR title prefix (Conventional Commits) and branch name.
-# File-based rules are intentionally omitted: they cause multiple type:* labels to be
-# applied to a single PR, which leads to duplicate entries in release notes.
-
-"type:feature":
-  - head-branch:
-      - "/^feat/"
-  - title:
-      - "/^feat(\\(.+\\))?:/i"
-
-"type:bug":
-  - head-branch:
-      - "/^fix/"
-  - title:
-      - "/^fix(\\(.+\\))?:/i"
-
-"type:chore":
-  - head-branch:
-      - "/^chore/"
-      - "/^ci/"
-      - "/^test/"
-      - "/^refactor/"
-      - "/^build/"
-  - title:
-      - "/^chore(\\(.+\\))?:/i"
-      - "/^ci(\\(.+\\))?:/i"
-      - "/^test(\\(.+\\))?:/i"
-      - "/^refactor(\\(.+\\))?:/i"
-      - "/^build(\\(.+\\))?:/i"
-
-"type:docs":
-  - head-branch:
-      - "/^docs/"
-  - title:
-      - "/^docs(\\(.+\\))?:/i"
+# Label configuration — informational only.
+# Type labels (type:feature, type:bug, type:chore, type:docs) are applied by
+# the labeler workflow via github-script, matching the PR title against
+# Conventional Commits prefixes (feat:, fix:, chore:, docs:, etc.).
+#
+# File-based and branch-based rules are intentionally omitted:
+#   - File-based rules cause multiple type:* labels per PR → duplicate release notes.
+#   - Branch names follow issue-N/description, not feat/fix/... prefixes.

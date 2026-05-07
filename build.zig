@@ -876,6 +876,107 @@ pub fn build(b: *std.Build) void {
     test_validate_ndjson_error.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_validate_ndjson_error.step);
 
+    // ─── --sample integration tests ─────────────────────────────────────────
+
+    // Integration test 85: --sample 3 outputs header + exactly 3 data rows to stdout
+    const test_sample_row_count = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,region,amount\n1,east,100\n2,west,200\n3,north,300\n4,south,400\n' \
+        \\    | ./zig-out/bin/sql-pipe --sample 3 2>/dev/null)
+        \\expected=$(printf 'id,region,amount\n1,east,100\n2,west,200\n3,north,300')
+        \\[ "$result" = "$expected" ]
+    });
+    test_sample_row_count.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_row_count.step);
+
+    // Integration test 86: schema block goes to stderr, not stdout
+    const test_sample_stdout_no_schema = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\stdout=$(printf 'id,name\n1,Alice\n2,Bob\n' | ./zig-out/bin/sql-pipe --sample 1 2>/dev/null)
+        \\echo "$stdout" | grep -qv '^#'
+        \\echo "$stdout" | grep -q 'id,name'
+    });
+    test_sample_stdout_no_schema.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_stdout_no_schema.step);
+
+    // Integration test 87: schema block appears on stderr with correct header
+    const test_sample_stderr_schema = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\stderr=$(printf 'id,amount,name\n1,3.14,Alice\n' | ./zig-out/bin/sql-pipe --sample 1 2>&1 >/dev/null)
+        \\echo "$stderr" | grep -q '^# Schema (3 columns):' \
+        \\    && echo "$stderr" | grep -q 'id.*INTEGER' \
+        \\    && echo "$stderr" | grep -q 'amount.*REAL' \
+        \\    && echo "$stderr" | grep -q 'name.*TEXT'
+    });
+    test_sample_stderr_schema.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_stderr_schema.step);
+
+    // Integration test 88: --sample=n (equals syntax) works
+    const test_sample_equals_syntax = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a,b\n1,2\n3,4\n5,6\n' | ./zig-out/bin/sql-pipe --sample=2 2>/dev/null)
+        \\expected=$(printf 'a,b\n1,2\n3,4')
+        \\[ "$result" = "$expected" ]
+    });
+    test_sample_equals_syntax.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_equals_syntax.step);
+
+    // Integration test 89: --sample 0 exits 1 with error message
+    const test_sample_zero = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --sample 0 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error:' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_sample_zero.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_zero.step);
+
+    // Integration test 90: --sample combined with a query argument exits 1 with error
+    const test_sample_with_query = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --sample 5 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --sample cannot be combined with a query argument' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_sample_with_query.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_with_query.step);
+
+    // Integration test 91: --sample combined with --output exits 1 with error
+    const test_sample_with_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --sample 5 --output /tmp/sp_test_out.csv 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --sample cannot be combined with --output' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_sample_with_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_with_output.step);
+
+    // Integration test 92: --sample works with --tsv input (output uses tab delimiter)
+    const test_sample_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a\tb\n1\t2\n3\t4\n' | ./zig-out/bin/sql-pipe --sample 1 --tsv 2>/dev/null)
+        \\expected=$(printf 'a\tb\n1\t2')
+        \\[ "$result" = "$expected" ]
+    });
+    test_sample_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_tsv.step);
+
+    // Integration test 93: --sample --no-type-inference shows all columns as TEXT
+    const test_sample_no_type_inference = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\stderr=$(printf 'id,amount\n1,3.14\n' | ./zig-out/bin/sql-pipe --sample 1 --no-type-inference 2>&1 >/dev/null)
+        \\echo "$stderr" | grep -q 'id.*TEXT' && echo "$stderr" | grep -q 'amount.*TEXT'
+    });
+    test_sample_no_type_inference.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_no_type_inference.step);
+
+    // Integration test 94: --sample with fewer rows than n outputs only available rows
+    const test_sample_fewer_rows = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'x,y\n10,20\n' | ./zig-out/bin/sql-pipe --sample 50 2>/dev/null)
+        \\expected=$(printf 'x,y\n10,20')
+        \\[ "$result" = "$expected" ]
+    });
+    test_sample_fewer_rows.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sample_fewer_rows.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

@@ -6,6 +6,7 @@ NAME
 SYNOPSIS
 	*sql-pipe* [OPTIONS] <query>
 	*sql-pipe* --columns [OPTIONS]
+	*sql-pipe* --sample [<n>] [OPTIONS]
 
 DESCRIPTION
 	sql-pipe reads CSV data from standard input, loads it into an in-memory SQLite
@@ -87,6 +88,18 @@ OPTIONS
 		for each column, using the first 100 data rows for inference. Respects
 		*--delimiter* and *--tsv*. Mutually exclusive with a query argument.
 
+	*--sample* [<n>]
+		Print a schema comment block to standard error and the first <n> data
+		rows to standard output as delimited text (default: 10 rows if no value
+		is given). The schema block lists each column name and its inferred
+		SQLite type (INTEGER, REAL, or TEXT), each line prefixed with *#* so it
+		is ignored by downstream CSV parsers. Column header is always printed as
+		the first output row (implies *--header*). Type inference reads up to
+		100 rows or <n> rows, whichever is larger, before emitting output.
+		Compatible with *--delimiter* and *--tsv*. Mutually exclusive with
+		*--json*, *--columns*, *--validate*, and a query argument. CSV and TSV
+		input only.
+
 	*--output* <file>
 		Write results to <file> instead of standard output. Creates or
 		overwrites the file. Compatible with all output modes (*--json*,
@@ -142,6 +155,21 @@ EXAMPLES
 
 	Output:++
 	[{"name":"Alice","age":30},{"name":"Bob","age":25}]
+
+	Preview schema and first 3 rows of a CSV file:
+
+		$ cat sales.csv | sql-pipe --sample 3
+
+	Output on stderr:++
+	# Schema (3 columns):++
+	#   id       INTEGER++
+	#   region   TEXT++
+	#   amount   REAL++
+	Output on stdout:++
+	id,region,amount++
+	1,North,1250.00++
+	2,South,875.50++
+	3,East,2100.75
 
 EXIT CODES
 	*0*
