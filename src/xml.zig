@@ -30,86 +30,17 @@
 const std = @import("std");
 const c = @import("c");
 
-/// SQLITE_STATIC: caller manages string lifetime; SQLite must not free it.
-const sqlite_static: c.sqlite3_destructor_type = null;
+const sqlite_helpers = @import("sqlite.zig");
 
-const exit_usage: u8 = 1;
-const exit_parse: u8 = 2;
-const exit_sql: u8 = 3;
-
-fn fatal(comptime fmt: []const u8, writer: *std.Io.Writer, code: u8, args: anytype) noreturn {
-    writer.print("error: " ++ fmt ++ "\n", args) catch |err| std.log.err("failed to write error: {}", .{err});
-    writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
-    std.process.exit(code);
-}
-
-fn createAllTextTable(
-    allocator: std.mem.Allocator,
-    db: *c.sqlite3,
-    cols: []const []const u8,
-    writer: *std.Io.Writer,
-) void {
-    var sql: std.ArrayList(u8) = .empty;
-    defer sql.deinit(allocator);
-    sql.appendSlice(allocator, "CREATE TABLE t (") catch fatal("out of memory", writer, exit_parse, .{});
-    for (cols, 0..) |col, i| {
-        if (i > 0) sql.appendSlice(allocator, ", ") catch fatal("out of memory", writer, exit_parse, .{});
-        sql.append(allocator, '"') catch fatal("out of memory", writer, exit_parse, .{});
-        for (col) |ch| {
-            if (ch == '"') sql.append(allocator, '"') catch fatal("out of memory", writer, exit_parse, .{});
-            sql.append(allocator, ch) catch fatal("out of memory", writer, exit_parse, .{});
-        }
-        sql.appendSlice(allocator, "\" TEXT") catch fatal("out of memory", writer, exit_parse, .{});
-    }
-    sql.appendSlice(allocator, ")") catch fatal("out of memory", writer, exit_parse, .{});
-    sql.append(allocator, 0) catch fatal("out of memory", writer, exit_parse, .{});
-    var errmsg: [*c]u8 = null;
-    if (c.sqlite3_exec(db, sql.items.ptr, null, null, &errmsg) != c.SQLITE_OK) {
-        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-        if (errmsg != null) c.sqlite3_free(errmsg);
-        fatal("{s}", writer, exit_sql, .{msg});
-    }
-}
-
-fn prepareInsertStmt(
-    allocator: std.mem.Allocator,
-    db: *c.sqlite3,
-    n: usize,
-    writer: *std.Io.Writer,
-) *c.sqlite3_stmt {
-    var sql: std.ArrayList(u8) = .empty;
-    defer sql.deinit(allocator);
-    sql.appendSlice(allocator, "INSERT INTO t VALUES (") catch fatal("out of memory", writer, exit_parse, .{});
-    for (0..n) |i| {
-        if (i > 0) sql.append(allocator, ',') catch fatal("out of memory", writer, exit_parse, .{});
-        sql.append(allocator, '?') catch fatal("out of memory", writer, exit_parse, .{});
-    }
-    sql.appendSlice(allocator, ")") catch fatal("out of memory", writer, exit_parse, .{});
-    sql.append(allocator, 0) catch fatal("out of memory", writer, exit_parse, .{});
-    var stmt: ?*c.sqlite3_stmt = null;
-    if (c.sqlite3_prepare_v2(db, sql.items.ptr, -1, &stmt, null) != c.SQLITE_OK)
-        fatal("{s}", writer, exit_sql, .{std.mem.span(c.sqlite3_errmsg(db))});
-    return stmt.?;
-}
-
-fn beginTransaction(db: *c.sqlite3, writer: *std.Io.Writer) void {
-    var errmsg: [*c]u8 = null;
-    if (c.sqlite3_exec(db, "BEGIN TRANSACTION", null, null, &errmsg) != c.SQLITE_OK) {
-        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-        if (errmsg != null) c.sqlite3_free(errmsg);
-        fatal("{s}", writer, exit_sql, .{msg});
-    }
-}
-
-fn commitTransaction(db: *c.sqlite3, writer: *std.Io.Writer) void {
-    var errmsg: [*c]u8 = null;
-    if (c.sqlite3_exec(db, "COMMIT", null, null, &errmsg) != c.SQLITE_OK) {
-        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-        if (errmsg != null) c.sqlite3_free(errmsg);
-        fatal("{s}", writer, exit_sql, .{msg});
-    }
-    if (errmsg != null) c.sqlite3_free(errmsg);
-}
+const createAllTextTable = sqlite_helpers.createAllTextTable;
+const prepareInsertStmt = sqlite_helpers.prepareInsertStmt;
+const beginTransaction = sqlite_helpers.beginTransaction;
+const commitTransaction = sqlite_helpers.commitTransaction;
+const fatal = sqlite_helpers.fatal;
+const exit_usage = sqlite_helpers.exit_usage;
+const exit_parse = sqlite_helpers.exit_parse;
+const exit_sql = sqlite_helpers.exit_sql;
+const sqlite_static = sqlite_helpers.sqlite_static;
 
 // ─── XML escaping ─────────────────────────────────────
 
@@ -160,8 +91,36 @@ fn decodeEntities(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
             } else if (std.mem.startsWith(u8, s[i..], "&apos;")) {
                 try out.append(allocator, '\'');
                 i += 6;
+            } else if (std.mem.startsWith(u8, s[i..], "&#")) {
+                // Numeric character reference: &#NNN; (decimal) or &#xNNN; (hex)
+                const ref_start = i;
+                i += 2; // past "&#"
+                const is_hex = i < s.len and (s[i] == 'x' or s[i] == 'X');
+                if (is_hex) i += 1;
+                const digits_start = i;
+                while (i < s.len and s[i] != ';') : (i += 1) {}
+                if (i < s.len and i > digits_start) {
+                    const digits = s[digits_start..i];
+                    i += 1; // past ';'
+                    const codepoint = if (is_hex)
+                        std.fmt.parseInt(u21, digits, 16) catch null
+                    else
+                        std.fmt.parseInt(u21, digits, 10) catch null;
+                    if (codepoint) |cp| {
+                        var utf8_buf: [4]u8 = undefined;
+                        const len = std.unicode.utf8Encode(cp, &utf8_buf) catch {
+                            // Invalid codepoint — pass through as-is
+                            try out.appendSlice(allocator, s[ref_start..i]);
+                            continue;
+                        };
+                        try out.appendSlice(allocator, utf8_buf[0..len]);
+                        continue;
+                    }
+                }
+                // Malformed numeric reference — pass through as-is
+                try out.appendSlice(allocator, s[ref_start..i]);
             } else {
-                // Unknown or numeric entity — pass through as-is
+                // Unknown named entity — pass through as-is
                 try out.append(allocator, s[i]);
                 i += 1;
             }
@@ -369,12 +328,17 @@ pub const XmlParser = struct {
     /// Read an XML name; fatal if the current position is not the start of a name.
     fn readName(self: *XmlParser, err_writer: *std.Io.Writer) []const u8 {
         const start = self.pos;
-        // XML name: letter/'_' first, then letter/digit/'-'/'.'/'_'/':'
+        // XML NameStartChar: letter, '_', ':' (digits not allowed as first char)
+        const first = self.peek() orelse self.fatalAt("expected element name", err_writer, .{});
+        switch (first) {
+            'a'...'z', 'A'...'Z', '_', ':' => self.advance(),
+            else => self.fatalAt("expected element name", err_writer, .{}),
+        }
+        // NameChar: letter, digit, '-', '.', '_', ':'
         while (self.peek()) |ch| switch (ch) {
             'a'...'z', 'A'...'Z', '0'...'9', '-', '.', '_', ':' => self.advance(),
             else => break,
         };
-        if (self.pos == start) self.fatalAt("expected element name", err_writer, .{});
         return self.data[start..self.pos];
     }
 
@@ -813,4 +777,163 @@ pub fn loadXmlInput(
     if (col_names == null) fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
     if (in_transaction) commitTransaction(db, stderr_writer);
     return rows_inserted;
+}
+
+// ─── Unit tests ───────────────────────────────────────
+
+test "decodeEntities: predefined XML entities" {
+    const allocator = std.testing.allocator;
+    const result = try decodeEntities(allocator, "&amp;&lt;&gt;&quot;&apos;");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("&<>\"'", result);
+}
+
+test "decodeEntities: plain text unchanged" {
+    const allocator = std.testing.allocator;
+    const result = try decodeEntities(allocator, "hello world");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("hello world", result);
+}
+
+test "decodeEntities: unknown entity passthrough" {
+    const allocator = std.testing.allocator;
+    const result = try decodeEntities(allocator, "&copy;");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("&copy;", result);
+}
+
+test "decodeEntities: numeric decimal reference" {
+    const allocator = std.testing.allocator;
+    const result = try decodeEntities(allocator, "&#65;"); // 'A'
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("A", result);
+}
+
+test "decodeEntities: numeric hex reference" {
+    const allocator = std.testing.allocator;
+    const result = try decodeEntities(allocator, "&#x41;"); // 'A'
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("A", result);
+}
+
+test "writeXmlEscaped: escapes special characters" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try writeXmlEscaped(&writer, "a&b<c>d\"e'f");
+    const written = std.Io.Writer.buffered(&writer);
+    try std.testing.expectEqualStrings("a&amp;b&lt;c&gt;d&quot;e&apos;f", written);
+}
+
+test "writeXmlEscaped: plain text unchanged" {
+    var buf: [64]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try writeXmlEscaped(&writer, "hello world 123");
+    const written = std.Io.Writer.buffered(&writer);
+    try std.testing.expectEqualStrings("hello world 123", written);
+}
+
+test "writeXmlHeader and writeXmlFooter" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try writeXmlHeader(&writer, "results");
+    try writeXmlFooter(&writer, "results");
+    const written = std.Io.Writer.buffered(&writer);
+    try std.testing.expectEqualStrings(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<results>\n</results>\n",
+        written,
+    );
+}
+
+test "XmlParser.nextRow: simple row with two columns" {
+    const allocator = std.testing.allocator;
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<results><row><name>Alice</name><age>30</age></row></results>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    const root = p.readRootOpen(&err_writer);
+    try std.testing.expectEqualStrings("results", root);
+
+    const cols = try p.nextRow(allocator, root, &err_writer);
+    try std.testing.expect(cols != null);
+    defer {
+        for (cols.?) |col| if (col.value) |v| allocator.free(v);
+        allocator.free(cols.?);
+    }
+    try std.testing.expectEqual(@as(usize, 2), cols.?.len);
+    try std.testing.expectEqualStrings("name", cols.?[0].name);
+    try std.testing.expectEqualStrings("Alice", cols.?[0].value.?);
+    try std.testing.expectEqualStrings("age", cols.?[1].name);
+    try std.testing.expectEqualStrings("30", cols.?[1].value.?);
+
+    // No more rows
+    const next = try p.nextRow(allocator, root, &err_writer);
+    try std.testing.expect(next == null);
+}
+
+test "XmlParser.nextRow: self-closing column is null" {
+    const allocator = std.testing.allocator;
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<r><row><name/><age>5</age></row></r>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    const root = p.readRootOpen(&err_writer);
+
+    const cols = try p.nextRow(allocator, root, &err_writer);
+    try std.testing.expect(cols != null);
+    defer {
+        for (cols.?) |col| if (col.value) |v| allocator.free(v);
+        allocator.free(cols.?);
+    }
+    try std.testing.expectEqual(@as(usize, 2), cols.?.len);
+    try std.testing.expectEqualStrings("name", cols.?[0].name);
+    try std.testing.expect(cols.?[0].value == null); // self-closing → null
+    try std.testing.expectEqualStrings("5", cols.?[1].value.?);
+}
+
+test "XmlParser.nextRow: entities decoded in content" {
+    const allocator = std.testing.allocator;
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<r><row><val>Alice &amp; Bob &lt;test&gt;</val></row></r>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    const root = p.readRootOpen(&err_writer);
+
+    const cols = try p.nextRow(allocator, root, &err_writer);
+    try std.testing.expect(cols != null);
+    defer {
+        for (cols.?) |col| if (col.value) |v| allocator.free(v);
+        allocator.free(cols.?);
+    }
+    try std.testing.expectEqualStrings("Alice & Bob <test>", cols.?[0].value.?);
+}
+
+test "XmlParser.nextRow: empty document returns null" {
+    const allocator = std.testing.allocator;
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<r></r>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    const root = p.readRootOpen(&err_writer);
+
+    const cols = try p.nextRow(allocator, root, &err_writer);
+    try std.testing.expect(cols == null);
+}
+
+test "XmlParser: XML declaration in prologue" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<results></results>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    const root = p.readRootOpen(&err_writer);
+    try std.testing.expectEqualStrings("results", root);
 }

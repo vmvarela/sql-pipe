@@ -27,6 +27,8 @@ const SqlPipeError = error{
     InvalidMaxRows,
     InvalidInputFormat,
     InvalidOutputFormat,
+    MissingXmlFlagValue,
+    InvalidXmlName,
     OpenDbFailed,
     EmptyInput,
     EmptyColumnName,
@@ -251,6 +253,26 @@ fn parseOutputFormat(s: []const u8) SqlPipeError!OutputFormat {
     return error.InvalidOutputFormat;
 }
 
+/// isValidXmlName(s) → bool
+///
+/// Returns true iff s is a valid XML Name:
+///   NameStartChar: letter, '_', ':'
+///   NameChar: NameStartChar | digit | '-' | '.'
+fn isValidXmlName(s: []const u8) bool {
+    if (s.len == 0) return false;
+    switch (s[0]) {
+        'a'...'z', 'A'...'Z', '_', ':' => {},
+        else => return false,
+    }
+    for (s[1..]) |ch| {
+        switch (ch) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '.', '_', ':' => {},
+            else => return false,
+        }
+    }
+    return true;
+}
+
 /// parseArgs(args) → ArgsResult
 /// Pre:  args is the full process argument slice; args[0] is the program name
 /// Post: result.parsed.query is the first non-flag argument
@@ -376,13 +398,13 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             output = trimmed;
         } else if (std.mem.eql(u8, arg, "--xml-root")) {
             i += 1;
-            if (i >= args.len) return error.MissingQuery;
+            if (i >= args.len) return error.MissingXmlFlagValue;
             xml_root = args[i];
         } else if (std.mem.startsWith(u8, arg, "--xml-root=")) {
             xml_root = arg["--xml-root=".len..];
         } else if (std.mem.eql(u8, arg, "--xml-row")) {
             i += 1;
-            if (i >= args.len) return error.MissingQuery;
+            if (i >= args.len) return error.MissingXmlFlagValue;
             xml_row = args[i];
         } else if (std.mem.startsWith(u8, arg, "--xml-row=")) {
             xml_row = arg["--xml-row=".len..];
@@ -438,6 +460,10 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     // --silent and --verbose are mutually exclusive
     if (silent and verbose)
         return error.SilentVerboseConflict;
+
+    // --xml-root and --xml-row must be valid XML element names
+    if (!isValidXmlName(xml_root) or !isValidXmlName(xml_row))
+        return error.InvalidXmlName;
 
     // --columns mode: list headers and exit
     if (list_columns)
@@ -1818,7 +1844,7 @@ fn runSample(
 ) void {
     switch (args.input_format) {
         .json, .ndjson, .xml => fatal(
-            "--sample only supports CSV and TSV input; use -I csv (default) or --tsv",
+            "--sample is only supported with CSV and TSV input",
             stderr_writer,
             .usage,
             .{},
@@ -2160,6 +2186,20 @@ pub fn main(init: std.process.Init.Minimal) void {
                 stderr_writer.writeAll("error: --sample requires a positive integer value\n") catch |werr| {
                     std.log.err("failed to write error message: {}", .{werr});
                 };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.MissingXmlFlagValue => {
+                stderr_writer.writeAll(
+                    "error: --xml-root and --xml-row require a value\n",
+                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.InvalidXmlName => {
+                stderr_writer.writeAll(
+                    "error: --xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)\n",
+                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
             },
