@@ -38,6 +38,11 @@ const SqlPipeError = error{
     PrepareQueryFailed,
     InvalidOutputPath,
     OutputWithColumns,
+    SampleWithQuery,
+    SampleWithJson,
+    SampleWithColumns,
+    SampleWithValidate,
+    InvalidSampleCount,
 };
 
 // ─── Column type inference ────────────────────────────
@@ -114,6 +119,16 @@ const ValidateArgs = struct {
     input_format: InputFormat,
 };
 
+/// Arguments for `--sample` mode.
+const SampleArgs = struct {
+    /// CSV field delimiter (default: ',').
+    delimiter: u8,
+    /// Input format (default: csv).
+    input_format: InputFormat,
+    /// Number of sample rows to print (default: 10).
+    n: usize,
+};
+
 /// Result of argument parsing — either parsed arguments or a special action.
 const ArgsResult = union(enum) {
     /// Normal execution: run the query.
@@ -126,6 +141,8 @@ const ArgsResult = union(enum) {
     columns: ColumnsArgs,
     /// User requested --validate: parse input and print summary.
     validate: ValidateArgs,
+    /// User requested --sample: print schema + first n rows and exit.
+    sample: SampleArgs,
 };
 
 // ─── Extracted functions ──────────────────────────────
@@ -160,6 +177,10 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  --columns                    List column names from input header (one per line) and exit
         \\                               Combine with -v/--verbose to include inferred types
         \\                               Cannot be combined with --output or a query argument
+        \\  --sample [<n>]               Print schema to stderr and first <n> rows to stdout (default: 10)
+        \\                               Schema lists column names and inferred types, prefixed with #
+        \\                               Implies --header. Compatible with --delimiter and --tsv.
+        \\                               Mutually exclusive with --json and a query argument.
         \\  --output <file>              Write results to file instead of stdout
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
@@ -178,6 +199,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  cat data.csv | sql-pipe --output-format json 'SELECT * FROM t'
         \\  cat data.json | sql-pipe --input-format json 'SELECT * FROM t'
         \\  cat data.ndjson | sql-pipe -I ndjson -O ndjson 'SELECT name FROM t WHERE age > 18'
+        \\  cat data.csv | sql-pipe --sample 5
         \\
     );
 }
@@ -239,6 +261,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var list_columns = false;
     var validate = false;
     var output: ?[]const u8 = null;
+    var sample_mode = false;
+    var sample_n: usize = 10;
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
@@ -304,6 +328,27 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             list_columns = true;
         } else if (std.mem.eql(u8, arg, "--validate")) {
             validate = true;
+        } else if (std.mem.eql(u8, arg, "--sample")) {
+            sample_mode = true;
+            // Peek at next arg: if it is a positive integer, consume it as the sample count
+            if (i + 1 < args.len) {
+                const next = args[i + 1];
+                if (next.len > 0 and next[0] != '-') {
+                    if (std.fmt.parseUnsigned(usize, next, 10)) |n| {
+                        if (n == 0) return error.InvalidSampleCount;
+                        sample_n = n;
+                        i += 1;
+                    } else |_| {
+                        // Not a number — keep default (10)
+                    }
+                }
+            }
+        } else if (std.mem.startsWith(u8, arg, "--sample=")) {
+            const val = arg["--sample=".len..];
+            const n = std.fmt.parseUnsigned(usize, val, 10) catch return error.InvalidSampleCount;
+            if (n == 0) return error.InvalidSampleCount;
+            sample_n = n;
+            sample_mode = true;
         } else if (std.mem.eql(u8, arg, "--output")) {
             i += 1;
             if (i >= args.len) return error.InvalidOutputPath;
@@ -343,6 +388,22 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     if (validate and query != null)
         return error.ValidateWithQuery;
 
+    // --sample is mutually exclusive with a query argument
+    if (sample_mode and query != null)
+        return error.SampleWithQuery;
+
+    // --sample is mutually exclusive with --json / json output format
+    if (sample_mode and (output_format == .json or output_format == .ndjson))
+        return error.SampleWithJson;
+
+    // --sample is mutually exclusive with --columns
+    if (sample_mode and list_columns)
+        return error.SampleWithColumns;
+
+    // --sample is mutually exclusive with --validate
+    if (sample_mode and validate)
+        return error.SampleWithValidate;
+
     // --silent and --verbose are mutually exclusive
     if (silent and verbose)
         return error.SilentVerboseConflict;
@@ -361,6 +422,14 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             .delimiter = delimiter,
             .type_inference = type_inference,
             .input_format = input_format,
+        } };
+
+    // --sample mode: print schema + first n rows and exit
+    if (sample_mode)
+        return .{ .sample = SampleArgs{
+            .delimiter = delimiter,
+            .input_format = input_format,
+            .n = sample_n,
         } };
 
     return .{ .parsed = ParsedArgs{
@@ -1634,6 +1703,153 @@ fn runValidate(
     }
 }
 
+/// runSample(args, allocator, io, stderr_writer, stdout_writer) → void
+/// Pre:  args is valid; allocator and writers are valid; input_format is csv or tsv
+/// Post: a schema comment block is written to stderr (column names + inferred types,
+///       prefixed with "#") and a header row + first args.n data rows are written to
+///       stdout as delimited text. Exits 2 on parse error. No query required.
+fn runSample(
+    args: SampleArgs,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    stderr_writer: *std.Io.Writer,
+    stdout_writer: *std.Io.Writer,
+) void {
+    switch (args.input_format) {
+        .json, .ndjson => fatal(
+            "--sample only supports CSV and TSV input; use -I csv (default) or --tsv",
+            stderr_writer,
+            .usage,
+            .{},
+        ),
+        .csv, .tsv => {
+            const col_delim: u8 = if (args.input_format == .tsv) '\t' else args.delimiter;
+            var stdin_buf: [4096]u8 = undefined;
+            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+            var csv_reader = csv.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, col_delim);
+
+            const header_record = csv_reader.nextRecord() catch |err| switch (err) {
+                error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),
+                else => fatal("row 1: failed to parse CSV header", stderr_writer, .csv_error, .{}),
+            } orelse fatal("empty input (no header row)", stderr_writer, .csv_error, .{});
+            defer csv_reader.freeRecord(header_record);
+
+            const cols = parseHeader(allocator, header_record, stderr_writer) catch |err| switch (err) {
+                error.EmptyColumnName => fatal("row 1: empty column name in header", stderr_writer, .csv_error, .{}),
+                error.NoColumns => fatal("row 1: no columns found in header", stderr_writer, .csv_error, .{}),
+                else => fatal("row 1: failed to parse header", stderr_writer, .csv_error, .{}),
+            };
+            defer {
+                for (cols) |col| allocator.free(col);
+                allocator.free(cols);
+            }
+
+            // Buffer max(inference_buffer_size, n) rows for type inference
+            const buf_size = @max(inference_buffer_size, args.n);
+            var row_buffer: std.ArrayList([][]u8) = .empty;
+            defer {
+                for (row_buffer.items) |row| csv_reader.freeRecord(row);
+                row_buffer.deinit(allocator);
+            }
+
+            var csv_row_count: usize = 1;
+            // Loop invariant I: row_buffer contains all non-empty data rows read so far (up to buf_size)
+            // Bounding function: buf_size - row_buffer.items.len
+            while (row_buffer.items.len < buf_size) {
+                const rec = csv_reader.nextRecord() catch |err| switch (err) {
+                    error.UnterminatedQuotedField => fatal(
+                        "row {d}: unterminated quoted field",
+                        stderr_writer,
+                        .csv_error,
+                        .{csv_row_count + 1},
+                    ),
+                    else => fatal("row {d}: failed to parse CSV", stderr_writer, .csv_error, .{csv_row_count + 1}),
+                } orelse break;
+                csv_row_count += 1;
+                if (rec.len == 0) {
+                    csv_reader.freeRecord(rec);
+                    continue;
+                }
+                row_buffer.append(allocator, rec) catch
+                    fatal("out of memory while buffering rows", stderr_writer, .csv_error, .{});
+            }
+
+            const types = inferTypes(allocator, row_buffer.items, cols.len) catch
+                fatal("out of memory during type inference", stderr_writer, .csv_error, .{});
+            defer allocator.free(types);
+
+            // ─── Print schema block to stderr ─────────────────────────────────────
+            // Compute max column name width for aligned output
+            var max_col_width: usize = 0;
+            for (cols) |col| {
+                if (col.len > max_col_width) max_col_width = col.len;
+            }
+
+            stderr_writer.print("# Schema ({d} columns):\n", .{cols.len}) catch |err| {
+                std.log.err("failed to write schema: {}", .{err});
+            };
+            // Loop invariant I: cols[0..i] have been printed with aligned type annotation
+            // Bounding function: cols.len - i
+            for (cols, types) |col, t| {
+                stderr_writer.writeAll("#   ") catch |err| {
+                    std.log.err("failed to write schema: {}", .{err});
+                };
+                stderr_writer.writeAll(col) catch |err| {
+                    std.log.err("failed to write schema: {}", .{err});
+                };
+                // Pad to max_col_width + 2 spaces before the type
+                var p: usize = col.len;
+                while (p < max_col_width + 2) : (p += 1) {
+                    stderr_writer.writeByte(' ') catch |err| {
+                        std.log.err("failed to write schema: {}", .{err});
+                    };
+                }
+                stderr_writer.print("{s}\n", .{@tagName(t)}) catch |err| {
+                    std.log.err("failed to write schema: {}", .{err});
+                };
+            }
+            stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
+
+            // ─── Print header row to stdout ────────────────────────────────────────
+            // Loop invariant I: cols[0..i] names have been written, separated by col_delim
+            // Bounding function: cols.len - i
+            for (cols, 0..) |col, i| {
+                if (i > 0) stdout_writer.writeByte(col_delim) catch |err| {
+                    std.log.err("failed to write header: {}", .{err});
+                };
+                writeField(stdout_writer, col, col_delim) catch |err| {
+                    std.log.err("failed to write header: {}", .{err});
+                };
+            }
+            stdout_writer.writeByte('\n') catch |err| {
+                std.log.err("failed to write header newline: {}", .{err});
+            };
+
+            // ─── Print first n data rows to stdout ────────────────────────────────
+            const rows_to_print = @min(args.n, row_buffer.items.len);
+            // Loop invariant I: row_buffer[0..r] have been printed as delimited rows
+            // Bounding function: rows_to_print - r
+            for (row_buffer.items[0..rows_to_print]) |row| {
+                var col_idx: usize = 0;
+                // Loop invariant I: cols[0..col_idx] fields have been written for this row
+                // Bounding function: cols.len - col_idx
+                while (col_idx < cols.len) : (col_idx += 1) {
+                    if (col_idx > 0) stdout_writer.writeByte(col_delim) catch |err| {
+                        std.log.err("failed to write field separator: {}", .{err});
+                    };
+                    const val: []const u8 = if (col_idx < row.len) row[col_idx] else "";
+                    writeField(stdout_writer, val, col_delim) catch |err| {
+                        std.log.err("failed to write field: {}", .{err});
+                    };
+                }
+                stdout_writer.writeByte('\n') catch |err| {
+                    std.log.err("failed to write row newline: {}", .{err});
+                };
+            }
+        },
+    }
+}
+
 /// run(parsed, allocator, io, stderr_writer, stdout_writer) → void
 /// Pre:  parsed contains a valid query; allocator and writers are valid
 /// Post: input from stdin has been loaded (dispatched on parsed.input_format),
@@ -1800,6 +2016,41 @@ pub fn main(init: std.process.Init.Minimal) void {
                 stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
                 std.process.exit(@intFromEnum(ExitCode.usage));
             },
+            error.SampleWithQuery => {
+                stderr_writer.writeAll("error: --sample cannot be combined with a query argument\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.SampleWithJson => {
+                stderr_writer.writeAll("error: --sample cannot be combined with --json or a JSON output format\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.SampleWithColumns => {
+                stderr_writer.writeAll("error: --sample cannot be combined with --columns\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.SampleWithValidate => {
+                stderr_writer.writeAll("error: --sample cannot be combined with --validate\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
+            error.InvalidSampleCount => {
+                stderr_writer.writeAll("error: --sample requires a positive integer value\n") catch |werr| {
+                    std.log.err("failed to write error message: {}", .{werr});
+                };
+                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            },
             else => {},
         }
         printUsage(stderr_writer) catch |werr| {
@@ -1835,6 +2086,15 @@ pub fn main(init: std.process.Init.Minimal) void {
         },
         .validate => |val_args| {
             runValidate(val_args, allocator, io.io(), stderr_writer, stdout_writer);
+            stdout_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stdout: {}", .{err});
+            };
+            stderr_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stderr: {}", .{err});
+            };
+        },
+        .sample => |sample_args| {
+            runSample(sample_args, allocator, io.io(), stderr_writer, stdout_writer);
             stdout_file_writer.flush() catch |err| {
                 std.log.err("failed to flush stdout: {}", .{err});
             };
