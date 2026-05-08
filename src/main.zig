@@ -23,6 +23,7 @@ const printUsage = args_mod.printUsage;
 const loadCsvInput = loader.loadCsvInput;
 const fmtThousands = loader.fmtThousands;
 const progress_interval = loader.progress_interval;
+const fatal = sqlite_mod.fatal;
 
 /// Supported input formats (canonical definition lives in format.zig).
 const InputFormat = format.InputFormat;
@@ -72,17 +73,6 @@ fn execQuery(
         try out_writer.writeRow(stmt.?, writer);
     }
     try out_writer.end(writer);
-}
-
-/// fatal(writer, code, comptime fmt, args) → noreturn
-/// Pre:  writer is stderr, code is non-zero ExitCode
-/// Post: "error: <message>\n" written to stderr, process exits with code
-fn fatal(comptime fmt: []const u8, writer: *std.Io.Writer, code: ExitCode, args: anytype) noreturn {
-    writer.print("error: " ++ fmt ++ "\n", args) catch |err| {
-        std.log.err("failed to write error message: {}", .{err});
-    };
-    writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
-    std.process.exit(@intFromEnum(code));
 }
 
 /// run(allocator, io, parsed, stderr_writer, stdout_writer) → void
@@ -178,144 +168,28 @@ pub fn main(init: std.process.Init.Minimal) void {
 
     const args_result = parseArgs(args) catch |err| {
         switch (err) {
-            error.IncompatibleFlags => {
-                stderr_writer.writeAll(
-                    "error: --header cannot be combined with non-CSV/TSV output format\n",
-                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.SilentVerboseConflict => {
-                stderr_writer.writeAll(
-                    "error: --silent cannot be combined with --verbose\n",
-                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.InvalidMaxRows => {
-                stderr_writer.writeAll("error: --max-rows must be a positive integer\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.InvalidInputFormat => {
-                stderr_writer.writeAll(
-                    "error: unknown input format; supported: csv, tsv, json, ndjson, xml\n",
-                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.InvalidOutputFormat => {
-                stderr_writer.writeAll(
-                    "error: unknown output format; supported: csv, tsv, json, ndjson, xml\n",
-                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.ColumnsWithQuery => {
-                stderr_writer.writeAll("error: --columns cannot be combined with a query argument\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.ValidateWithQuery => {
-                stderr_writer.writeAll("error: --validate cannot be combined with a query argument\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.InvalidOutputPath => {
-                stderr_writer.writeAll("error: --output requires a non-empty file path\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.OutputWithColumns => {
-                stderr_writer.writeAll("error: --output cannot be combined with --columns\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.OutputWithValidate => {
-                stderr_writer.writeAll("error: --output cannot be combined with --validate\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.ValidateWithColumns => {
-                stderr_writer.writeAll("error: --validate cannot be combined with --columns\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.SampleWithQuery => {
-                stderr_writer.writeAll("error: --sample cannot be combined with a query argument\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.SampleWithJson => {
-                stderr_writer.writeAll("error: --sample cannot be combined with --json or a JSON output format\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.SampleWithColumns => {
-                stderr_writer.writeAll("error: --sample cannot be combined with --columns\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.SampleWithValidate => {
-                stderr_writer.writeAll("error: --sample cannot be combined with --validate\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.SampleWithOutput => {
-                stderr_writer.writeAll("error: --sample cannot be combined with --output\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.InvalidSampleCount => {
-                stderr_writer.writeAll("error: --sample requires a positive integer value\n") catch |werr| {
-                    std.log.err("failed to write error message: {}", .{werr});
-                };
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.MissingXmlFlagValue => {
-                stderr_writer.writeAll(
-                    "error: --xml-root and --xml-row require a value\n",
-                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
-            error.InvalidXmlName => {
-                stderr_writer.writeAll(
-                    "error: --xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)\n",
-                ) catch |werr| std.log.err("failed to write error message: {}", .{werr});
-                stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
-                std.process.exit(@intFromEnum(ExitCode.usage));
-            },
+            error.IncompatibleFlags => fatal("--header cannot be combined with non-CSV/TSV output format", stderr_writer, .usage, .{}),
+            error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),
+            error.InvalidMaxRows => fatal("--max-rows must be a positive integer", stderr_writer, .usage, .{}),
+            error.InvalidInputFormat => fatal("unknown input format; supported: csv, tsv, json, ndjson, xml", stderr_writer, .usage, .{}),
+            error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml", stderr_writer, .usage, .{}),
+            error.ColumnsWithQuery => fatal("--columns cannot be combined with a query argument", stderr_writer, .usage, .{}),
+            error.ValidateWithQuery => fatal("--validate cannot be combined with a query argument", stderr_writer, .usage, .{}),
+            error.InvalidOutputPath => fatal("--output requires a non-empty file path", stderr_writer, .usage, .{}),
+            error.OutputWithColumns => fatal("--output cannot be combined with --columns", stderr_writer, .usage, .{}),
+            error.OutputWithValidate => fatal("--output cannot be combined with --validate", stderr_writer, .usage, .{}),
+            error.ValidateWithColumns => fatal("--validate cannot be combined with --columns", stderr_writer, .usage, .{}),
+            error.SampleWithQuery => fatal("--sample cannot be combined with a query argument", stderr_writer, .usage, .{}),
+            error.SampleWithJson => fatal("--sample cannot be combined with --json or a JSON output format", stderr_writer, .usage, .{}),
+            error.SampleWithColumns => fatal("--sample cannot be combined with --columns", stderr_writer, .usage, .{}),
+            error.SampleWithValidate => fatal("--sample cannot be combined with --validate", stderr_writer, .usage, .{}),
+            error.SampleWithOutput => fatal("--sample cannot be combined with --output", stderr_writer, .usage, .{}),
+            error.InvalidSampleCount => fatal("--sample requires a positive integer value", stderr_writer, .usage, .{}),
+            error.MissingXmlFlagValue => fatal("--xml-root and --xml-row require a value", stderr_writer, .usage, .{}),
+            error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
             else => {},
         }
-        printUsage(stderr_writer) catch |werr| {
-            std.log.err("failed to write usage: {}", .{werr});
-        };
+        printUsage(stderr_writer) catch |werr| std.log.err("failed to write usage: {}", .{werr});
         stderr_writer.flush() catch |ferr| std.log.err("failed to flush: {}", .{ferr});
         std.process.exit(@intFromEnum(ExitCode.usage));
     };

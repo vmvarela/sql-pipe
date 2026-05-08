@@ -11,14 +11,7 @@ const parseHeader = loader.parseHeader;
 const inference_buffer_size = loader.inference_buffer_size;
 
 const ExitCode = args_mod.ExitCode;
-
-fn fatal(comptime fmt: []const u8, writer: *std.Io.Writer, code: ExitCode, f_args: anytype) noreturn {
-    writer.print("error: " ++ fmt ++ "\n", f_args) catch |err| {
-        std.log.err("failed to write error message: {}", .{err});
-    };
-    writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
-    std.process.exit(@intFromEnum(code));
-}
+const fatal = @import("../sqlite.zig").fatal;
 
 pub fn runSample(
     allocator: std.mem.Allocator,

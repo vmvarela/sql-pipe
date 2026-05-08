@@ -26,12 +26,7 @@ pub const InputFormat = enum {
     /// Parse a format name string.
     /// Returns error.InvalidInputFormat when the value is unrecognised.
     pub fn parse(s: []const u8) error{InvalidInputFormat}!InputFormat {
-        if (std.mem.eql(u8, s, "csv")) return .csv;
-        if (std.mem.eql(u8, s, "tsv")) return .tsv;
-        if (std.mem.eql(u8, s, "json")) return .json;
-        if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
-        if (std.mem.eql(u8, s, "xml")) return .xml;
-        return error.InvalidInputFormat;
+        return std.meta.stringToEnum(InputFormat, s) orelse error.InvalidInputFormat;
     }
 };
 
@@ -48,12 +43,7 @@ pub const OutputFormat = enum {
     /// Parse a format name string.
     /// Returns error.InvalidOutputFormat when the value is unrecognised.
     pub fn parse(s: []const u8) error{InvalidOutputFormat}!OutputFormat {
-        if (std.mem.eql(u8, s, "csv")) return .csv;
-        if (std.mem.eql(u8, s, "tsv")) return .tsv;
-        if (std.mem.eql(u8, s, "json")) return .json;
-        if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
-        if (std.mem.eql(u8, s, "xml")) return .xml;
-        return error.InvalidOutputFormat;
+        return std.meta.stringToEnum(OutputFormat, s) orelse error.InvalidOutputFormat;
     }
 };
 
