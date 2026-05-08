@@ -1066,8 +1066,7 @@ pub fn build(b: *std.Build) void {
     test_xml_validate.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_xml_validate.step);
 
-    // Integration test 104: --xml-root and --xml-row customize element names for output,
-    //                        and navigate nested XML for input
+    // Integration test 104: --xml-root and --xml-row customize element names for output
     const test_xml_custom_elements = b.addSystemCommand(&.{
         "bash", "-c",
         // Output: custom element names appear in the XML
@@ -1188,6 +1187,59 @@ pub fn build(b: *std.Build) void {
     });
     test_xml_nested_validate.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_xml_nested_validate.step);
+
+    // Integration test 116: --xml-root alone (no --xml-row) navigates to container
+    const test_xml_root_alone = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\doc='<feed><data><row><name>Alice</name></row><row><name>Bob</name></row></data></feed>'
+        \\result=$(printf '%s' "$doc" \
+        \\    | ./zig-out/bin/sql-pipe -I xml --xml-root data 'SELECT name FROM t ORDER BY name')
+        \\[ "$result" = "$(printf 'Alice\nBob')" ]
+    });
+    test_xml_root_alone.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_root_alone.step);
+
+    // Integration test 117: --xml-row alone (no --xml-root) filters rows by tag
+    const test_xml_row_alone = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\doc='<results><item><name>Alice</name></item><meta><x>1</x></meta><item><name>Bob</name></item></results>'
+        \\result=$(printf '%s' "$doc" \
+        \\    | ./zig-out/bin/sql-pipe -I xml --xml-row item 'SELECT name FROM t ORDER BY name')
+        \\[ "$result" = "$(printf 'Alice\nBob')" ]
+    });
+    test_xml_row_alone.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_row_alone.step);
+
+    // Integration test 118: --xml-row with no matching elements exits non-zero with clear message
+    const test_xml_row_no_match = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '<results><row><name>Alice</name></row></results>' \
+        \\    | ./zig-out/bin/sql-pipe -I xml --xml-row wrong 'SELECT 1' 2>&1; echo "EXIT:$?")
+        \\echo "$msg" | grep -q "'wrong'" && echo "$msg" | grep -q 'check --xml-row' && echo "$msg" | grep -qv 'EXIT:0'
+    });
+    test_xml_row_no_match.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_row_no_match.step);
+
+    // Integration test 119: --columns with --xml-root and --xml-row
+    const test_xml_columns_with_flags = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\doc='<feed><channel><item><name>Alice</name><age>30</age></item></channel></feed>'
+        \\result=$(printf '%s' "$doc" \
+        \\    | ./zig-out/bin/sql-pipe -I xml --xml-root channel --xml-row item --columns)
+        \\[ "$result" = "$(printf 'name\nage')" ]
+    });
+    test_xml_columns_with_flags.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_columns_with_flags.step);
+
+    // Integration test 120: --xml-root matching the actual document root (fast path)
+    const test_xml_root_fast_path = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<results><row><name>Alice</name></row></results>' \
+        \\    | ./zig-out/bin/sql-pipe -I xml --xml-root results 'SELECT name FROM t')
+        \\[ "$result" = "Alice" ]
+    });
+    test_xml_root_fast_path.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_root_fast_path.step);
 
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{

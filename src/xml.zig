@@ -461,8 +461,9 @@ pub const XmlParser = struct {
         var depth: usize = 0;
         // Loop invariant: depth = number of open nested elements not yet closed
         // Bounding function: self.data.len - self.pos (finite input)
-        while (self.pos < self.data.len) {
-            if (self.peek().? != '<') {
+        while (true) {
+            const ch = self.peek() orelse break;
+            if (ch != '<') {
                 self.advance();
                 continue;
             }
@@ -475,13 +476,16 @@ pub const XmlParser = struct {
                 self.skipProcessingInstruction(err_writer);
             } else if (self.startsWith("</")) {
                 if (depth == 0) {
-                    // Closing tag of the element we are skipping
+                    // Closing tag of the element we are skipping — validate name
                     self.advance();
                     self.advance(); // "</"
                     self.skipWs();
-                    _ = self.readName(err_writer);
+                    const close_name = self.readName(err_writer);
                     self.skipWs();
-                    if (self.peek() == '>') self.advance();
+                    if (self.peek() != '>') self.fatalAt("expected '>' after closing tag name", err_writer, .{});
+                    self.advance();
+                    if (!std.mem.eql(u8, close_name, tag))
+                        self.fatalAt("expected '</{s}>' but found '</{s}>'", err_writer, .{ tag, close_name });
                     return;
                 }
                 // Closing tag of a nested element
@@ -557,9 +561,12 @@ pub const XmlParser = struct {
                 self.fatalAt("element '{s}' not found in document", err_writer, .{xml_root});
             // Reached end of actual root without finding the target
             if (self.startsWith("</"))
-                self.fatalAt("element '{s}' not found under root element '{s}'", err_writer, .{ xml_root, actual_root });
-            if (self.peek() != '<')
-                self.fatalAt("expected '<' to start element inside '{s}'", err_writer, .{actual_root});
+                self.fatalAt("element '{s}' not found as a direct child of '{s}'", err_writer, .{ xml_root, actual_root });
+            // Skip text nodes between sibling elements
+            if (self.peek() != '<') {
+                while (self.peek()) |skip_ch| if (skip_ch != '<') self.advance() else break;
+                continue;
+            }
             self.advance(); // '<'
             const child_tag = self.readName(err_writer);
             const child_self_closing = self.skipAttrsClose(err_writer);
@@ -709,7 +716,12 @@ pub fn getXmlColumnNames(
 
     const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
         fatal("out of memory parsing XML", stderr_writer, exit_parse, .{});
-    if (cols == null) fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    if (cols == null) {
+        if (xml_row) |row_tag|
+            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, exit_parse, .{row_tag})
+        else
+            fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    }
     defer {
         for (cols.?) |col| if (col.value) |v| allocator.free(v);
         allocator.free(cols.?);
@@ -792,7 +804,12 @@ pub fn summarizeXml(
         }
     }
 
-    if (col_names == null) fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    if (col_names == null) {
+        if (xml_row) |row_tag|
+            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, exit_parse, .{row_tag})
+        else
+            fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    }
     return .{ .row_count = row_count, .col_names = col_names.? };
 }
 
@@ -916,7 +933,12 @@ pub fn loadXmlInput(
             fatal("{s}", stderr_writer, exit_sql, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
 
-    if (col_names == null) fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    if (col_names == null) {
+        if (xml_row) |row_tag|
+            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, exit_parse, .{row_tag})
+        else
+            fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    }
     if (in_transaction) commitTransaction(db, stderr_writer);
     return rows_inserted;
 }
@@ -1078,4 +1100,90 @@ test "XmlParser: XML declaration in prologue" {
     p.skipPrologue(&err_writer);
     const root = p.readRootOpen(&err_writer);
     try std.testing.expectEqualStrings("results", root);
+}
+
+test "XmlParser.skipElementBody: skips body and validates closing tag" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    // Parser positioned just after <skip>'s '>' — body + closing tag + next element
+    const input = "<inner>text</inner></skip><keep/>";
+    var p = XmlParser.init(input);
+    p.skipElementBody("skip", &err_writer);
+    // Should now be positioned at "<keep/>"
+    try std.testing.expectEqualStrings("<keep/>", p.data[p.pos..]);
+}
+
+test "XmlParser.skipElementBody: handles nested elements" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<a><b><c>x</c></b></a></skip>tail";
+    var p = XmlParser.init(input);
+    p.skipElementBody("skip", &err_writer);
+    try std.testing.expectEqualStrings("tail", p.data[p.pos..]);
+}
+
+test "XmlParser.navigateToRoot: fast path — actual root matches" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<channel><item><title>Test</title></item></channel>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    p.navigateToRoot("channel", &err_writer);
+    try std.testing.expectEqualStrings("<item><title>Test</title></item></channel>", p.data[p.pos..]);
+}
+
+test "XmlParser.navigateToRoot: finds nested container as direct child" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<rss><meta><v>1</v></meta><channel><item><n>T</n></item></channel></rss>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    p.navigateToRoot("channel", &err_writer);
+    try std.testing.expectEqualStrings("<item><n>T</n></item></channel></rss>", p.data[p.pos..]);
+}
+
+test "XmlParser.navigateToRoot: handles text nodes between siblings" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<rss>some text<channel><item/></channel></rss>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    p.navigateToRoot("channel", &err_writer);
+    try std.testing.expectEqualStrings("<item/></channel></rss>", p.data[p.pos..]);
+}
+
+test "XmlParser.nextRow: row_tag_filter skips non-matching elements" {
+    const allocator = std.testing.allocator;
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<root><meta><x>1</x></meta><item><name>Alice</name></item>" ++
+        "<meta><x>2</x></meta><item><name>Bob</name></item></root>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    const root = p.readRootOpen(&err_writer);
+
+    const row1 = try p.nextRow(allocator, root, "item", &err_writer);
+    try std.testing.expect(row1 != null);
+    defer {
+        for (row1.?) |col| if (col.value) |v| allocator.free(v);
+        allocator.free(row1.?);
+    }
+    try std.testing.expectEqualStrings("Alice", row1.?[0].value.?);
+
+    const row2 = try p.nextRow(allocator, root, "item", &err_writer);
+    try std.testing.expect(row2 != null);
+    defer {
+        for (row2.?) |col| if (col.value) |v| allocator.free(v);
+        allocator.free(row2.?);
+    }
+    try std.testing.expectEqualStrings("Bob", row2.?[0].value.?);
+
+    const row3 = try p.nextRow(allocator, root, "item", &err_writer);
+    try std.testing.expect(row3 == null);
 }
