@@ -223,7 +223,7 @@ pub fn writeXmlFooter(writer: *std.Io.Writer, root_name: []const u8) !void {
 ///   var p = XmlParser.init(data);
 ///   p.skipPrologue(err_writer);
 ///   const root = p.readRootOpen(err_writer);
-///   while (try p.nextRow(allocator, root, err_writer)) |cols| {
+///   while (try p.nextRow(allocator, root, null, err_writer)) |cols| {
 ///       defer { for (cols) |col| { if (col.value) |v| allocator.free(v); } allocator.free(cols); }
 ///       // use cols[i].name and cols[i].value
 ///   }
@@ -449,6 +449,63 @@ pub const XmlParser = struct {
         self.fatalAt("unexpected end of input: unclosed element '{s}'", err_writer, .{elem_name});
     }
 
+    // ─── Element skip ────────────────────────────────────
+
+    /// Skip the body and closing tag of an element.
+    ///
+    /// Pre:  positioned just after the element's opening tag '>'
+    /// Post: positioned just after the element's closing '</tag>'
+    ///       properly handles nested elements, comments, CDATA, and PIs
+    fn skipElementBody(self: *XmlParser, tag: []const u8, err_writer: *std.Io.Writer) void {
+        // depth counts unclosed nested elements inside the one we are skipping
+        var depth: usize = 0;
+        // Loop invariant: depth = number of open nested elements not yet closed
+        // Bounding function: self.data.len - self.pos (finite input)
+        while (true) {
+            const ch = self.peek() orelse break;
+            if (ch != '<') {
+                self.advance();
+                continue;
+            }
+            if (self.startsWith("<!--")) {
+                self.skipComment(err_writer);
+            } else if (self.startsWith("<![CDATA[")) {
+                for ("<![CDATA[") |_| self.advance();
+                self.skipUntilStr("]]>", err_writer);
+            } else if (self.startsWith("<?")) {
+                self.skipProcessingInstruction(err_writer);
+            } else if (self.startsWith("</")) {
+                if (depth == 0) {
+                    // Closing tag of the element we are skipping — validate name
+                    self.advance();
+                    self.advance(); // "</"
+                    self.skipWs();
+                    const close_name = self.readName(err_writer);
+                    self.skipWs();
+                    if (self.peek() != '>') self.fatalAt("expected '>' after closing tag name", err_writer, .{});
+                    self.advance();
+                    if (!std.mem.eql(u8, close_name, tag))
+                        self.fatalAt("expected '</{s}>' but found '</{s}>'", err_writer, .{ tag, close_name });
+                    return;
+                }
+                // Closing tag of a nested element
+                depth -= 1;
+                self.advance();
+                self.advance(); // "</"
+                _ = self.readName(err_writer);
+                self.skipWs();
+                if (self.peek() == '>') self.advance();
+            } else {
+                // Opening tag of a nested element (possibly self-closing)
+                self.advance(); // '<'
+                _ = self.readName(err_writer);
+                const self_closing = self.skipAttrsClose(err_writer);
+                if (!self_closing) depth += 1;
+            }
+        }
+        self.fatalAt("unexpected end of input: unclosed element '{s}'", err_writer, .{tag});
+    }
+
     // ─── High-level API ──────────────────────────────────
 
     /// Skip the XML prologue: declaration, processing instructions, comments.
@@ -470,100 +527,173 @@ pub const XmlParser = struct {
         return name;
     }
 
+    /// Navigate to the named container element for row iteration.
+    ///
+    /// Pre:  skipPrologue() has been called; positioned at the first '<'
+    /// Post: positioned just after the opening '>' of the xml_root element
+    ///
+    /// If the actual document root matches xml_root, it is consumed directly.
+    /// Otherwise the actual root is consumed and its direct children are scanned
+    /// until xml_root is found; all non-matching children are skipped entirely.
+    /// Fatal if xml_root is not found or is self-closing.
+    pub fn navigateToRoot(self: *XmlParser, xml_root: []const u8, err_writer: *std.Io.Writer) void {
+        if (self.peek() != '<') self.fatalAt("expected '<' to start root element", err_writer, .{});
+        self.advance(); // '<'
+        const actual_root = self.readName(err_writer);
+        const actual_self_closing = self.skipAttrsClose(err_writer);
+
+        // Fast path: actual root already is the target container
+        if (std.mem.eql(u8, actual_root, xml_root)) {
+            if (actual_self_closing)
+                self.fatalAt("element '{s}' is self-closing (no rows possible)", err_writer, .{xml_root});
+            return;
+        }
+
+        if (actual_self_closing)
+            self.fatalAt("element '{s}' not found (actual root '{s}' is self-closing)", err_writer, .{ xml_root, actual_root });
+
+        // Search direct children of the actual root for xml_root
+        // Loop invariant: all direct children before current position have been examined
+        // Bounding function: distance to end of actual root element (finite)
+        while (true) {
+            self.skipWsAndMisc(err_writer);
+            if (self.peek() == null)
+                self.fatalAt("element '{s}' not found in document", err_writer, .{xml_root});
+            // Reached end of actual root without finding the target
+            if (self.startsWith("</"))
+                self.fatalAt("element '{s}' not found as a direct child of '{s}'", err_writer, .{ xml_root, actual_root });
+            // Skip text nodes between sibling elements
+            if (self.peek() != '<') {
+                while (self.peek()) |skip_ch| if (skip_ch != '<') self.advance() else break;
+                continue;
+            }
+            self.advance(); // '<'
+            const child_tag = self.readName(err_writer);
+            const child_self_closing = self.skipAttrsClose(err_writer);
+            if (std.mem.eql(u8, child_tag, xml_root)) {
+                if (child_self_closing)
+                    self.fatalAt("element '{s}' is self-closing (no rows possible)", err_writer, .{xml_root});
+                return;
+            }
+            // Skip this non-matching child entirely
+            if (!child_self_closing) self.skipElementBody(child_tag, err_writer);
+        }
+    }
+
     /// Read the next row element from the XML stream.
     ///
     /// Pre:  positioned after the root opening tag (or a previous row's closing tag)
     /// Post: returns null when the root closing tag is reached (no more rows)
-    ///       returns an owned slice of Column structs for the next row
+    ///       returns an owned slice of Column structs for the next matching row
     ///       caller must free each col.value (when non-null) and the slice itself
+    ///
+    /// row_tag_filter: when non-null, elements not matching this tag are skipped
     pub fn nextRow(
         self: *XmlParser,
         allocator: std.mem.Allocator,
         root_name: []const u8,
+        row_tag_filter: ?[]const u8,
         err_writer: *std.Io.Writer,
     ) !?[]Column {
-        self.skipWsAndMisc(err_writer);
-        if (self.peek() == null)
-            self.fatalAt("unexpected end of input: missing '</{s}>'", err_writer, .{root_name});
+        // Loop invariant: rows before current position have been processed or skipped
+        // Bounding function: distance to root closing tag (finite)
+        while (true) {
+            self.skipWsAndMisc(err_writer);
+            if (self.peek() == null)
+                self.fatalAt("unexpected end of input: missing '</{s}>'", err_writer, .{root_name});
 
-        // Root closing tag → end of rows
-        if (self.startsWith("</")) {
-            self.advance();
-            self.advance(); // "</"
-            self.skipWs();
-            const close_name = self.readName(err_writer);
-            if (!std.mem.eql(u8, close_name, root_name))
-                self.fatalAt("expected '</{s}>' but found '</{s}>'", err_writer, .{ root_name, close_name });
-            self.skipWs();
-            if (self.peek() == '>') self.advance();
-            return null;
-        }
-
-        // Row opening tag
-        if (self.peek() != '<') self.fatalAt("expected '<' to start row element", err_writer, .{});
-        self.advance(); // '<'
-        const row_tag = self.readName(err_writer);
-        const row_self_close = self.skipAttrsClose(err_writer);
-
-        var cols: std.ArrayList(Column) = .empty;
-        errdefer {
-            for (cols.items) |col| if (col.value) |v| allocator.free(v);
-            cols.deinit(allocator);
-        }
-
-        if (!row_self_close) {
-            // Loop invariant: cols contains all column elements of this row parsed so far
-            // Bounding function: distance to row closing tag
-            while (true) {
-                self.skipWsAndMisc(err_writer);
-                if (self.peek() == null)
-                    self.fatalAt("unexpected end of input in row element", err_writer, .{});
-
-                // Row closing tag
-                if (self.startsWith("</")) {
-                    self.advance();
-                    self.advance(); // "</"
-                    self.skipWs();
-                    const close_row = self.readName(err_writer);
-                    if (!std.mem.eql(u8, close_row, row_tag))
-                        self.fatalAt("expected '</{s}>' but found '</{s}>'", err_writer, .{ row_tag, close_row });
-                    self.skipWs();
-                    if (self.peek() == '>') self.advance();
-                    break;
-                }
-
-                // Column opening tag
-                if (self.peek() != '<')
-                    self.fatalAt("expected '<' to start column element", err_writer, .{});
-                self.advance(); // '<'
-                const col_tag = self.readName(err_writer);
-                const col_self_close = self.skipAttrsClose(err_writer);
-
-                const value: ?[]u8 = if (col_self_close)
-                    null
-                else
-                    try self.readContent(allocator, err_writer, col_tag);
-
-                try cols.append(allocator, .{ .name = col_tag, .value = value });
+            // Root closing tag → end of rows
+            if (self.startsWith("</")) {
+                self.advance();
+                self.advance(); // "</"
+                self.skipWs();
+                const close_name = self.readName(err_writer);
+                if (!std.mem.eql(u8, close_name, root_name))
+                    self.fatalAt("expected '</{s}>' but found '</{s}>'", err_writer, .{ root_name, close_name });
+                self.skipWs();
+                if (self.peek() == '>') self.advance();
+                return null;
             }
-        }
 
-        const owned = try cols.toOwnedSlice(allocator);
-        return owned;
+            // Row opening tag
+            if (self.peek() != '<') self.fatalAt("expected '<' to start row element", err_writer, .{});
+            self.advance(); // '<'
+            const row_tag = self.readName(err_writer);
+            const row_self_close = self.skipAttrsClose(err_writer);
+
+            // Skip elements that don't match the row tag filter
+            if (row_tag_filter) |filter| {
+                if (!std.mem.eql(u8, row_tag, filter)) {
+                    if (!row_self_close) self.skipElementBody(row_tag, err_writer);
+                    continue;
+                }
+            }
+
+            var cols: std.ArrayList(Column) = .empty;
+            errdefer {
+                for (cols.items) |col| if (col.value) |v| allocator.free(v);
+                cols.deinit(allocator);
+            }
+
+            if (!row_self_close) {
+                // Loop invariant: cols contains all column elements of this row parsed so far
+                // Bounding function: distance to row closing tag
+                while (true) {
+                    self.skipWsAndMisc(err_writer);
+                    if (self.peek() == null)
+                        self.fatalAt("unexpected end of input in row element", err_writer, .{});
+
+                    // Row closing tag
+                    if (self.startsWith("</")) {
+                        self.advance();
+                        self.advance(); // "</"
+                        self.skipWs();
+                        const close_row = self.readName(err_writer);
+                        if (!std.mem.eql(u8, close_row, row_tag))
+                            self.fatalAt("expected '</{s}>' but found '</{s}>'", err_writer, .{ row_tag, close_row });
+                        self.skipWs();
+                        if (self.peek() == '>') self.advance();
+                        break;
+                    }
+
+                    // Column opening tag
+                    if (self.peek() != '<')
+                        self.fatalAt("expected '<' to start column element", err_writer, .{});
+                    self.advance(); // '<'
+                    const col_tag = self.readName(err_writer);
+                    const col_self_close = self.skipAttrsClose(err_writer);
+
+                    const value: ?[]u8 = if (col_self_close)
+                        null
+                    else
+                        try self.readContent(allocator, err_writer, col_tag);
+
+                    try cols.append(allocator, .{ .name = col_tag, .value = value });
+                }
+            }
+
+            const owned = try cols.toOwnedSlice(allocator);
+            return owned;
+        }
     }
 };
 
 // ─── Public input functions ───────────────────────────
 
-/// getXmlColumnNames(allocator, reader, stderr_writer) → [][]const u8
+/// getXmlColumnNames(allocator, reader, xml_root, xml_row, stderr_writer) → [][]const u8
 ///
 /// Pre:  reader is positioned at the start of a row-based XML document
 /// Post: returns an allocated slice of column names (from the first row);
 ///       caller must free each name and the slice
 ///       aborts on any parse or I/O error
+///
+/// xml_root: when non-null, navigate to this element as the row container
+/// xml_row:  when non-null, only elements with this tag are treated as rows
 pub fn getXmlColumnNames(
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
+    xml_root: ?[]const u8,
+    xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) [][]const u8 {
     var buf: std.ArrayList(u8) = .empty;
@@ -579,11 +709,19 @@ pub fn getXmlColumnNames(
 
     var p = XmlParser.init(buf.items);
     p.skipPrologue(stderr_writer);
-    const root = p.readRootOpen(stderr_writer);
+    const root_name: []const u8 = if (xml_root) |r| blk: {
+        p.navigateToRoot(r, stderr_writer);
+        break :blk r;
+    } else p.readRootOpen(stderr_writer);
 
-    const cols = p.nextRow(allocator, root, stderr_writer) catch
+    const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
         fatal("out of memory parsing XML", stderr_writer, exit_parse, .{});
-    if (cols == null) fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    if (cols == null) {
+        if (xml_row) |row_tag|
+            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, exit_parse, .{row_tag})
+        else
+            fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    }
     defer {
         for (cols.?) |col| if (col.value) |v| allocator.free(v);
         allocator.free(cols.?);
@@ -607,14 +745,19 @@ pub const XmlSummary = struct {
     col_names: [][]const u8,
 };
 
-/// summarizeXml(allocator, reader, stderr_writer) → XmlSummary
+/// summarizeXml(allocator, reader, xml_root, xml_row, stderr_writer) → XmlSummary
 ///
 /// Pre:  reader is positioned at the start of a row-based XML document
 /// Post: parses the entire document; returns row count and column names
 ///       aborts on any parse or I/O error
+///
+/// xml_root: when non-null, navigate to this element as the row container
+/// xml_row:  when non-null, only elements with this tag are treated as rows
 pub fn summarizeXml(
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
+    xml_root: ?[]const u8,
+    xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) XmlSummary {
     var buf: std.ArrayList(u8) = .empty;
@@ -630,7 +773,10 @@ pub fn summarizeXml(
 
     var p = XmlParser.init(buf.items);
     p.skipPrologue(stderr_writer);
-    const root = p.readRootOpen(stderr_writer);
+    const root_name: []const u8 = if (xml_root) |r| blk: {
+        p.navigateToRoot(r, stderr_writer);
+        break :blk r;
+    } else p.readRootOpen(stderr_writer);
 
     var row_count: usize = 0;
     var col_names: ?[][]const u8 = null;
@@ -638,7 +784,7 @@ pub fn summarizeXml(
     // Loop invariant: row_count = rows processed so far; col_names set after first row
     // Bounding function: rows remaining in the XML document (finite)
     while (true) {
-        const cols = p.nextRow(allocator, root, stderr_writer) catch
+        const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
             fatal("out of memory parsing XML", stderr_writer, exit_parse, .{});
         if (cols == null) break;
         defer {
@@ -658,11 +804,16 @@ pub fn summarizeXml(
         }
     }
 
-    if (col_names == null) fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    if (col_names == null) {
+        if (xml_row) |row_tag|
+            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, exit_parse, .{row_tag})
+        else
+            fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    }
     return .{ .row_count = row_count, .col_names = col_names.? };
 }
 
-/// loadXmlInput(allocator, reader, db, max_rows, stderr_writer) → usize
+/// loadXmlInput(allocator, reader, db, xml_root, xml_row, max_rows, stderr_writer) → usize
 ///
 /// Pre:  reader is positioned at the start of a row-based XML document
 ///       db is an open, empty SQLite database
@@ -670,10 +821,15 @@ pub fn summarizeXml(
 ///       all row elements are inserted; transaction is committed
 ///       result = number of rows inserted
 ///       aborts the process on any parse, I/O, or SQL error
+///
+/// xml_root: when non-null, navigate to this element as the row container
+/// xml_row:  when non-null, only elements with this tag are treated as rows
 pub fn loadXmlInput(
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
     db: *c.sqlite3,
+    xml_root: ?[]const u8,
+    xml_row: ?[]const u8,
     max_rows: ?usize,
     stderr_writer: *std.Io.Writer,
 ) usize {
@@ -690,7 +846,10 @@ pub fn loadXmlInput(
 
     var p = XmlParser.init(buf.items);
     p.skipPrologue(stderr_writer);
-    const root_name = p.readRootOpen(stderr_writer);
+    const root_name: []const u8 = if (xml_root) |r| blk: {
+        p.navigateToRoot(r, stderr_writer);
+        break :blk r;
+    } else p.readRootOpen(stderr_writer);
 
     // Column names determined from the first row; kept for schema consistency
     var col_names: ?[][]const u8 = null;
@@ -712,7 +871,7 @@ pub fn loadXmlInput(
     //   in_transaction = true after the first insert
     // Bounding function: row elements remaining in the document (finite)
     while (true) {
-        const cols = p.nextRow(allocator, root_name, stderr_writer) catch
+        const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
             fatal("out of memory parsing XML", stderr_writer, exit_parse, .{});
         if (cols == null) break;
 
@@ -774,7 +933,12 @@ pub fn loadXmlInput(
             fatal("{s}", stderr_writer, exit_sql, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
 
-    if (col_names == null) fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    if (col_names == null) {
+        if (xml_row) |row_tag|
+            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, exit_parse, .{row_tag})
+        else
+            fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+    }
     if (in_transaction) commitTransaction(db, stderr_writer);
     return rows_inserted;
 }
@@ -855,7 +1019,7 @@ test "XmlParser.nextRow: simple row with two columns" {
     const root = p.readRootOpen(&err_writer);
     try std.testing.expectEqualStrings("results", root);
 
-    const cols = try p.nextRow(allocator, root, &err_writer);
+    const cols = try p.nextRow(allocator, root, null, &err_writer);
     try std.testing.expect(cols != null);
     defer {
         for (cols.?) |col| if (col.value) |v| allocator.free(v);
@@ -868,7 +1032,7 @@ test "XmlParser.nextRow: simple row with two columns" {
     try std.testing.expectEqualStrings("30", cols.?[1].value.?);
 
     // No more rows
-    const next = try p.nextRow(allocator, root, &err_writer);
+    const next = try p.nextRow(allocator, root, null, &err_writer);
     try std.testing.expect(next == null);
 }
 
@@ -882,7 +1046,7 @@ test "XmlParser.nextRow: self-closing column is null" {
     p.skipPrologue(&err_writer);
     const root = p.readRootOpen(&err_writer);
 
-    const cols = try p.nextRow(allocator, root, &err_writer);
+    const cols = try p.nextRow(allocator, root, null, &err_writer);
     try std.testing.expect(cols != null);
     defer {
         for (cols.?) |col| if (col.value) |v| allocator.free(v);
@@ -904,7 +1068,7 @@ test "XmlParser.nextRow: entities decoded in content" {
     p.skipPrologue(&err_writer);
     const root = p.readRootOpen(&err_writer);
 
-    const cols = try p.nextRow(allocator, root, &err_writer);
+    const cols = try p.nextRow(allocator, root, null, &err_writer);
     try std.testing.expect(cols != null);
     defer {
         for (cols.?) |col| if (col.value) |v| allocator.free(v);
@@ -923,7 +1087,7 @@ test "XmlParser.nextRow: empty document returns null" {
     p.skipPrologue(&err_writer);
     const root = p.readRootOpen(&err_writer);
 
-    const cols = try p.nextRow(allocator, root, &err_writer);
+    const cols = try p.nextRow(allocator, root, null, &err_writer);
     try std.testing.expect(cols == null);
 }
 
@@ -936,4 +1100,90 @@ test "XmlParser: XML declaration in prologue" {
     p.skipPrologue(&err_writer);
     const root = p.readRootOpen(&err_writer);
     try std.testing.expectEqualStrings("results", root);
+}
+
+test "XmlParser.skipElementBody: skips body and validates closing tag" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    // Parser positioned just after <skip>'s '>' — body + closing tag + next element
+    const input = "<inner>text</inner></skip><keep/>";
+    var p = XmlParser.init(input);
+    p.skipElementBody("skip", &err_writer);
+    // Should now be positioned at "<keep/>"
+    try std.testing.expectEqualStrings("<keep/>", p.data[p.pos..]);
+}
+
+test "XmlParser.skipElementBody: handles nested elements" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<a><b><c>x</c></b></a></skip>tail";
+    var p = XmlParser.init(input);
+    p.skipElementBody("skip", &err_writer);
+    try std.testing.expectEqualStrings("tail", p.data[p.pos..]);
+}
+
+test "XmlParser.navigateToRoot: fast path — actual root matches" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<channel><item><title>Test</title></item></channel>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    p.navigateToRoot("channel", &err_writer);
+    try std.testing.expectEqualStrings("<item><title>Test</title></item></channel>", p.data[p.pos..]);
+}
+
+test "XmlParser.navigateToRoot: finds nested container as direct child" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<rss><meta><v>1</v></meta><channel><item><n>T</n></item></channel></rss>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    p.navigateToRoot("channel", &err_writer);
+    try std.testing.expectEqualStrings("<item><n>T</n></item></channel></rss>", p.data[p.pos..]);
+}
+
+test "XmlParser.navigateToRoot: handles text nodes between siblings" {
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<rss>some text<channel><item/></channel></rss>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    p.navigateToRoot("channel", &err_writer);
+    try std.testing.expectEqualStrings("<item/></channel></rss>", p.data[p.pos..]);
+}
+
+test "XmlParser.nextRow: row_tag_filter skips non-matching elements" {
+    const allocator = std.testing.allocator;
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    const input = "<root><meta><x>1</x></meta><item><name>Alice</name></item>" ++
+        "<meta><x>2</x></meta><item><name>Bob</name></item></root>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    const root = p.readRootOpen(&err_writer);
+
+    const row1 = try p.nextRow(allocator, root, "item", &err_writer);
+    try std.testing.expect(row1 != null);
+    defer {
+        for (row1.?) |col| if (col.value) |v| allocator.free(v);
+        allocator.free(row1.?);
+    }
+    try std.testing.expectEqualStrings("Alice", row1.?[0].value.?);
+
+    const row2 = try p.nextRow(allocator, root, "item", &err_writer);
+    try std.testing.expect(row2 != null);
+    defer {
+        for (row2.?) |col| if (col.value) |v| allocator.free(v);
+        allocator.free(row2.?);
+    }
+    try std.testing.expectEqualStrings("Bob", row2.?[0].value.?);
+
+    const row3 = try p.nextRow(allocator, root, "item", &err_writer);
+    try std.testing.expect(row3 == null);
 }

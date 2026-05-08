@@ -105,6 +105,10 @@ const ParsedArgs = struct {
     xml_root: []const u8,
     /// Row element name for XML output (default: "row").
     xml_row: []const u8,
+    /// Root element to navigate to for XML input; null = use actual document root.
+    xml_root_input: ?[]const u8,
+    /// Row tag filter for XML input; null = accept any direct child element as a row.
+    xml_row_input: ?[]const u8,
 };
 
 /// Arguments for `--columns` mode.
@@ -115,6 +119,10 @@ const ColumnsArgs = struct {
     verbose: bool,
     /// Input format (default: csv).
     input_format: InputFormat,
+    /// Root element to navigate to for XML input; null = use actual document root.
+    xml_root_input: ?[]const u8,
+    /// Row tag filter for XML input; null = accept any direct child element as a row.
+    xml_row_input: ?[]const u8,
 };
 
 /// Arguments for `--validate` mode.
@@ -125,6 +133,10 @@ const ValidateArgs = struct {
     type_inference: bool,
     /// Input format (default: csv).
     input_format: InputFormat,
+    /// Root element to navigate to for XML input; null = use actual document root.
+    xml_root_input: ?[]const u8,
+    /// Row tag filter for XML input; null = accept any direct child element as a row.
+    xml_row_input: ?[]const u8,
 };
 
 /// Arguments for `--sample` mode.
@@ -298,6 +310,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var output: ?[]const u8 = null;
     var xml_root: []const u8 = "results";
     var xml_row: []const u8 = "row";
+    var xml_root_input: ?[]const u8 = null;
+    var xml_row_input: ?[]const u8 = null;
     var sample_mode = false;
     var sample_n: usize = 10;
 
@@ -400,14 +414,18 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             i += 1;
             if (i >= args.len) return error.MissingXmlFlagValue;
             xml_root = args[i];
+            xml_root_input = args[i];
         } else if (std.mem.startsWith(u8, arg, "--xml-root=")) {
             xml_root = arg["--xml-root=".len..];
+            xml_root_input = arg["--xml-root=".len..];
         } else if (std.mem.eql(u8, arg, "--xml-row")) {
             i += 1;
             if (i >= args.len) return error.MissingXmlFlagValue;
             xml_row = args[i];
+            xml_row_input = args[i];
         } else if (std.mem.startsWith(u8, arg, "--xml-row=")) {
             xml_row = arg["--xml-row=".len..];
+            xml_row_input = arg["--xml-row=".len..];
         } else {
             if (query == null) query = arg;
         }
@@ -471,6 +489,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             .delimiter = delimiter,
             .verbose = verbose,
             .input_format = input_format,
+            .xml_root_input = xml_root_input,
+            .xml_row_input = xml_row_input,
         } };
 
     // --validate mode: parse CSV and print summary
@@ -479,6 +499,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             .delimiter = delimiter,
             .type_inference = type_inference,
             .input_format = input_format,
+            .xml_root_input = xml_root_input,
+            .xml_row_input = xml_row_input,
         } };
 
     // --sample mode: print schema + first n rows and exit
@@ -503,6 +525,8 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         .output = output,
         .xml_root = xml_root,
         .xml_row = xml_row,
+        .xml_root_input = xml_root_input,
+        .xml_row_input = xml_row_input,
     } };
 }
 
@@ -1509,7 +1533,7 @@ fn runColumns(
             var stdin_buf: [4096]u8 = undefined;
             var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
 
-            const names = xml.getXmlColumnNames(allocator, &stdin_file_reader.interface, stderr_writer);
+            const names = xml.getXmlColumnNames(allocator, &stdin_file_reader.interface, args.xml_root_input, args.xml_row_input, stderr_writer);
             defer {
                 for (names) |name| allocator.free(name);
                 allocator.free(names);
@@ -1799,7 +1823,7 @@ fn runValidate(
             var stdin_buf: [4096]u8 = undefined;
             var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
 
-            const summary = xml.summarizeXml(allocator, &stdin_file_reader.interface, stderr_writer);
+            const summary = xml.summarizeXml(allocator, &stdin_file_reader.interface, args.xml_root_input, args.xml_row_input, stderr_writer);
             defer {
                 for (summary.col_names) |name| allocator.free(name);
                 allocator.free(summary.col_names);
@@ -2019,7 +2043,7 @@ fn run(
         .xml => blk: {
             var stdin_buf: [4096]u8 = undefined;
             var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-            break :blk xml.loadXmlInput(allocator, &stdin_reader.interface, db, parsed.max_rows, stderr_writer);
+            break :blk xml.loadXmlInput(allocator, &stdin_reader.interface, db, parsed.xml_root_input, parsed.xml_row_input, parsed.max_rows, stderr_writer);
         },
     };
 
