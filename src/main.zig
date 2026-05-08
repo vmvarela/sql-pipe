@@ -3,6 +3,7 @@ const c = @import("c");
 const csv = @import("csv.zig");
 const json = @import("json.zig");
 const xml = @import("xml.zig");
+const format = @import("format.zig");
 const build_options = @import("build_options");
 
 const VERSION: []const u8 = build_options.version;
@@ -72,11 +73,11 @@ const ExitCode = enum(u8) {
     sql_error = 3,
 };
 
-/// Supported input formats.
-const InputFormat = enum { csv, tsv, json, ndjson, xml };
+/// Supported input formats (canonical definition lives in format.zig).
+const InputFormat = format.InputFormat;
 
-/// Supported output formats.
-const OutputFormat = enum { csv, tsv, json, ndjson, xml };
+/// Supported output formats (canonical definition lives in format.zig).
+const OutputFormat = format.OutputFormat;
 
 /// Parsed command-line arguments.
 const ParsedArgs = struct {
@@ -239,32 +240,6 @@ fn parseDelimiter(value: []const u8) SqlPipeError![]const u8 {
     return value;
 }
 
-/// parseInputFormat(s) → InputFormat
-/// Pre:  s is the format string provided by the user
-/// Post: result is the matching InputFormat
-///       error.InvalidInputFormat when s is not "csv", "tsv", "json", or "ndjson"
-fn parseInputFormat(s: []const u8) SqlPipeError!InputFormat {
-    if (std.mem.eql(u8, s, "csv")) return .csv;
-    if (std.mem.eql(u8, s, "tsv")) return .tsv;
-    if (std.mem.eql(u8, s, "json")) return .json;
-    if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
-    if (std.mem.eql(u8, s, "xml")) return .xml;
-    return error.InvalidInputFormat;
-}
-
-/// parseOutputFormat(s) → OutputFormat
-/// Pre:  s is the format string provided by the user
-/// Post: result is the matching OutputFormat
-///       error.InvalidOutputFormat when s is not "csv", "tsv", "json", or "ndjson"
-fn parseOutputFormat(s: []const u8) SqlPipeError!OutputFormat {
-    if (std.mem.eql(u8, s, "csv")) return .csv;
-    if (std.mem.eql(u8, s, "tsv")) return .tsv;
-    if (std.mem.eql(u8, s, "json")) return .json;
-    if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
-    if (std.mem.eql(u8, s, "xml")) return .xml;
-    return error.InvalidOutputFormat;
-}
-
 /// isValidXmlName(s) → bool
 ///
 /// Returns true iff s is a valid XML Name:
@@ -350,19 +325,19 @@ fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         } else if (std.mem.eql(u8, arg, "-I") or std.mem.eql(u8, arg, "--input-format")) {
             i += 1;
             if (i >= args.len) return error.InvalidInputFormat;
-            input_format = try parseInputFormat(args[i]);
+            input_format = InputFormat.parse(args[i]) catch return error.InvalidInputFormat;
         } else if (std.mem.startsWith(u8, arg, "--input-format=")) {
-            input_format = try parseInputFormat(arg["--input-format=".len..]);
+            input_format = InputFormat.parse(arg["--input-format=".len..]) catch return error.InvalidInputFormat;
         } else if (std.mem.startsWith(u8, arg, "-I=")) {
-            input_format = try parseInputFormat(arg["-I=".len..]);
+            input_format = InputFormat.parse(arg["-I=".len..]) catch return error.InvalidInputFormat;
         } else if (std.mem.eql(u8, arg, "-O") or std.mem.eql(u8, arg, "--output-format")) {
             i += 1;
             if (i >= args.len) return error.InvalidOutputFormat;
-            output_format = try parseOutputFormat(args[i]);
+            output_format = OutputFormat.parse(args[i]) catch return error.InvalidOutputFormat;
         } else if (std.mem.startsWith(u8, arg, "--output-format=")) {
-            output_format = try parseOutputFormat(arg["--output-format=".len..]);
+            output_format = OutputFormat.parse(arg["--output-format=".len..]) catch return error.InvalidOutputFormat;
         } else if (std.mem.startsWith(u8, arg, "-O=")) {
-            output_format = try parseOutputFormat(arg["-O=".len..]);
+            output_format = OutputFormat.parse(arg["-O=".len..]) catch return error.InvalidOutputFormat;
         } else if (std.mem.eql(u8, arg, "--max-rows")) {
             i += 1;
             if (i >= args.len) return error.InvalidMaxRows;
@@ -862,94 +837,12 @@ fn insertRowTyped(
     if (c.sqlite3_step(stmt) != c.SQLITE_DONE) return error.StepFailed;
 }
 
-/// printRow(stmt, col_count, writer, delimiter) → !void
-/// Pre:  sqlite3_step returned SQLITE_ROW for stmt
-///       col_count = sqlite3_column_count(stmt) > 0
-///       delimiter is the field separator string (e.g. "," or "\t")
-/// Post: one delimited line written to writer with col_count values;
-///       NULL cells rendered as the literal string "NULL"
-fn printRow(
-    stmt: *c.sqlite3_stmt,
-    col_count: c_int,
-    writer: *std.Io.Writer,
-    delimiter: []const u8,
-) !void {
-    // Loop invariant I: columns 0..i-1 have been written, separated by delimiter
-    // Bounding function: col_count - i
-    var i: c_int = 0;
-    while (i < col_count) : (i += 1) {
-        if (i > 0) try writer.writeAll(delimiter);
-        if (c.sqlite3_column_type(stmt, i) == c.SQLITE_NULL) {
-            try writer.writeAll("NULL");
-        } else {
-            const ptr = c.sqlite3_column_text(stmt, i);
-            if (ptr != null) {
-                try writeField(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))), delimiter);
-            } else {
-                try writer.writeAll("NULL");
-            }
-        }
-    }
-    try writer.writeByte('\n');
-}
-
-/// writeField(writer, value, delimiter) → !void
-/// Pre:  writer is a valid writer, value is a valid UTF-8 slice
-///       delimiter is the field separator string (e.g. "," or "\t" or "||")
-/// Post: value is written to writer as a single delimited field:
-///       if value contains the delimiter string, double-quote, or newline, it is
-///       enclosed in double-quotes with internal quotes escaped as "" (RFC 4180);
-///       otherwise it is written verbatim
-fn writeField(writer: *std.Io.Writer, value: []const u8, delimiter: []const u8) !void {
-    const needs_quoting = std.mem.indexOf(u8, value, delimiter) != null or
-        std.mem.indexOfAny(u8, value, "\"\n\r") != null;
-    if (needs_quoting) {
-        try writer.writeByte('"');
-        for (value) |ch| {
-            if (ch == '"') try writer.writeByte('"');
-            try writer.writeByte(ch);
-        }
-        try writer.writeByte('"');
-    } else {
-        try writer.writeAll(value);
-    }
-}
-
-/// printHeaderRow(stmt, col_count, writer, delimiter) → !void
-/// Pre:  stmt is a prepared statement, col_count > 0
-///       delimiter is the field separator string (e.g. "," or "\t")
-/// Post: one delimited line with col_count column names written to writer;
-///       names are obtained from sqlite3_column_name (alias or original);
-///       fields are RFC 4180 quoted when they contain special characters
-fn printHeaderRow(
-    stmt: *c.sqlite3_stmt,
-    col_count: c_int,
-    writer: *std.Io.Writer,
-    delimiter: []const u8,
-) !void {
-    // Loop invariant I: columns 0..i-1 names have been written, separated by delimiter
-    // Bounding function: col_count - i
-    var i: c_int = 0;
-    while (i < col_count) : (i += 1) {
-        if (i > 0) try writer.writeAll(delimiter);
-        const name_ptr = c.sqlite3_column_name(stmt, i);
-        if (name_ptr != null) {
-            const name = std.mem.span(@as([*:0]const u8, @ptrCast(name_ptr)));
-            try writeField(writer, name, delimiter);
-        }
-    }
-    try writer.writeByte('\n');
-}
-
 /// execQuery(db, query, allocator, writer, header, output_format) → !void
 /// Pre:  db is open with table `t` populated
 ///       query is a valid SQL string (not null-terminated)
 ///       allocator is valid
 ///       when output_format = .json or .ndjson, header must not be set (caller's responsibility)
-/// Post: if output_format = .json,        results are written as a JSON array of objects
-///       if output_format = .ndjson,       results are written as one JSON object per line
-///       if output_format = .csv or .tsv,  results are written as delimited text;
-///         when header = true, column names are written as the first row
+/// Post: results are written to writer in the requested output format
 ///       error.PrepareQueryFailed when sqlite3_prepare_v2 returns non-SQLITE_OK
 ///       propagates any writer I/O error
 fn execQuery(
@@ -961,7 +854,7 @@ fn execQuery(
     output_format: OutputFormat,
     xml_root: []const u8,
     xml_row: []const u8,
-) (SqlPipeError || std.mem.Allocator.Error || std.Io.Writer.Error)!void {
+) (SqlPipeError || std.mem.Allocator.Error || error{WriteFailed})!void {
     const query_z = try allocator.dupeZ(u8, query);
     defer allocator.free(query_z);
 
@@ -972,72 +865,20 @@ fn execQuery(
 
     const col_count = c.sqlite3_column_count(stmt);
 
-    switch (output_format) {
-        .json => {
-            // Collect column names before stepping (sqlite3_column_name is valid before step)
-            var col_names = try allocator.alloc([*:0]const u8, @intCast(col_count));
-            defer allocator.free(col_names);
-            var ci: c_int = 0;
-            while (ci < col_count) : (ci += 1) {
-                col_names[@intCast(ci)] = c.sqlite3_column_name(stmt, ci);
-            }
+    var out_writer = format.OutputWriter.init(output_format, .{
+        .header = header,
+        .xml_root = xml_root,
+        .xml_row = xml_row,
+    });
+    defer out_writer.deinit(allocator);
 
-            try writer.writeByte('[');
-            var first = true;
-            // Loop invariant I: all SQLITE_ROW results returned so far have been printed as JSON objects
-            // Bounding function: number of remaining rows in the result set (finite)
-            while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-                try json.printJsonRow(stmt.?, col_count, col_names, writer, first);
-                first = false;
-            }
-            try writer.writeAll("]\n");
-        },
-        .ndjson => {
-            // Collect column names before stepping
-            var col_names = try allocator.alloc([*:0]const u8, @intCast(col_count));
-            defer allocator.free(col_names);
-            var ci: c_int = 0;
-            while (ci < col_count) : (ci += 1) {
-                col_names[@intCast(ci)] = c.sqlite3_column_name(stmt, ci);
-            }
-            // Loop invariant I: all SQLITE_ROW results returned so far have been printed as NDJSON lines
-            // Bounding function: number of remaining rows in the result set (finite)
-            while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-                try json.printNdjsonRow(stmt.?, col_count, col_names, writer);
-            }
-        },
-        .csv, .tsv => {
-            const out_delim: []const u8 = if (output_format == .tsv) "\t" else ",";
-
-            // When header is requested, print column names before data rows
-            if (header and col_count > 0) {
-                try printHeaderRow(stmt.?, col_count, writer, out_delim);
-            }
-
-            // Loop invariant I: all SQLITE_ROW results returned so far have been printed
-            // Bounding function: number of remaining rows in the result set (finite)
-            while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-                try printRow(stmt.?, col_count, writer, out_delim);
-            }
-        },
-        .xml => {
-            // Collect column names before stepping
-            var col_names = try allocator.alloc([*:0]const u8, @intCast(col_count));
-            defer allocator.free(col_names);
-            var ci: c_int = 0;
-            while (ci < col_count) : (ci += 1) {
-                col_names[@intCast(ci)] = c.sqlite3_column_name(stmt, ci);
-            }
-
-            try xml.writeXmlHeader(writer, xml_root);
-            // Loop invariant I: all SQLITE_ROW results returned so far have been written as XML rows
-            // Bounding function: number of remaining rows in the result set (finite)
-            while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-                try xml.writeXmlRow(stmt.?, col_count, col_names, writer, xml_row);
-            }
-            try xml.writeXmlFooter(writer, xml_root);
-        },
+    try out_writer.begin(allocator, stmt.?, col_count, writer);
+    // Loop invariant I: all SQLITE_ROW results returned so far have been written
+    // Bounding function: number of remaining rows in the result set (finite)
+    while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+        try out_writer.writeRow(stmt.?, writer);
     }
+    try out_writer.end(writer);
 }
 
 // ─── SQL error context helpers ────────────────────────
@@ -1972,7 +1813,7 @@ fn runSample(
             for (cols, 0..) |col, i| {
                 if (i > 0) stdout_writer.writeAll(col_delim) catch
                     fatal("failed to write header", stderr_writer, .csv_error, .{});
-                writeField(stdout_writer, col, col_delim) catch
+                format.writeField(stdout_writer, col, col_delim) catch
                     fatal("failed to write header", stderr_writer, .csv_error, .{});
             }
             stdout_writer.writeByte('\n') catch
@@ -1990,7 +1831,7 @@ fn runSample(
                     if (col_idx > 0) stdout_writer.writeAll(col_delim) catch
                         fatal("failed to write field separator", stderr_writer, .csv_error, .{});
                     const val: []const u8 = if (col_idx < row.len) row[col_idx] else "";
-                    writeField(stdout_writer, val, col_delim) catch
+                    format.writeField(stdout_writer, val, col_delim) catch
                         fatal("failed to write field", stderr_writer, .csv_error, .{});
                 }
                 stdout_writer.writeByte('\n') catch

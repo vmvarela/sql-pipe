@@ -1,0 +1,276 @@
+//! Format abstraction — input/output format types and the OutputWriter.
+//!
+//! This module owns:
+//!   InputFormat   — supported input formats, with parse()
+//!   OutputFormat  — supported output formats, with parse()
+//!   LoadOpts      — common options forwarded to input-format loaders
+//!   WriteOpts     — options forwarded to OutputWriter
+//!   OutputWriter  — stateful writer that dispatches on OutputFormat
+//!   writeField    — RFC 4180 CSV field writer (used by OutputWriter and --sample mode)
+
+const std = @import("std");
+const c = @import("c");
+const json_mod = @import("json.zig");
+const xml_mod = @import("xml.zig");
+
+// ─── Input format ──────────────────────────────────────
+
+/// Supported input formats.
+pub const InputFormat = enum {
+    csv,
+    tsv,
+    json,
+    ndjson,
+    xml,
+
+    /// Parse a format name string.
+    /// Returns error.InvalidInputFormat when the value is unrecognised.
+    pub fn parse(s: []const u8) error{InvalidInputFormat}!InputFormat {
+        if (std.mem.eql(u8, s, "csv")) return .csv;
+        if (std.mem.eql(u8, s, "tsv")) return .tsv;
+        if (std.mem.eql(u8, s, "json")) return .json;
+        if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
+        if (std.mem.eql(u8, s, "xml")) return .xml;
+        return error.InvalidInputFormat;
+    }
+};
+
+// ─── Output format ─────────────────────────────────────
+
+/// Supported output formats.
+pub const OutputFormat = enum {
+    csv,
+    tsv,
+    json,
+    ndjson,
+    xml,
+
+    /// Parse a format name string.
+    /// Returns error.InvalidOutputFormat when the value is unrecognised.
+    pub fn parse(s: []const u8) error{InvalidOutputFormat}!OutputFormat {
+        if (std.mem.eql(u8, s, "csv")) return .csv;
+        if (std.mem.eql(u8, s, "tsv")) return .tsv;
+        if (std.mem.eql(u8, s, "json")) return .json;
+        if (std.mem.eql(u8, s, "ndjson")) return .ndjson;
+        if (std.mem.eql(u8, s, "xml")) return .xml;
+        return error.InvalidOutputFormat;
+    }
+};
+
+// ─── Load options ───────────────────────────────────────
+
+/// Options forwarded to input-format loaders.
+pub const LoadOpts = struct {
+    /// Abort if more than this many data rows are read; null = unlimited.
+    max_rows: ?usize = null,
+    /// CSV/TSV field delimiter (1–8 bytes).
+    delimiter: []const u8 = ",",
+    /// Infer INTEGER/REAL column types from the first 100 rows (CSV/TSV only).
+    type_inference: bool = true,
+    /// Root element to navigate to for XML input; null = actual document root.
+    xml_root: ?[]const u8 = null,
+    /// Row tag filter for XML input; null = any direct child element.
+    xml_row: ?[]const u8 = null,
+};
+
+// ─── Write options ──────────────────────────────────────
+
+/// Options forwarded to OutputWriter.
+pub const WriteOpts = struct {
+    /// Emit column names as the first row (CSV/TSV output only).
+    header: bool = false,
+    /// Root element name for XML output.
+    xml_root: []const u8 = "results",
+    /// Row element name for XML output.
+    xml_row: []const u8 = "row",
+};
+
+// ─── Output writer ──────────────────────────────────────
+
+/// Stateful writer that formats SQLite result rows in any supported output format.
+///
+/// Usage:
+///   var w = OutputWriter.init(format, opts);
+///   defer w.deinit(allocator);
+///   try w.begin(allocator, stmt, col_count, writer);
+///   while (sqlite3_step(stmt) == SQLITE_ROW) try w.writeRow(stmt, writer);
+///   try w.end(writer);
+pub const OutputWriter = struct {
+    format: OutputFormat,
+    opts: WriteOpts,
+    /// Set to false after the first writeRow call; controls JSON comma placement.
+    first_row: bool,
+    /// Slice of column-name pointers borrowed from SQLite (valid until stmt is finalized).
+    /// Allocated in begin(); freed in deinit().
+    col_names: []const [*:0]const u8,
+    col_count: c_int,
+
+    /// Create a new OutputWriter. Call begin() before the first writeRow().
+    pub fn init(format: OutputFormat, opts: WriteOpts) OutputWriter {
+        return .{
+            .format = format,
+            .opts = opts,
+            .first_row = true,
+            .col_names = &.{},
+            .col_count = 0,
+        };
+    }
+
+    /// Release any memory allocated during begin().
+    /// Safe to call even when begin() was never called.
+    pub fn deinit(self: *OutputWriter, allocator: std.mem.Allocator) void {
+        if (self.col_names.len > 0) {
+            allocator.free(self.col_names);
+        }
+        self.* = undefined;
+    }
+
+    /// Write any format preamble and collect column metadata.
+    ///
+    /// JSON:    writes '['
+    /// XML:     writes the XML declaration and opening root element
+    /// CSV/TSV: writes an optional header row (when opts.header = true)
+    ///
+    /// Pre:  stmt is a valid prepared statement; col_count = sqlite3_column_count(stmt)
+    pub fn begin(
+        self: *OutputWriter,
+        allocator: std.mem.Allocator,
+        stmt: *c.sqlite3_stmt,
+        col_count: c_int,
+        writer: *std.Io.Writer,
+    ) !void {
+        self.col_count = col_count;
+
+        // Collect column-name pointers for formats that need them per row.
+        switch (self.format) {
+            .json, .ndjson, .xml => {
+                const names = try allocator.alloc([*:0]const u8, @intCast(col_count));
+                var i: c_int = 0;
+                while (i < col_count) : (i += 1) {
+                    names[@intCast(i)] = c.sqlite3_column_name(stmt, i);
+                }
+                self.col_names = names;
+            },
+            .csv, .tsv => {
+                if (self.opts.header and col_count > 0)
+                    try csvPrintHeaderRow(stmt, col_count, writer, self.csvDelimiter());
+            },
+        }
+
+        // Write format-specific preamble.
+        switch (self.format) {
+            .json => try writer.writeByte('['),
+            .xml => try xml_mod.writeXmlHeader(writer, self.opts.xml_root),
+            else => {},
+        }
+    }
+
+    /// Write the current SQLITE_ROW to writer.
+    ///
+    /// Pre: sqlite3_step(stmt) just returned SQLITE_ROW; begin() has been called
+    pub fn writeRow(
+        self: *OutputWriter,
+        stmt: *c.sqlite3_stmt,
+        writer: *std.Io.Writer,
+    ) !void {
+        switch (self.format) {
+            .json => {
+                try json_mod.printJsonRow(stmt, self.col_count, self.col_names, writer, self.first_row);
+                self.first_row = false;
+            },
+            .ndjson => try json_mod.printNdjsonRow(stmt, self.col_count, self.col_names, writer),
+            .csv, .tsv => try csvPrintRow(stmt, self.col_count, writer, self.csvDelimiter()),
+            .xml => try xml_mod.writeXmlRow(
+                stmt,
+                self.col_count,
+                self.col_names,
+                writer,
+                self.opts.xml_row,
+            ),
+        }
+    }
+
+    /// Write any format epilogue.
+    ///
+    /// JSON: writes ']\n'
+    /// XML:  writes the closing root element
+    pub fn end(self: *OutputWriter, writer: *std.Io.Writer) !void {
+        switch (self.format) {
+            .json => try writer.writeAll("]\n"),
+            .xml => try xml_mod.writeXmlFooter(writer, self.opts.xml_root),
+            else => {},
+        }
+    }
+
+    fn csvDelimiter(self: OutputWriter) []const u8 {
+        return if (self.format == .tsv) "\t" else ",";
+    }
+};
+
+// ── CSV output helpers ─────────────────────────────────────────────────────────
+
+/// Write a single CSV/TSV field with RFC 4180 quoting when necessary.
+///
+/// Pre:  value is a valid UTF-8 slice; delimiter is the field separator string
+/// Post: if value contains delimiter, '"', '\n', or '\r', it is enclosed in
+///       double-quotes with internal double-quotes doubled; otherwise written verbatim
+pub fn writeField(writer: *std.Io.Writer, value: []const u8, delimiter: []const u8) !void {
+    const needs_quoting = std.mem.indexOf(u8, value, delimiter) != null or
+        std.mem.indexOfAny(u8, value, "\"\n\r") != null;
+    if (needs_quoting) {
+        try writer.writeByte('"');
+        for (value) |ch| {
+            if (ch == '"') try writer.writeByte('"');
+            try writer.writeByte(ch);
+        }
+        try writer.writeByte('"');
+    } else {
+        try writer.writeAll(value);
+    }
+}
+
+/// Write one delimited output row from the current SQLITE_ROW.
+fn csvPrintRow(
+    stmt: *c.sqlite3_stmt,
+    col_count: c_int,
+    writer: *std.Io.Writer,
+    delimiter: []const u8,
+) !void {
+    // Loop invariant I: columns 0..i-1 have been written, separated by delimiter
+    // Bounding function: col_count - i
+    var i: c_int = 0;
+    while (i < col_count) : (i += 1) {
+        if (i > 0) try writer.writeAll(delimiter);
+        if (c.sqlite3_column_type(stmt, i) == c.SQLITE_NULL) {
+            try writer.writeAll("NULL");
+        } else {
+            const ptr = c.sqlite3_column_text(stmt, i);
+            if (ptr != null) {
+                try writeField(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))), delimiter);
+            } else {
+                try writer.writeAll("NULL");
+            }
+        }
+    }
+    try writer.writeByte('\n');
+}
+
+/// Write a header row with column names from the prepared statement.
+fn csvPrintHeaderRow(
+    stmt: *c.sqlite3_stmt,
+    col_count: c_int,
+    writer: *std.Io.Writer,
+    delimiter: []const u8,
+) !void {
+    // Loop invariant I: columns 0..i-1 names have been written, separated by delimiter
+    // Bounding function: col_count - i
+    var i: c_int = 0;
+    while (i < col_count) : (i += 1) {
+        if (i > 0) try writer.writeAll(delimiter);
+        const name_ptr = c.sqlite3_column_name(stmt, i);
+        if (name_ptr != null) {
+            try writeField(writer, std.mem.span(@as([*:0]const u8, @ptrCast(name_ptr))), delimiter);
+        }
+    }
+    try writer.writeByte('\n');
+}
