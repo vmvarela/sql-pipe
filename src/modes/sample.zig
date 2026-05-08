@@ -10,12 +10,7 @@ const inferTypes = loader.inferTypes;
 const parseHeader = loader.parseHeader;
 const inference_buffer_size = loader.inference_buffer_size;
 
-const ExitCode = enum(u8) {
-    success = 0,
-    usage = 1,
-    csv_error = 2,
-    sql_error = 3,
-};
+const ExitCode = args_mod.ExitCode;
 
 fn fatal(comptime fmt: []const u8, writer: *std.Io.Writer, code: ExitCode, f_args: anytype) noreturn {
     writer.print("error: " ++ fmt ++ "\n", f_args) catch |err| {

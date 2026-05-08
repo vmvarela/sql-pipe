@@ -6,6 +6,18 @@ const format = @import("format.zig");
 const InputFormat = format.InputFormat;
 const OutputFormat = format.OutputFormat;
 
+/// Structured exit codes for scripting.
+///   0 = success
+///   1 = usage error (missing query, bad flag)
+///   2 = CSV/parse error
+///   3 = SQL error
+pub const ExitCode = enum(u8) {
+    success = 0,
+    usage = 1,
+    csv_error = 2,
+    sql_error = 3,
+};
+
 pub const SqlPipeError = error{
     MissingQuery,
     InvalidDelimiter,
@@ -387,9 +399,11 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     if (silent and verbose)
         return error.SilentVerboseConflict;
 
-    // --xml-root and --xml-row must be valid XML element names
-    if (!isValidXmlName(xml_root) or !isValidXmlName(xml_row))
-        return error.InvalidXmlName;
+    // --xml-root and --xml-row must be valid XML element names (only validated in XML mode)
+    if (input_format == .xml or output_format == .xml) {
+        if (!isValidXmlName(xml_root) or !isValidXmlName(xml_row))
+            return error.InvalidXmlName;
+    }
 
     // --columns mode: list headers and exit
     if (list_columns)

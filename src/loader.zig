@@ -18,19 +18,6 @@ pub const inference_buffer_size: usize = 100;
 /// Number of rows between progress indicator updates.
 pub const progress_interval: usize = 10_000;
 
-/// stripQuotes(raw) → []const u8
-/// Pre:  raw is a valid UTF-8 slice
-/// Post: if raw = '"' ++ inner ++ '"'  =>  result = inner
-///       otherwise                     =>  result = raw
-/// Note: RFC 4180 quoted-field unescaping is handled by csv.zig; this function
-///       provides an explicit, single-location implementation for any residual
-///       direct string handling that bypasses the CSV parser.
-fn stripQuotes(raw: []const u8) []const u8 {
-    if (raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"')
-        return raw[1 .. raw.len - 1];
-    return raw;
-}
-
 /// isInteger(val) → bool
 /// Pre:  val is a valid UTF-8 slice
 /// Post: result = val matches [+-]?[0-9]+  (non-empty, only digits after optional sign)
@@ -189,28 +176,17 @@ pub fn parseHeader(
     return cols.toOwnedSlice(allocator);
 }
 
-/// insertRowTyped(stmt, db, row, types, param_count) → void
+/// insertRowTyped(stmt, row, types, param_count) → void
 /// Pre:  stmt is a prepared INSERT with param_count parameters, freshly reset
 ///       row is a non-empty CSV record (slice of field slices)
 ///       types.len = param_count (or shorter → remaining treated as TEXT)
-///       db is the database that owns stmt (used for error reporting by caller)
 /// Post: each field is bound to its parameter using the appropriate SQLite bind
-///       function according to types[j]:
-///         INTEGER → sqlite3_bind_int64  (fallback: TEXT on parse failure)
-///         REAL    → sqlite3_bind_double (fallback: TEXT on parse failure)
-///         TEXT    → sqlite3_bind_text
-///       empty / missing values → sqlite3_bind_null
-///       sqlite3_step returned SQLITE_DONE
-///       error.BindFailed / error.StepFailed on SQLite errors
 pub fn insertRowTyped(
     stmt: *c.sqlite3_stmt,
-    db: *c.sqlite3,
     row: [][]u8,
     types: []const ColumnType,
     param_count: c_int,
 ) args_mod.SqlPipeError!void {
-    _ = db;
-
     _ = c.sqlite3_reset(stmt);
     _ = c.sqlite3_clear_bindings(stmt);
 
@@ -332,15 +308,15 @@ pub fn loadCsvInput(
     var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, parsed.delimiter);
 
     const header_record = csv_reader.nextRecord() catch |err| switch (err) {
-        error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, sqlite_mod.exit_parse, .{}),
-        else => fatal("row 1: failed to parse CSV header", stderr_writer, sqlite_mod.exit_parse, .{}),
-    } orelse fatal("empty input (no header row)", stderr_writer, sqlite_mod.exit_parse, .{});
+        error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),
+        else => fatal("row 1: failed to parse CSV header", stderr_writer, .csv_error, .{}),
+    } orelse fatal("empty input (no header row)", stderr_writer, .csv_error, .{});
     defer csv_reader.freeRecord(header_record);
 
     const cols = parseHeader(allocator, header_record, stderr_writer) catch |err| switch (err) {
-        error.EmptyColumnName => fatal("row 1: empty column name in header", stderr_writer, sqlite_mod.exit_parse, .{}),
-        error.NoColumns => fatal("row 1: no columns found in header", stderr_writer, sqlite_mod.exit_parse, .{}),
-        else => fatal("row 1: failed to parse header", stderr_writer, sqlite_mod.exit_parse, .{}),
+        error.EmptyColumnName => fatal("row 1: empty column name in header", stderr_writer, .csv_error, .{}),
+        error.NoColumns => fatal("row 1: no columns found in header", stderr_writer, .csv_error, .{}),
+        else => fatal("row 1: failed to parse header", stderr_writer, .csv_error, .{}),
     };
     defer {
         for (cols) |col| allocator.free(col);
@@ -363,13 +339,13 @@ pub fn loadCsvInput(
                 error.UnterminatedQuotedField => fatal(
                     "row {d}: unterminated quoted field",
                     stderr_writer,
-                    sqlite_mod.exit_parse,
+                    .csv_error,
                     .{csv_row_count + 1},
                 ),
                 else => fatal(
                     "row {d}: failed to parse CSV",
                     stderr_writer,
-                    sqlite_mod.exit_parse,
+                    .csv_error,
                     .{csv_row_count + 1},
                 ),
             } orelse break;
@@ -379,13 +355,13 @@ pub fn loadCsvInput(
                 continue;
             }
             row_buffer.append(allocator, rec) catch
-                fatal("out of memory while buffering rows", stderr_writer, sqlite_mod.exit_parse, .{});
+                fatal("out of memory while buffering rows", stderr_writer, .csv_error, .{});
         }
         break :blk inferTypes(allocator, row_buffer.items, num_cols) catch
-            fatal("out of memory during type inference", stderr_writer, sqlite_mod.exit_parse, .{});
+            fatal("out of memory during type inference", stderr_writer, .csv_error, .{});
     } else blk: {
         const t = allocator.alloc(ColumnType, num_cols) catch
-            fatal("out of memory", stderr_writer, sqlite_mod.exit_parse, .{});
+            fatal("out of memory", stderr_writer, .csv_error, .{});
         @memset(t, .TEXT);
         break :blk t;
     };
@@ -414,9 +390,9 @@ pub fn loadCsvInput(
         rows_inserted += 1;
         if (parsed.max_rows) |limit| {
             if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, sqlite_mod.exit_usage, .{limit});
+                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
         }
-        insertRowTyped(stmt, db, row, types, @intCast(num_cols)) catch
+        insertRowTyped(stmt, row, types, @intCast(num_cols)) catch
             fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
         if (is_tty and rows_inserted % progress_interval == 0)
             printProgress(stderr_writer, rows_inserted, parsed.max_rows);
@@ -428,13 +404,13 @@ pub fn loadCsvInput(
             error.UnterminatedQuotedField => fatal(
                 "row {d}: unterminated quoted field",
                 stderr_writer,
-                sqlite_mod.exit_parse,
+                .csv_error,
                 .{csv_row_count + 1},
             ),
             else => fatal(
                 "row {d}: failed to parse CSV",
                 stderr_writer,
-                sqlite_mod.exit_parse,
+                .csv_error,
                 .{csv_row_count + 1},
             ),
         } orelse break;
@@ -446,9 +422,9 @@ pub fn loadCsvInput(
         rows_inserted += 1;
         if (parsed.max_rows) |limit| {
             if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, sqlite_mod.exit_usage, .{limit});
+                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
         }
-        insertRowTyped(stmt, db, record, types, @intCast(num_cols)) catch
+        insertRowTyped(stmt, record, types, @intCast(num_cols)) catch
             fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
         if (is_tty and rows_inserted % progress_interval == 0)
             printProgress(stderr_writer, rows_inserted, parsed.max_rows);

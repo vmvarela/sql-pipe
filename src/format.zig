@@ -104,6 +104,8 @@ pub const OutputWriter = struct {
     /// Allocated in begin(); freed in deinit().
     col_names: []const [*:0]const u8,
     col_count: c_int,
+    /// True when col_names was heap-allocated in begin(); false when begin() was never called.
+    col_names_allocated: bool,
 
     /// Create a new OutputWriter. Call begin() before the first writeRow().
     pub fn init(format: OutputFormat, opts: WriteOpts) OutputWriter {
@@ -113,13 +115,14 @@ pub const OutputWriter = struct {
             .first_row = true,
             .col_names = &.{},
             .col_count = 0,
+            .col_names_allocated = false,
         };
     }
 
     /// Release any memory allocated during begin().
     /// Safe to call even when begin() was never called.
     pub fn deinit(self: *OutputWriter, allocator: std.mem.Allocator) void {
-        if (self.col_names.len > 0) {
+        if (self.col_names_allocated) {
             allocator.free(self.col_names);
         }
         self.* = undefined;
@@ -150,6 +153,7 @@ pub const OutputWriter = struct {
                     names[@intCast(i)] = c.sqlite3_column_name(stmt, i);
                 }
                 self.col_names = names;
+                self.col_names_allocated = true;
             },
             .csv, .tsv => {
                 if (self.opts.header and col_count > 0)

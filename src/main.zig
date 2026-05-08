@@ -16,24 +16,13 @@ const VERSION: []const u8 = build_options.version;
 
 const SqlPipeError = args_mod.SqlPipeError;
 const ParsedArgs = args_mod.ParsedArgs;
+const ExitCode = args_mod.ExitCode;
 const parseArgs = args_mod.parseArgs;
 const printUsage = args_mod.printUsage;
 
 const loadCsvInput = loader.loadCsvInput;
 const fmtThousands = loader.fmtThousands;
 const progress_interval = loader.progress_interval;
-
-/// Structured exit codes for scripting.
-///   0 = success
-///   1 = usage error (missing query, bad flag)
-///   2 = CSV parse error
-///   3 = SQL error (sqlite3 error)
-const ExitCode = enum(u8) {
-    success = 0,
-    usage = 1,
-    csv_error = 2,
-    sql_error = 3,
-};
 
 /// Supported input formats (canonical definition lives in format.zig).
 const InputFormat = format.InputFormat;
