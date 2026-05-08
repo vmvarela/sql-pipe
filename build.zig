@@ -1066,9 +1066,11 @@ pub fn build(b: *std.Build) void {
     test_xml_validate.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_xml_validate.step);
 
-    // Integration test 104: --xml-root and --xml-row customize element names
+    // Integration test 104: --xml-root and --xml-row customize element names for output,
+    //                        and navigate nested XML for input
     const test_xml_custom_elements = b.addSystemCommand(&.{
         "bash", "-c",
+        // Output: custom element names appear in the XML
         \\result=$(printf 'name,age\nAlice,30\n' \
         \\    | ./zig-out/bin/sql-pipe -O xml --xml-root data --xml-row record 'SELECT * FROM t')
         \\echo "$result" | grep -q '<data>' && echo "$result" | grep -q '<record>' && echo "$result" | grep -q '</data>'
@@ -1108,7 +1110,7 @@ pub fn build(b: *std.Build) void {
     // Integration test 108: Root sin rows → error con "no row elements"
     const test_xml_no_rows = b.addSystemCommand(&.{
         "bash", "-c",
-        \\msg=$(printf '<root></root>' | ./zig-out/bin/sql-pipe -I xml 'SELECT 1' 2>&1; echo "EXIT:$?")
+        \\msg=$(printf '<results></results>' | ./zig-out/bin/sql-pipe -I xml 'SELECT 1' 2>&1; echo "EXIT:$?")
         \\echo "$msg" | grep -q 'no row elements' && echo "$msg" | grep -qv 'EXIT:0'
     });
     test_xml_no_rows.step.dependOn(b.getInstallStep());
@@ -1161,6 +1163,31 @@ pub fn build(b: *std.Build) void {
     });
     test_xml_float_as_int.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_xml_float_as_int.step);
+
+    // Integration test 114: --xml-root navigates nested XML for input (RSS-like structure)
+    const test_xml_nested_navigation = b.addSystemCommand(&.{
+        "bash", "-c",
+        // Feed with <feed><channel><item> structure; --xml-root channel --xml-row item
+        // selects only item elements from inside channel, skipping <title> etc.
+        \\doc='<feed><channel><title>My Feed</title><item><name>Alice</name><age>30</age></item><item><name>Bob</name><age>25</age></item></channel></feed>'
+        \\result=$(printf '%s' "$doc" \
+        \\    | ./zig-out/bin/sql-pipe -I xml --xml-root channel --xml-row item \
+        \\    'SELECT name || ":" || age FROM t ORDER BY name')
+        \\[ "$result" = "$(printf 'Alice:30\nBob:25')" ]
+    });
+    test_xml_nested_navigation.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_nested_navigation.step);
+
+    // Integration test 115: --xml-root / --xml-row with --validate counts only matching rows
+    const test_xml_nested_validate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\doc='<feed><channel><title>T</title><item><val>1</val></item><item><val>2</val></item></channel></feed>'
+        \\result=$(printf '%s' "$doc" \
+        \\    | ./zig-out/bin/sql-pipe -I xml --xml-root channel --xml-row item --validate)
+        \\echo "$result" | grep -q 'OK: 2 rows'
+    });
+    test_xml_nested_validate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_nested_validate.step);
 
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
