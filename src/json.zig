@@ -29,9 +29,7 @@ const prepareInsertStmt = sqlite_helpers.prepareInsertStmt;
 const beginTransaction = sqlite_helpers.beginTransaction;
 const commitTransaction = sqlite_helpers.commitTransaction;
 const fatal = sqlite_helpers.fatal;
-const exit_usage = sqlite_helpers.exit_usage;
-const exit_parse = sqlite_helpers.exit_parse;
-const exit_sql = sqlite_helpers.exit_sql;
+const ExitCode = sqlite_helpers.ExitCode;
 const sqlite_static = sqlite_helpers.sqlite_static;
 
 // ─── Shared helpers ───────────────────────────────────
@@ -189,28 +187,28 @@ pub fn loadJsonArray(
     while (true) {
         const byte = reader.takeByte() catch |err| switch (err) {
             error.EndOfStream => break,
-            error.ReadFailed => fatal("failed to read JSON input", stderr_writer, exit_parse, .{}),
+            error.ReadFailed => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
         };
-        buf.append(allocator, byte) catch fatal("out of memory reading JSON input", stderr_writer, exit_parse, .{});
+        buf.append(allocator, byte) catch fatal("out of memory reading JSON input", stderr_writer, .csv_error, .{});
     }
 
-    if (buf.items.len == 0) fatal("empty input", stderr_writer, exit_parse, .{});
+    if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, buf.items, .{}) catch
-        fatal("failed to parse JSON input", stderr_writer, exit_parse, .{});
+        fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
     defer parsed.deinit();
 
     const array = switch (parsed.value) {
         .array => |a| a,
-        else => fatal("JSON input must be an array of objects", stderr_writer, exit_parse, .{}),
+        else => fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
     };
 
-    if (array.items.len == 0) fatal("empty JSON array: cannot determine column names", stderr_writer, exit_parse, .{});
+    if (array.items.len == 0) fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});
 
     // Extract column names from the first object's keys (insertion order)
     const first_obj = switch (array.items[0]) {
         .object => |o| o,
-        else => fatal("JSON array elements must be objects", stderr_writer, exit_parse, .{}),
+        else => fatal("JSON array elements must be objects", stderr_writer, .csv_error, .{}),
     };
 
     var cols: std.ArrayList([]const u8) = .empty;
@@ -218,9 +216,9 @@ pub fn loadJsonArray(
     var key_iter = first_obj.iterator();
     while (key_iter.next()) |entry| {
         cols.append(allocator, entry.key_ptr.*) catch
-            fatal("out of memory building column list", stderr_writer, exit_parse, .{});
+            fatal("out of memory building column list", stderr_writer, .csv_error, .{});
     }
-    if (cols.items.len == 0) fatal("first JSON object has no keys", stderr_writer, exit_parse, .{});
+    if (cols.items.len == 0) fatal("first JSON object has no keys", stderr_writer, .csv_error, .{});
 
     // Create all-TEXT table (column names are owned by parsed arena — valid until parsed.deinit())
     createAllTextTable(allocator, db, cols.items, stderr_writer);
@@ -235,15 +233,15 @@ pub fn loadJsonArray(
     for (array.items) |item| {
         const obj = switch (item) {
             .object => |o| o,
-            else => fatal("JSON array element is not an object", stderr_writer, exit_parse, .{}),
+            else => fatal("JSON array element is not an object", stderr_writer, .csv_error, .{}),
         };
         rows_inserted += 1;
         if (max_rows) |limit| {
             if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, exit_usage, .{limit});
+                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
         }
         insertRowFromJson(allocator, stmt, cols.items, obj) catch
-            fatal("{s}", stderr_writer, exit_sql, .{std.mem.span(c.sqlite3_errmsg(db))});
+            fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
 
     commitTransaction(db, stderr_writer);
@@ -283,8 +281,8 @@ pub fn loadNdjsonInput(
     while (true) {
         line_num += 1;
         const line = readLine(allocator, reader) catch |err| switch (err) {
-            error.OutOfMemory => fatal("out of memory reading NDJSON", stderr_writer, exit_parse, .{}),
-            error.ReadFailed => fatal("line {d}: failed to read NDJSON input", stderr_writer, exit_parse, .{line_num}),
+            error.OutOfMemory => fatal("out of memory reading NDJSON", stderr_writer, .csv_error, .{}),
+            error.ReadFailed => fatal("line {d}: failed to read NDJSON input", stderr_writer, .csv_error, .{line_num}),
         } orelse break;
         defer allocator.free(line);
 
@@ -295,12 +293,12 @@ pub fn loadNdjsonInput(
         }
 
         var parsed_line = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch
-            fatal("line {d}: failed to parse NDJSON", stderr_writer, exit_parse, .{line_num});
+            fatal("line {d}: failed to parse NDJSON", stderr_writer, .csv_error, .{line_num});
         defer parsed_line.deinit();
 
         const obj = switch (parsed_line.value) {
             .object => |o| o,
-            else => fatal("line {d}: NDJSON element must be a JSON object", stderr_writer, exit_parse, .{line_num}),
+            else => fatal("line {d}: NDJSON element must be a JSON object", stderr_writer, .csv_error, .{line_num}),
         };
 
         if (cols_owned == null) {
@@ -313,15 +311,15 @@ pub fn loadNdjsonInput(
             var ki = obj.iterator();
             while (ki.next()) |entry| {
                 const owned_key = allocator.dupe(u8, entry.key_ptr.*) catch
-                    fatal("out of memory building column list", stderr_writer, exit_parse, .{});
+                    fatal("out of memory building column list", stderr_writer, .csv_error, .{});
                 col_list.append(allocator, owned_key) catch
-                    fatal("out of memory building column list", stderr_writer, exit_parse, .{});
+                    fatal("out of memory building column list", stderr_writer, .csv_error, .{});
             }
             if (col_list.items.len == 0)
-                fatal("line 1: first NDJSON object has no keys", stderr_writer, exit_parse, .{});
+                fatal("line 1: first NDJSON object has no keys", stderr_writer, .csv_error, .{});
 
             cols_owned = col_list.toOwnedSlice(allocator) catch
-                fatal("out of memory", stderr_writer, exit_parse, .{});
+                fatal("out of memory", stderr_writer, .csv_error, .{});
 
             const cols_const: []const []const u8 = @ptrCast(cols_owned.?);
             createAllTextTable(allocator, db, cols_const, stderr_writer);
@@ -334,16 +332,16 @@ pub fn loadNdjsonInput(
         rows_inserted += 1;
         if (max_rows) |limit| {
             if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, exit_usage, .{limit});
+                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
         }
 
         const cols_const: []const []const u8 = @ptrCast(cols_owned.?);
         insertRowFromJson(allocator, insert_stmt.?, cols_const, obj) catch
-            fatal("line {d}: {s}", stderr_writer, exit_sql, .{ line_num, std.mem.span(c.sqlite3_errmsg(db)) });
+            fatal("line {d}: {s}", stderr_writer, .sql_error, .{ line_num, std.mem.span(c.sqlite3_errmsg(db)) });
     }
 
     if (cols_owned == null)
-        fatal("empty NDJSON input", stderr_writer, exit_parse, .{});
+        fatal("empty NDJSON input", stderr_writer, .csv_error, .{});
 
     if (in_transaction) commitTransaction(db, stderr_writer);
     return rows_inserted;

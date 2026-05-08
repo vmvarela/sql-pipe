@@ -37,9 +37,7 @@ const prepareInsertStmt = sqlite_helpers.prepareInsertStmt;
 const beginTransaction = sqlite_helpers.beginTransaction;
 const commitTransaction = sqlite_helpers.commitTransaction;
 const fatal = sqlite_helpers.fatal;
-const exit_usage = sqlite_helpers.exit_usage;
-const exit_parse = sqlite_helpers.exit_parse;
-const exit_sql = sqlite_helpers.exit_sql;
+const ExitCode = sqlite_helpers.ExitCode;
 const sqlite_static = sqlite_helpers.sqlite_static;
 
 // ─── XML escaping ─────────────────────────────────────
@@ -279,7 +277,7 @@ pub const XmlParser = struct {
         err_writer.print("error: xml: line {d}, col {d}: ", .{ self.line, self.col }) catch |err| std.log.err("failed to write error: {}", .{err});
         err_writer.print(fmt ++ "\n", args) catch |err| std.log.err("failed to write error: {}", .{err});
         err_writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
-        std.process.exit(exit_parse);
+        std.process.exit(@intFromEnum(ExitCode.csv_error));
     }
 
     // ─── Skip helpers ────────────────────────────────────
@@ -701,11 +699,11 @@ pub fn getXmlColumnNames(
     while (true) {
         const byte = reader.takeByte() catch |err| switch (err) {
             error.EndOfStream => break,
-            error.ReadFailed => fatal("failed to read XML input", stderr_writer, exit_parse, .{}),
+            error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
         };
-        buf.append(allocator, byte) catch fatal("out of memory reading XML", stderr_writer, exit_parse, .{});
+        buf.append(allocator, byte) catch fatal("out of memory reading XML", stderr_writer, .csv_error, .{});
     }
-    if (buf.items.len == 0) fatal("empty input", stderr_writer, exit_parse, .{});
+    if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
     var p = XmlParser.init(buf.items);
     p.skipPrologue(stderr_writer);
@@ -715,12 +713,12 @@ pub fn getXmlColumnNames(
     } else p.readRootOpen(stderr_writer);
 
     const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
-        fatal("out of memory parsing XML", stderr_writer, exit_parse, .{});
+        fatal("out of memory parsing XML", stderr_writer, .csv_error, .{});
     if (cols == null) {
         if (xml_row) |row_tag|
-            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, exit_parse, .{row_tag})
+            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
         else
-            fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+            fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
     }
     defer {
         for (cols.?) |col| if (col.value) |v| allocator.free(v);
@@ -730,10 +728,10 @@ pub fn getXmlColumnNames(
     var names: std.ArrayList([]const u8) = .empty;
     for (cols.?) |col| {
         const owned = allocator.dupe(u8, col.name) catch
-            fatal("out of memory", stderr_writer, exit_parse, .{});
-        names.append(allocator, owned) catch fatal("out of memory", stderr_writer, exit_parse, .{});
+            fatal("out of memory", stderr_writer, .csv_error, .{});
+        names.append(allocator, owned) catch fatal("out of memory", stderr_writer, .csv_error, .{});
     }
-    return names.toOwnedSlice(allocator) catch fatal("out of memory", stderr_writer, exit_parse, .{});
+    return names.toOwnedSlice(allocator) catch fatal("out of memory", stderr_writer, .csv_error, .{});
 }
 
 /// XmlSummary — result of summarizeXml.
@@ -765,11 +763,11 @@ pub fn summarizeXml(
     while (true) {
         const byte = reader.takeByte() catch |err| switch (err) {
             error.EndOfStream => break,
-            error.ReadFailed => fatal("failed to read XML input", stderr_writer, exit_parse, .{}),
+            error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
         };
-        buf.append(allocator, byte) catch fatal("out of memory reading XML", stderr_writer, exit_parse, .{});
+        buf.append(allocator, byte) catch fatal("out of memory reading XML", stderr_writer, .csv_error, .{});
     }
-    if (buf.items.len == 0) fatal("empty input", stderr_writer, exit_parse, .{});
+    if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
     var p = XmlParser.init(buf.items);
     p.skipPrologue(stderr_writer);
@@ -785,7 +783,7 @@ pub fn summarizeXml(
     // Bounding function: rows remaining in the XML document (finite)
     while (true) {
         const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
-            fatal("out of memory parsing XML", stderr_writer, exit_parse, .{});
+            fatal("out of memory parsing XML", stderr_writer, .csv_error, .{});
         if (cols == null) break;
         defer {
             for (cols.?) |col| if (col.value) |v| allocator.free(v);
@@ -796,19 +794,19 @@ pub fn summarizeXml(
             var names: std.ArrayList([]const u8) = .empty;
             for (cols.?) |col| {
                 const owned = allocator.dupe(u8, col.name) catch
-                    fatal("out of memory", stderr_writer, exit_parse, .{});
-                names.append(allocator, owned) catch fatal("out of memory", stderr_writer, exit_parse, .{});
+                    fatal("out of memory", stderr_writer, .csv_error, .{});
+                names.append(allocator, owned) catch fatal("out of memory", stderr_writer, .csv_error, .{});
             }
             col_names = names.toOwnedSlice(allocator) catch
-                fatal("out of memory", stderr_writer, exit_parse, .{});
+                fatal("out of memory", stderr_writer, .csv_error, .{});
         }
     }
 
     if (col_names == null) {
         if (xml_row) |row_tag|
-            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, exit_parse, .{row_tag})
+            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
         else
-            fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+            fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
     }
     return .{ .row_count = row_count, .col_names = col_names.? };
 }
@@ -838,11 +836,11 @@ pub fn loadXmlInput(
     while (true) {
         const byte = reader.takeByte() catch |err| switch (err) {
             error.EndOfStream => break,
-            error.ReadFailed => fatal("failed to read XML input", stderr_writer, exit_parse, .{}),
+            error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
         };
-        buf.append(allocator, byte) catch fatal("out of memory reading XML input", stderr_writer, exit_parse, .{});
+        buf.append(allocator, byte) catch fatal("out of memory reading XML input", stderr_writer, .csv_error, .{});
     }
-    if (buf.items.len == 0) fatal("empty input", stderr_writer, exit_parse, .{});
+    if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
     var p = XmlParser.init(buf.items);
     p.skipPrologue(stderr_writer);
@@ -872,7 +870,7 @@ pub fn loadXmlInput(
     // Bounding function: row elements remaining in the document (finite)
     while (true) {
         const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
-            fatal("out of memory parsing XML", stderr_writer, exit_parse, .{});
+            fatal("out of memory parsing XML", stderr_writer, .csv_error, .{});
         if (cols == null) break;
 
         defer {
@@ -883,7 +881,7 @@ pub fn loadXmlInput(
         rows_inserted += 1;
         if (max_rows) |limit| {
             if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, exit_usage, .{limit});
+                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
         }
 
         if (col_names == null) {
@@ -891,12 +889,12 @@ pub fn loadXmlInput(
             var names: std.ArrayList([]const u8) = .empty;
             for (cols.?) |col| {
                 const owned = allocator.dupe(u8, col.name) catch
-                    fatal("out of memory", stderr_writer, exit_parse, .{});
-                names.append(allocator, owned) catch fatal("out of memory", stderr_writer, exit_parse, .{});
+                    fatal("out of memory", stderr_writer, .csv_error, .{});
+                names.append(allocator, owned) catch fatal("out of memory", stderr_writer, .csv_error, .{});
             }
             if (names.items.len == 0)
-                fatal("first XML row element has no column children", stderr_writer, exit_parse, .{});
-            col_names = names.toOwnedSlice(allocator) catch fatal("out of memory", stderr_writer, exit_parse, .{});
+                fatal("first XML row element has no column children", stderr_writer, .csv_error, .{});
+            col_names = names.toOwnedSlice(allocator) catch fatal("out of memory", stderr_writer, .csv_error, .{});
 
             createAllTextTable(allocator, db, col_names.?, stderr_writer);
             beginTransaction(db, stderr_writer);
@@ -922,22 +920,22 @@ pub fn loadXmlInput(
             };
             if (value) |v| {
                 if (c.sqlite3_bind_text(stmt, param_idx, v.ptr, @intCast(v.len), sqlite_static) != c.SQLITE_OK)
-                    fatal("{s}", stderr_writer, exit_sql, .{std.mem.span(c.sqlite3_errmsg(db))});
+                    fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
             } else {
                 if (c.sqlite3_bind_null(stmt, param_idx) != c.SQLITE_OK)
-                    fatal("{s}", stderr_writer, exit_sql, .{std.mem.span(c.sqlite3_errmsg(db))});
+                    fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
             }
         }
 
         if (c.sqlite3_step(stmt) != c.SQLITE_DONE)
-            fatal("{s}", stderr_writer, exit_sql, .{std.mem.span(c.sqlite3_errmsg(db))});
+            fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
 
     if (col_names == null) {
         if (xml_row) |row_tag|
-            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, exit_parse, .{row_tag})
+            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
         else
-            fatal("XML document has no row elements", stderr_writer, exit_parse, .{});
+            fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
     }
     if (in_transaction) commitTransaction(db, stderr_writer);
     return rows_inserted;
