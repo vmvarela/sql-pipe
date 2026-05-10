@@ -207,6 +207,19 @@ $ printf 'name,age\nAlice,30\nBob,25' | sql-pipe -O xml 'SELECT * FROM t'
 $ cat data.xml | sql-pipe -I xml 'SELECT name FROM t WHERE age > 25'
 ```
 
+Real-world XML documents (RSS feeds, API responses) nest rows inside a container element. Use `--xml-root` to navigate to the row container and `--xml-row` to filter by element tag:
+
+```sh
+# Query an RSS feed: channel/item → rows
+$ curl -s https://feeds.feedburner.com/TheHackersNews \
+    | sql-pipe -I xml --xml-root channel --xml-row item \
+      'SELECT title FROM t LIMIT 5'
+
+# Query XML with a custom root and row name
+$ cat events.xml | sql-pipe -I xml --xml-root events --xml-row event \
+    'SELECT name, date FROM t WHERE type = "conference"'
+```
+
 Chain queries by piping back in — useful for two-pass aggregations. Pass `-H` to the first call so the second one sees column names:
 
 ```sh

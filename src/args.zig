@@ -193,6 +193,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  cat data.csv | sql-pipe --output-format json 'SELECT * FROM t'
         \\  cat data.json | sql-pipe --input-format json 'SELECT * FROM t'
         \\  cat data.ndjson | sql-pipe -I ndjson -O ndjson 'SELECT name FROM t WHERE age > 18'
+        \\  cat data.xml | sql-pipe -I xml --xml-root channel --xml-row item "SELECT title FROM t"
         \\  cat data.csv | sql-pipe --sample 5
         \\
     );
