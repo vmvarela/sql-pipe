@@ -98,9 +98,17 @@ pub fn runColumns(
                 fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
             defer parsed.deinit();
 
-            const array = switch (parsed.value) {
+            const target: std.json.Value = if (args.json_path) |path|
+                json_mod.navigateJsonPath(parsed.value, path, stderr_writer)
+            else
+                parsed.value;
+
+            const array = switch (target) {
                 .array => |a| a,
-                else => fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
+                else => if (args.json_path) |path|
+                    fatal("--json-path '{s}': resolved to a non-array value; expected an array of objects", stderr_writer, .csv_error, .{path})
+                else
+                    fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
             };
             if (array.items.len == 0) fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});
 
