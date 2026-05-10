@@ -183,6 +183,16 @@ EXAMPLES
 
 		$ cat data.xml | sql-pipe -I xml 'SELECT name FROM t WHERE age > 25'
 
+	Query XML input with nested structure using --xml-root and --xml-row (e.g. RSS feeds):
+
+		$ curl -s https://feeds.example.com/news.rss \
+		    | sql-pipe -I xml --xml-root channel --xml-row item 'SELECT title FROM t LIMIT 5'
+
+	Output results as XML with custom element names:
+
+		$ cat data.csv \
+		    | sql-pipe -O xml --xml-root feed --xml-row entry 'SELECT * FROM t'
+
 	Preview schema and first 3 rows of a CSV file:
 
 		$ cat sales.csv | sql-pipe --sample 3
