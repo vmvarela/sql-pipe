@@ -187,6 +187,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InvalidSampleCount => fatal("--sample requires a positive integer value", stderr_writer, .usage, .{}),
             error.MissingXmlFlagValue => fatal("--xml-root and --xml-row require a value", stderr_writer, .usage, .{}),
             error.MissingJsonFlagValue => fatal("--json-path requires a value", stderr_writer, .usage, .{}),
+            error.JsonPathRequiresJson => fatal("--json-path requires -I json", stderr_writer, .usage, .{}),
             error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
             else => {},
         }

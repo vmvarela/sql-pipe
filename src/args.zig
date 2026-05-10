@@ -33,6 +33,7 @@ pub const SqlPipeError = error{
     MissingXmlFlagValue,
     MissingJsonFlagValue,
     InvalidXmlName,
+    JsonPathRequiresJson,
     OpenDbFailed,
     EmptyInput,
     EmptyColumnName,
@@ -429,6 +430,10 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         if (!isValidXmlName(xml_root) or !isValidXmlName(xml_row))
             return error.InvalidXmlName;
     }
+
+    // --json-path requires -I json (the flag only applies to JSON object navigation)
+    if (json_path != null and input_format != .json)
+        return error.JsonPathRequiresJson;
 
     // --columns mode: list headers and exit
     if (list_columns)

@@ -166,7 +166,7 @@ pub fn insertRowFromJson(
 ///
 /// Pre:  value is a parsed JSON value; path is a non-empty dot-separated key sequence
 /// Post: returns the JSON value at the given path
-///       fatals if any segment is not found or if an intermediate value is not an object
+///       fatals if any segment is empty, not found, or if an intermediate value is not an object
 pub fn navigateJsonPath(
     value: std.json.Value,
     path: []const u8,
@@ -180,12 +180,14 @@ pub fn navigateJsonPath(
         const dot = std.mem.indexOfScalar(u8, remaining, '.') orelse remaining.len;
         const key = remaining[0..dot];
         remaining = if (dot < remaining.len) remaining[dot + 1 ..] else &.{};
+        if (key.len == 0)
+            fatal("--json-path '{s}': empty key segment (check for double dots or leading/trailing dots)", stderr_writer, .csv_error, .{path});
         const obj = switch (current) {
             .object => |o| o,
-            else => fatal("--json-path: '{s}' is not an object", stderr_writer, .csv_error, .{key}),
+            else => fatal("--json-path '{s}': '{s}' is not an object", stderr_writer, .csv_error, .{ path, key }),
         };
         current = obj.get(key) orelse
-            fatal("--json-path: key '{s}' not found in JSON document", stderr_writer, .csv_error, .{key});
+            fatal("--json-path '{s}': key '{s}' not found in JSON document", stderr_writer, .csv_error, .{ path, key });
     }
     return current;
 }
@@ -229,7 +231,10 @@ pub fn loadJsonArray(
 
     const array = switch (target) {
         .array => |a| a,
-        else => fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
+        else => if (json_path) |path|
+            fatal("--json-path '{s}': resolved to a non-array value; expected an array of objects", stderr_writer, .csv_error, .{path})
+        else
+            fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
     };
 
     if (array.items.len == 0) fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});

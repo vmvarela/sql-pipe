@@ -1419,6 +1419,25 @@ pub fn build(b: *std.Build) void {
     test_json_path_columns.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_json_path_columns.step);
 
+    // Integration test 138: --json-path with --validate parses nested JSON array and prints summary
+    const test_json_path_validate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"data":[{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]}' \
+        \\    | ./zig-out/bin/sql-pipe -I json --json-path data --validate)
+        \\echo "$result" | grep -q "OK: 2 rows"
+    });
+    test_json_path_validate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_path_validate.step);
+
+    // Integration test 139: --json-path with non-json input format exits non-zero
+    const test_json_path_format_mismatch = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name\nAlice\n' \
+        \\    | ./zig-out/bin/sql-pipe -I csv --json-path data 'SELECT * FROM t' 2>/dev/null; test $? -ne 0
+    });
+    test_json_path_format_mismatch.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_path_format_mismatch.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
