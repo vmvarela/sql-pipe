@@ -90,7 +90,7 @@ fn run(
 ) void {
     const query = parsed.query;
 
-    const db = sqlite_mod.openDb(stderr_writer);
+    const db = sqlite_mod.openDb(parsed.disk, stderr_writer);
     defer _ = c.sqlite3_close(db);
 
     const start_ts = std.Io.Timestamp.now(io, .awake);

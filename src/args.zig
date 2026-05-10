@@ -82,6 +82,9 @@ pub const ParsedArgs = struct {
     xml_root_input: ?[]const u8,
     /// Row tag filter for XML input; null = accept any direct child element as a row.
     xml_row_input: ?[]const u8,
+    /// Use a file-backed temporary SQLite database instead of :memory: when true.
+    /// Enables processing datasets larger than available RAM; also sets PRAGMA temp_store = FILE.
+    disk: bool,
 };
 
 pub const ColumnsArgs = struct {
@@ -170,6 +173,9 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --output <file>              Write results to file instead of stdout
         \\  --xml-root <name>            Root element name for XML I/O (default: results)
         \\  --xml-row <name>             Row element name for XML I/O (default: row)
+        \\  --disk                       Use a file-backed temp database instead of :memory:
+        \\                               Enables processing datasets larger than available RAM
+        \\                               Also sets PRAGMA temp_store = FILE for transient structures
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
         \\
@@ -234,6 +240,7 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var xml_row_input: ?[]const u8 = null;
     var sample_mode = false;
     var sample_n: usize = 10;
+    var disk = false;
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
@@ -242,7 +249,8 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     //   header reflects the presence of --header/-H;
     //   output_format reflects the last --output-format/--json flag seen;
     //   input_format reflects the last --input-format flag seen;
-    //   max_rows reflects the presence of --max-rows
+    //   max_rows reflects the presence of --max-rows;
+    //   disk reflects the presence of --disk
     // Bounding function: args.len - i
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -346,6 +354,8 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         } else if (std.mem.startsWith(u8, arg, "--xml-row=")) {
             xml_row = arg["--xml-row=".len..];
             xml_row_input = arg["--xml-row=".len..];
+        } else if (std.mem.eql(u8, arg, "--disk")) {
+            disk = true;
         } else {
             if (query == null) query = arg;
         }
@@ -449,5 +459,6 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         .xml_row = xml_row,
         .xml_root_input = xml_root_input,
         .xml_row_input = xml_row_input,
+        .disk = disk,
     } };
 }

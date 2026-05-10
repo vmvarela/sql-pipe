@@ -1241,6 +1241,127 @@ pub fn build(b: *std.Build) void {
     test_xml_root_fast_path.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_xml_root_fast_path.step);
 
+    // Integration test 121: --disk produces correct output for CSV input
+    const test_disk_csv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\nCarol,35' \
+        \\    | ./zig-out/bin/sql-pipe --disk 'SELECT name FROM t WHERE age > 27 ORDER BY name')
+        \\[ "$result" = "$(printf 'Alice\nCarol')" ]
+    });
+    test_disk_csv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_csv.step);
+
+    // Integration test 122: --disk produces same results as in-memory for aggregates
+    const test_disk_aggregate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'item,price\nA,9.99\nB,3.00\nC,12.50\n' \
+        \\    | ./zig-out/bin/sql-pipe --disk 'SELECT max(price), min(price) FROM t')
+        \\[ "$result" = "12.5,3.0" ]
+    });
+    test_disk_aggregate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_aggregate.step);
+
+    // Integration test 123: --disk with ORDER BY (exercises PRAGMA temp_store = FILE)
+    const test_disk_order_by = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nZara,90\nAna,85\nMike,92\n' \
+        \\    | ./zig-out/bin/sql-pipe --disk 'SELECT name FROM t ORDER BY score DESC')
+        \\[ "$result" = "$(printf 'Mike\nZara\nAna')" ]
+    });
+    test_disk_order_by.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_order_by.step);
+
+    // Integration test 124: --disk with TSV input
+    const test_disk_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\tval\nFoo\t10\nBar\t20\n' \
+        \\    | ./zig-out/bin/sql-pipe --disk --tsv 'SELECT name FROM t WHERE val > 15')
+        \\[ "$result" = "Bar" ]
+    });
+    test_disk_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_tsv.step);
+
+    // Integration test 125: --disk with NDJSON input
+    // age column is TEXT (NDJSON uses createAllTextTable); comparison works via
+    // SQLite implicit TEXT→NUMERIC conversion when compared against a numeric literal.
+    const test_disk_ndjson = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"name":"Alice","age":30}\n{"name":"Bob","age":25}\n' \
+        \\    | ./zig-out/bin/sql-pipe --disk -I ndjson 'SELECT name FROM t WHERE age > 27')
+        \\[ "$result" = "Alice" ]
+    });
+    test_disk_ndjson.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_ndjson.step);
+
+    // Integration test 126: --disk with JSON input
+    // age column is TEXT (JSON uses createAllTextTable); comparison works via
+    // SQLite implicit TEXT→NUMERIC conversion when compared against a numeric literal.
+    const test_disk_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '[{"name":"Alice","age":30},{"name":"Bob","age":25}]' \
+        \\    | ./zig-out/bin/sql-pipe --disk -I json 'SELECT name FROM t WHERE age > 27')
+        \\[ "$result" = "Alice" ]
+    });
+    test_disk_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_json.step);
+
+    // Integration test 127: --disk with XML input
+    // age column is TEXT (XML uses createAllTextTable); comparison works via
+    // SQLite implicit TEXT→NUMERIC conversion when compared against a numeric literal.
+    const test_disk_xml = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '<data><row><name>Alice</name><age>30</age></row><row><name>Bob</name><age>25</age></row></data>' \
+        \\    | ./zig-out/bin/sql-pipe --disk -I xml 'SELECT name FROM t WHERE age > 27')
+        \\[ "$result" = "Alice" ]
+    });
+    test_disk_xml.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_xml.step);
+
+    // Integration test 128: --disk with GROUP BY
+    const test_disk_group_by = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'region,revenue\nEast,100\nWest,200\nEast,150\nWest,50\n' \
+        \\    | ./zig-out/bin/sql-pipe --disk 'SELECT region, SUM(revenue) FROM t GROUP BY region ORDER BY region')
+        \\[ "$result" = "$(printf 'East,250\nWest,250')" ]
+    });
+    test_disk_group_by.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_group_by.step);
+
+    // Integration test 129: --disk with --no-type-inference (all TEXT columns)
+    // Uses SQLite implicit TEXT→NUMERIC conversion for the numeric comparison.
+    const test_disk_no_type_inference = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\nCarol,35' \
+        \\    | ./zig-out/bin/sql-pipe --disk --no-type-inference \
+        \\    'SELECT name FROM t WHERE age > 27 ORDER BY name')
+        \\[ "$result" = "$(printf 'Alice\nCarol')" ]
+    });
+    test_disk_no_type_inference.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_no_type_inference.step);
+
+    // Integration test 130: --disk with --header outputs column names in first row
+    const test_disk_header = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe --disk --header 'SELECT name, age FROM t ORDER BY age')
+        \\[ "$result" = "$(printf 'name,age\nBob,25\nAlice,30')" ]
+    });
+    test_disk_header.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_header.step);
+
+    // Integration test 131: --disk with --output writes results to file
+    const test_disk_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'name,val\nA,10\nB,20\n' \
+        \\    | ./zig-out/bin/sql-pipe --disk --output "$tmp" 'SELECT name FROM t WHERE val > 15'
+        \\result=$(cat "$tmp")
+        \\rm -f "$tmp"
+        \\[ "$result" = "B" ]
+    });
+    test_disk_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_output.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
