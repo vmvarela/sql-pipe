@@ -95,13 +95,37 @@ pub fn commitTransaction(db: *c.sqlite3, writer: *std.Io.Writer) void {
     }
 }
 
-/// openDb(writer) → *sqlite3
+/// openDb(disk, writer) → *sqlite3
 /// Pre:  —
-/// Post: result is an open, empty in-memory SQLite database handle
-pub fn openDb(writer: *std.Io.Writer) *c.sqlite3 {
+/// Post: result is an open, empty SQLite database handle.
+///       When disk=false: in-memory database (`:memory:`).
+///       When disk=true:  file-backed private temp database (`""`); SQLite
+///         creates a temp file and deletes it automatically on close.
+///         PRAGMA temp_store = FILE is set so ORDER BY / GROUP BY transient
+///         structures also spill to disk rather than RAM.
+///         Exits with sql_error if the temp directory is not writable.
+pub fn openDb(disk: bool, writer: *std.Io.Writer) *c.sqlite3 {
     var db: ?*c.sqlite3 = null;
-    if (c.sqlite3_open(":memory:", &db) != c.SQLITE_OK)
-        fatal("failed to open in-memory database", writer, .sql_error, .{});
+    if (!disk) {
+        if (c.sqlite3_open(":memory:", &db) != c.SQLITE_OK)
+            fatal("failed to open in-memory database", writer, .sql_error, .{});
+        return db.?;
+    }
+
+    // Empty string → SQLite private temp file, deleted on close.
+    if (c.sqlite3_open("", &db) != c.SQLITE_OK) {
+        const msg = std.mem.span(c.sqlite3_errmsg(db));
+        fatal("failed to open temporary database (is the temp directory writable?): {s}", writer, .sql_error, .{msg});
+    }
+
+    // Ensure transient structures (ORDER BY sorts, GROUP BY indices) also spill to disk.
+    var errmsg: [*c]u8 = null;
+    if (c.sqlite3_exec(db.?, "PRAGMA temp_store = FILE", null, null, &errmsg) != c.SQLITE_OK) {
+        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
+        if (errmsg != null) c.sqlite3_free(errmsg);
+        fatal("failed to set PRAGMA temp_store = FILE: {s}", writer, .sql_error, .{msg});
+    }
+
     return db.?;
 }
 
