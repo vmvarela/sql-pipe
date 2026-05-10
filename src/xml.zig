@@ -439,7 +439,7 @@ pub const XmlParser = struct {
                 const close_name = self.readName(err_writer);
                 self.skipWs();
                 if (self.peek() == '>') self.advance();
-                const expected = tag_stack.pop().?;
+                const expected = tag_stack.pop().?; // safe: every closing tag at depth>0 was preceded by an opening push
                 if (!std.mem.eql(u8, close_name, expected))
                     self.fatalAt("mismatched closing tag: expected '</{s}>' but found '</{s}>'", err_writer, .{ expected, close_name });
             } else {
