@@ -162,9 +162,37 @@ pub fn insertRowFromJson(
     if (c.sqlite3_step(stmt) != c.SQLITE_DONE) return error.StepFailed;
 }
 
+/// navigateJsonPath(value, path, stderr_writer) → std.json.Value
+///
+/// Pre:  value is a parsed JSON value; path is a non-empty dot-separated key sequence
+/// Post: returns the JSON value at the given path
+///       fatals if any segment is not found or if an intermediate value is not an object
+pub fn navigateJsonPath(
+    value: std.json.Value,
+    path: []const u8,
+    stderr_writer: *std.Io.Writer,
+) std.json.Value {
+    var current = value;
+    var remaining = path;
+    // Loop invariant: current is the value at the path prefix consumed so far
+    // Bounding function: remaining.len (strictly decreasing per segment consumed)
+    while (remaining.len > 0) {
+        const dot = std.mem.indexOfScalar(u8, remaining, '.') orelse remaining.len;
+        const key = remaining[0..dot];
+        remaining = if (dot < remaining.len) remaining[dot + 1 ..] else &.{};
+        const obj = switch (current) {
+            .object => |o| o,
+            else => fatal("--json-path: '{s}' is not an object", stderr_writer, .csv_error, .{key}),
+        };
+        current = obj.get(key) orelse
+            fatal("--json-path: key '{s}' not found in JSON document", stderr_writer, .csv_error, .{key});
+    }
+    return current;
+}
+
 // ─── Input loading ────────────────────────────────────
 
-/// loadJsonArray(allocator, reader, db, max_rows, stderr_writer) → usize
+/// loadJsonArray(allocator, reader, db, max_rows, json_path, stderr_writer) → usize
 ///
 /// Pre:  reader is positioned at the start of a JSON document
 ///       db is an open, empty SQLite database
@@ -177,6 +205,7 @@ pub fn loadJsonArray(
     reader: *std.Io.Reader,
     db: *c.sqlite3,
     max_rows: ?usize,
+    json_path: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) usize {
     // Read all input into a buffer using block reads instead of byte-by-byte takeByte()
@@ -193,7 +222,12 @@ pub fn loadJsonArray(
         fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
     defer parsed.deinit();
 
-    const array = switch (parsed.value) {
+    const target: std.json.Value = if (json_path) |path|
+        navigateJsonPath(parsed.value, path, stderr_writer)
+    else
+        parsed.value;
+
+    const array = switch (target) {
         .array => |a| a,
         else => fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
     };

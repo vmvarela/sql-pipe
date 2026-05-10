@@ -107,7 +107,7 @@ fn run(
         .json => blk: {
             var stdin_buf: [4096]u8 = undefined;
             var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-            break :blk json.loadJsonArray(allocator, &stdin_reader.interface, db, parsed.max_rows, stderr_writer);
+            break :blk json.loadJsonArray(allocator, &stdin_reader.interface, db, parsed.max_rows, parsed.json_path, stderr_writer);
         },
         .ndjson => blk: {
             var stdin_buf: [4096]u8 = undefined;
@@ -186,6 +186,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.SampleWithOutput => fatal("--sample cannot be combined with --output", stderr_writer, .usage, .{}),
             error.InvalidSampleCount => fatal("--sample requires a positive integer value", stderr_writer, .usage, .{}),
             error.MissingXmlFlagValue => fatal("--xml-root and --xml-row require a value", stderr_writer, .usage, .{}),
+            error.MissingJsonFlagValue => fatal("--json-path requires a value", stderr_writer, .usage, .{}),
             error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
             else => {},
         }

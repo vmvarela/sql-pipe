@@ -1371,6 +1371,54 @@ pub fn build(b: *std.Build) void {
     test_xml_mismatched_tags.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_xml_mismatched_tags.step);
 
+    // Integration test 133: --json-path navigates single-key nested JSON array
+    const test_json_path_single = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"data":[{"name":"Alice"},{"name":"Bob"}]}' \
+        \\    | ./zig-out/bin/sql-pipe -I json --json-path data 'SELECT name FROM t ORDER BY name')
+        \\[ "$result" = "$(printf 'Alice\nBob')" ]
+    });
+    test_json_path_single.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_path_single.step);
+
+    // Integration test 134: --json-path navigates multi-segment nested JSON path
+    const test_json_path_multi = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"results":{"items":[{"id":1},{"id":2}]}}' \
+        \\    | ./zig-out/bin/sql-pipe -I json --json-path results.items 'SELECT id FROM t ORDER BY id')
+        \\[ "$result" = "$(printf '1\n2')" ]
+    });
+    test_json_path_multi.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_path_multi.step);
+
+    // Integration test 135: --json-path with missing key exits non-zero
+    const test_json_path_missing_key = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '{"data":[{"name":"Alice"}]}' \
+        \\    | ./zig-out/bin/sql-pipe -I json --json-path missing 'SELECT * FROM t' 2>/dev/null; test $? -ne 0
+    });
+    test_json_path_missing_key.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_path_missing_key.step);
+
+    // Integration test 136: --json-path targeting a non-array value exits non-zero
+    const test_json_path_non_array = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '{"data":{"name":"Alice"}}' \
+        \\    | ./zig-out/bin/sql-pipe -I json --json-path data 'SELECT * FROM t' 2>/dev/null; test $? -ne 0
+    });
+    test_json_path_non_array.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_path_non_array.step);
+
+    // Integration test 137: --json-path with --columns lists columns from nested array
+    const test_json_path_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '{"feed":{"entry":[{"title":"T1","link":"L1"}]}}' \
+        \\    | ./zig-out/bin/sql-pipe -I json --json-path feed.entry --columns)
+        \\[ "$result" = "$(printf 'title\nlink')" ]
+    });
+    test_json_path_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_json_path_columns.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

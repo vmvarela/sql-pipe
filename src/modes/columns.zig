@@ -98,7 +98,12 @@ pub fn runColumns(
                 fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
             defer parsed.deinit();
 
-            const array = switch (parsed.value) {
+            const target: std.json.Value = if (args.json_path) |path|
+                json_mod.navigateJsonPath(parsed.value, path, stderr_writer)
+            else
+                parsed.value;
+
+            const array = switch (target) {
                 .array => |a| a,
                 else => fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
             };

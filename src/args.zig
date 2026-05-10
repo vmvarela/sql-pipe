@@ -31,6 +31,7 @@ pub const SqlPipeError = error{
     InvalidInputFormat,
     InvalidOutputFormat,
     MissingXmlFlagValue,
+    MissingJsonFlagValue,
     InvalidXmlName,
     OpenDbFailed,
     EmptyInput,
@@ -82,6 +83,8 @@ pub const ParsedArgs = struct {
     xml_root_input: ?[]const u8,
     /// Row tag filter for XML input; null = accept any direct child element as a row.
     xml_row_input: ?[]const u8,
+    /// Dot-separated path to the JSON array (e.g. "results.items"); null = expect top-level array.
+    json_path: ?[]const u8,
     /// Use a file-backed temporary SQLite database instead of :memory: when true.
     /// Enables processing datasets larger than available RAM; also sets PRAGMA temp_store = FILE.
     disk: bool,
@@ -98,6 +101,8 @@ pub const ColumnsArgs = struct {
     xml_root_input: ?[]const u8,
     /// Row tag filter for XML input; null = accept any direct child element as a row.
     xml_row_input: ?[]const u8,
+    /// Dot-separated path to the JSON array (e.g. "results.items"); null = expect top-level array.
+    json_path: ?[]const u8,
 };
 
 pub const ValidateArgs = struct {
@@ -111,6 +116,8 @@ pub const ValidateArgs = struct {
     xml_root_input: ?[]const u8,
     /// Row tag filter for XML input; null = accept any direct child element as a row.
     xml_row_input: ?[]const u8,
+    /// Dot-separated path to the JSON array (e.g. "results.items"); null = expect top-level array.
+    json_path: ?[]const u8,
 };
 
 pub const SampleArgs = struct {
@@ -173,6 +180,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --output <file>              Write results to file instead of stdout
         \\  --xml-root <name>            Root element name for XML I/O (default: results)
         \\  --xml-row <name>             Row element name for XML I/O (default: row)
+        \\  --json-path <path>           Dot-separated path to the JSON array for -I json (e.g. results.items)
         \\  --disk                       Use a file-backed temp database instead of :memory:
         \\                               Enables processing datasets larger than available RAM
         \\                               Also sets PRAGMA temp_store = FILE for transient structures
@@ -238,6 +246,7 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var xml_row: []const u8 = "row";
     var xml_root_input: ?[]const u8 = null;
     var xml_row_input: ?[]const u8 = null;
+    var json_path: ?[]const u8 = null;
     var sample_mode = false;
     var sample_n: usize = 10;
     var disk = false;
@@ -354,6 +363,12 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         } else if (std.mem.startsWith(u8, arg, "--xml-row=")) {
             xml_row = arg["--xml-row=".len..];
             xml_row_input = arg["--xml-row=".len..];
+        } else if (std.mem.eql(u8, arg, "--json-path")) {
+            i += 1;
+            if (i >= args.len) return error.MissingJsonFlagValue;
+            json_path = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--json-path=")) {
+            json_path = arg["--json-path=".len..];
         } else if (std.mem.eql(u8, arg, "--disk")) {
             disk = true;
         } else {
@@ -423,6 +438,7 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             .input_format = input_format,
             .xml_root_input = xml_root_input,
             .xml_row_input = xml_row_input,
+            .json_path = json_path,
         } };
 
     // --validate mode: parse CSV and print summary
@@ -433,6 +449,7 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
             .input_format = input_format,
             .xml_root_input = xml_root_input,
             .xml_row_input = xml_row_input,
+            .json_path = json_path,
         } };
 
     // --sample mode: print schema + first n rows and exit
@@ -459,6 +476,7 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         .xml_row = xml_row,
         .xml_root_input = xml_root_input,
         .xml_row_input = xml_row_input,
+        .json_path = json_path,
         .disk = disk,
     } };
 }
