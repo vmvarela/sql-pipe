@@ -52,7 +52,7 @@ wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERS
 sudo dpkg -i sql-pipe_VERSION_linux_amd64.deb
 ```
 
-Replace `VERSION` with the release version (e.g. `0.3.0`) and `amd64` with your architecture (`arm64`, `arm7`, or `386`).
+Replace `VERSION` with the release version (e.g. `0.9.0`) and `amd64` with your architecture (`arm64`, `arm7`, or `386`).
 
 **Fedora / RHEL / openSUSE (RPM repository):**
 
@@ -68,7 +68,7 @@ Or install a single release asset directly:
 sudo rpm -i https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERSION_linux_amd64.rpm
 ```
 
-Replace `VERSION` with the release version (e.g. `0.3.0`) and `amd64` with your architecture (`arm64`).
+Replace `VERSION` with the release version (e.g. `0.9.0`) and `amd64` with your architecture (`arm64`).
 
 **Alpine Linux (APK repository):**
 
@@ -86,7 +86,7 @@ wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERS
 sudo apk add --allow-untrusted sql-pipe_VERSION_linux_amd64.apk
 ```
 
-Replace `VERSION` with the release version (e.g. `0.3.0`) and `amd64` with your architecture (`arm64`).
+Replace `VERSION` with the release version (e.g. `0.9.0`) and `amd64` with your architecture (`arm64`).
 
 **Arch Linux (AUR):** install with your preferred AUR helper:
 
