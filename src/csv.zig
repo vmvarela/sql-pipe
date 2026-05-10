@@ -331,14 +331,14 @@ test "simple unquoted fields, two records" {
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
-    try std.testing.expectEqual(@as(usize, 3), r1.len);
+    try std.testing.expectEqual(3, r1.len);
     try std.testing.expectEqualStrings("a", r1[0]);
     try std.testing.expectEqualStrings("b", r1[1]);
     try std.testing.expectEqualStrings("c", r1[2]);
 
     const r2 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r2);
-    try std.testing.expectEqual(@as(usize, 3), r2.len);
+    try std.testing.expectEqual(3, r2.len);
     try std.testing.expectEqualStrings("1", r2[0]);
     try std.testing.expectEqualStrings("2", r2[1]);
     try std.testing.expectEqualStrings("3", r2[2]);
@@ -353,7 +353,7 @@ test "quoted field with embedded comma" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("hello, world", r[0]);
     try std.testing.expectEqualStrings("42", r[1]);
 }
@@ -365,7 +365,7 @@ test "escaped double-quote inside quoted field" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("say \"hello\"", r[0]);
     try std.testing.expectEqualStrings("done", r[1]);
 }
@@ -382,7 +382,7 @@ test "quoted field with embedded newline (multi-line record)" {
 
     const r2 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r2);
-    try std.testing.expectEqual(@as(usize, 2), r2.len);
+    try std.testing.expectEqual(2, r2.len);
     try std.testing.expectEqualStrings("1", r2[0]);
     try std.testing.expectEqualStrings("line one\nline two", r2[1]);
 
@@ -412,7 +412,7 @@ test "empty fields are preserved" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 3), r.len);
+    try std.testing.expectEqual(3, r.len);
     try std.testing.expectEqualStrings("", r[0]);
     try std.testing.expectEqualStrings("middle", r[1]);
     try std.testing.expectEqualStrings("", r[2]);
@@ -425,7 +425,7 @@ test "no trailing newline at EOF" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("x", r[0]);
     try std.testing.expectEqualStrings("y", r[1]);
 
@@ -439,7 +439,7 @@ test "quoted field ending at EOF without trailing newline" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 1), r.len);
+    try std.testing.expectEqual(1, r.len);
     try std.testing.expectEqualStrings("value", r[0]);
 }
 
@@ -450,7 +450,7 @@ test "empty quoted field" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("", r[0]);
     try std.testing.expectEqualStrings("b", r[1]);
 }
@@ -470,14 +470,14 @@ test "custom pipe delimiter" {
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
-    try std.testing.expectEqual(@as(usize, 3), r1.len);
+    try std.testing.expectEqual(3, r1.len);
     try std.testing.expectEqualStrings("a", r1[0]);
     try std.testing.expectEqualStrings("b", r1[1]);
     try std.testing.expectEqualStrings("c", r1[2]);
 
     const r2 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r2);
-    try std.testing.expectEqual(@as(usize, 3), r2.len);
+    try std.testing.expectEqual(3, r2.len);
     try std.testing.expectEqualStrings("1", r2[0]);
     try std.testing.expectEqualStrings("2", r2[1]);
     try std.testing.expectEqualStrings("3", r2[2]);
@@ -490,13 +490,13 @@ test "custom tab delimiter" {
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
-    try std.testing.expectEqual(@as(usize, 2), r1.len);
+    try std.testing.expectEqual(2, r1.len);
     try std.testing.expectEqualStrings("name", r1[0]);
     try std.testing.expectEqualStrings("age", r1[1]);
 
     const r2 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r2);
-    try std.testing.expectEqual(@as(usize, 2), r2.len);
+    try std.testing.expectEqual(2, r2.len);
     try std.testing.expectEqualStrings("Alice", r2[0]);
     try std.testing.expectEqualStrings("30", r2[1]);
 }
@@ -508,14 +508,14 @@ test "2-char delimiter (||) splits fields correctly" {
 
     const r1 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r1);
-    try std.testing.expectEqual(@as(usize, 3), r1.len);
+    try std.testing.expectEqual(3, r1.len);
     try std.testing.expectEqualStrings("a", r1[0]);
     try std.testing.expectEqualStrings("b", r1[1]);
     try std.testing.expectEqualStrings("c", r1[2]);
 
     const r2 = (try csv.nextRecord()).?;
     defer csv.freeRecord(r2);
-    try std.testing.expectEqual(@as(usize, 3), r2.len);
+    try std.testing.expectEqual(3, r2.len);
     try std.testing.expectEqualStrings("1", r2[0]);
     try std.testing.expectEqualStrings("2", r2[1]);
     try std.testing.expectEqualStrings("3", r2[2]);
@@ -530,7 +530,7 @@ test "3-char delimiter (;;;) splits fields correctly" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 3), r.len);
+    try std.testing.expectEqual(3, r.len);
     try std.testing.expectEqualStrings("foo", r[0]);
     try std.testing.expectEqualStrings("bar", r[1]);
     try std.testing.expectEqualStrings("baz", r[2]);
@@ -544,7 +544,7 @@ test "multi-char delimiter: partial match bytes emitted as field content" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("a|b", r[0]);
     try std.testing.expectEqualStrings("c", r[1]);
 }
@@ -556,7 +556,7 @@ test "quoted field containing multi-char delimiter is preserved" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("a||b", r[0]);
     try std.testing.expectEqualStrings("c", r[1]);
 }
@@ -568,7 +568,7 @@ test "multi-char delimiter: empty first field" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 3), r.len);
+    try std.testing.expectEqual(3, r.len);
     try std.testing.expectEqualStrings("", r[0]);
     try std.testing.expectEqualStrings("b", r[1]);
     try std.testing.expectEqualStrings("c", r[2]);
@@ -581,7 +581,7 @@ test "multi-char delimiter: empty last field, no trailing newline" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 3), r.len);
+    try std.testing.expectEqual(3, r.len);
     try std.testing.expectEqualStrings("a", r[0]);
     try std.testing.expectEqualStrings("b", r[1]);
     try std.testing.expectEqualStrings("", r[2]);
@@ -594,7 +594,7 @@ test "multi-char delimiter: only delimiter produces two empty fields" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("", r[0]);
     try std.testing.expectEqualStrings("", r[1]);
 }
@@ -606,7 +606,7 @@ test "multi-char delimiter: EOF without trailing newline" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("a", r[0]);
     try std.testing.expectEqualStrings("b", r[1]);
 
@@ -621,7 +621,7 @@ test "multi-char delimiter: partial delimiter at EOF treated as field content" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 1), r.len);
+    try std.testing.expectEqual(1, r.len);
     try std.testing.expectEqualStrings("a|", r[0]);
 }
 
@@ -634,7 +634,7 @@ test "multi-char delimiter: greedy left-to-right matching" {
 
     const r = (try csv.nextRecord()).?;
     defer csv.freeRecord(r);
-    try std.testing.expectEqual(@as(usize, 2), r.len);
+    try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("a", r[0]);
     try std.testing.expectEqualStrings("|b", r[1]);
 }

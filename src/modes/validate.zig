@@ -13,14 +13,7 @@ const fmtThousands = loader.fmtThousands;
 const inference_buffer_size = loader.inference_buffer_size;
 
 const ExitCode = args_mod.ExitCode;
-
-fn fatal(comptime fmt: []const u8, writer: *std.Io.Writer, code: ExitCode, f_args: anytype) noreturn {
-    writer.print("error: " ++ fmt ++ "\n", f_args) catch |err| {
-        std.log.err("failed to write error message: {}", .{err});
-    };
-    writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
-    std.process.exit(@intFromEnum(code));
-}
+const fatal = @import("../sqlite.zig").fatal;
 
 pub fn runValidate(
     allocator: std.mem.Allocator,
@@ -150,18 +143,14 @@ pub fn runValidate(
             var stdin_buf: [4096]u8 = undefined;
             var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
 
-            var buf: std.ArrayList(u8) = .empty;
-            defer buf.deinit(allocator);
-            while (true) {
-                const byte = stdin_file_reader.interface.takeByte() catch |err| switch (err) {
-                    error.EndOfStream => break,
-                    error.ReadFailed => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
-                };
-                buf.append(allocator, byte) catch fatal("out of memory reading JSON", stderr_writer, .csv_error, .{});
-            }
-            if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
+            const input = stdin_file_reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+                error.OutOfMemory => fatal("out of memory reading JSON input", stderr_writer, .csv_error, .{}),
+                error.ReadFailed, error.StreamTooLong => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
+            };
+            defer allocator.free(input);
+            if (input.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
-            var parsed = std.json.parseFromSlice(std.json.Value, allocator, buf.items, .{}) catch
+            var parsed = std.json.parseFromSlice(std.json.Value, allocator, input, .{}) catch
                 fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
             defer parsed.deinit();
 

@@ -371,13 +371,7 @@ pub fn loadCsvInput(
 
     sqlite_mod.createTable(allocator, db, cols, types, stderr_writer);
 
-    {
-        var errmsg: [*c]u8 = null;
-        if (c.sqlite3_exec(db, "BEGIN TRANSACTION", null, null, &errmsg) != c.SQLITE_OK) {
-            const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-            fatalSqlWithContext(allocator, db, msg, stderr_writer);
-        }
-    }
+    sqlite_mod.beginTransaction(db, stderr_writer);
 
     const stmt = sqlite_mod.prepareInsertStmt(allocator, db, num_cols, stderr_writer);
     defer _ = c.sqlite3_finalize(stmt);
@@ -430,15 +424,7 @@ pub fn loadCsvInput(
             printProgress(stderr_writer, rows_inserted, parsed.max_rows);
     }
 
-    {
-        var errmsg: [*c]u8 = null;
-        const rc = c.sqlite3_exec(db, "COMMIT", null, null, &errmsg);
-        if (rc != c.SQLITE_OK) {
-            const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-            fatalSqlWithContext(allocator, db, msg, stderr_writer);
-        }
-        if (errmsg != null) c.sqlite3_free(errmsg);
-    }
+    sqlite_mod.commitTransaction(db, stderr_writer);
 
     return rows_inserted;
 }
