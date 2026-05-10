@@ -1362,6 +1362,15 @@ pub fn build(b: *std.Build) void {
     test_disk_output.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_disk_output.step);
 
+    // Integration test 132: mismatched nested closing tag in XML column content → non-zero exit
+    const test_xml_mismatched_tags = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '<r><row><col><a>text</b></col></row></r>' \
+        \\    | ./zig-out/bin/sql-pipe -I xml 'SELECT * FROM t' 2>/dev/null; test $? -ne 0
+    });
+    test_xml_mismatched_tags.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_xml_mismatched_tags.step);
+
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

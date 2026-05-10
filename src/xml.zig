@@ -393,6 +393,10 @@ pub const XmlParser = struct {
         const start = self.pos;
         var depth: usize = 0;
         var has_nested = false;
+        // Stack of open nested element names (slices into self.data — no allocation per entry).
+        // Invariant: tag_stack.items.len == depth at all times.
+        var tag_stack: std.ArrayList([]const u8) = .empty;
+        defer tag_stack.deinit(allocator);
 
         // Loop invariant: depth = number of unclosed nested elements
         // Bounding function: self.data.len - self.pos (finite input)
@@ -428,20 +432,26 @@ pub const XmlParser = struct {
                     if (!has_nested) return decodeEntities(allocator, raw);
                     return allocator.dupe(u8, raw);
                 }
-                // Closing tag of a nested element
+                // Closing tag of a nested element — verify name matches the open tag on the stack
                 depth -= 1;
                 self.advance();
                 self.advance(); // "</"
-                _ = self.readName(err_writer);
+                const close_name = self.readName(err_writer);
                 self.skipWs();
                 if (self.peek() == '>') self.advance();
+                const expected = tag_stack.pop().?; // safe: every closing tag at depth>0 was preceded by an opening push
+                if (!std.mem.eql(u8, close_name, expected))
+                    self.fatalAt("mismatched closing tag: expected '</{s}>' but found '</{s}>'", err_writer, .{ expected, close_name });
             } else {
                 // Opening tag of a nested element
                 has_nested = true;
                 self.advance(); // '<'
-                _ = self.readName(err_writer);
+                const nested_name = self.readName(err_writer);
                 const self_closing = self.skipAttrsClose(err_writer);
-                if (!self_closing) depth += 1;
+                if (!self_closing) {
+                    depth += 1;
+                    try tag_stack.append(allocator, nested_name);
+                }
             }
         }
         self.fatalAt("unexpected end of input: unclosed element '{s}'", err_writer, .{elem_name});
@@ -1153,6 +1163,29 @@ test "XmlParser.navigateToRoot: handles text nodes between siblings" {
     p.skipPrologue(&err_writer);
     p.navigateToRoot("channel", &err_writer);
     try std.testing.expectEqualStrings("<item/></channel></rss>", p.data[p.pos..]);
+}
+
+test "XmlParser.readContent: properly matched nested tags are accepted" {
+    const allocator = std.testing.allocator;
+    var err_buf: [256]u8 = undefined;
+    var err_writer: std.Io.Writer = .fixed(&err_buf);
+
+    // Deeply nested content with correctly matched tags — stack must track them all
+    const input = "<r><row><col><a><b>text</b></a></col></row></r>";
+    var p = XmlParser.init(input);
+    p.skipPrologue(&err_writer);
+    const root = p.readRootOpen(&err_writer);
+
+    const cols = try p.nextRow(allocator, root, null, &err_writer);
+    try std.testing.expect(cols != null);
+    defer {
+        for (cols.?) |col| if (col.value) |v| allocator.free(v);
+        allocator.free(cols.?);
+    }
+    try std.testing.expectEqual(@as(usize, 1), cols.?.len);
+    try std.testing.expectEqualStrings("col", cols.?[0].name);
+    // Mixed/nested content is returned as raw XML substring
+    try std.testing.expectEqualStrings("<a><b>text</b></a>", cols.?[0].value.?);
 }
 
 test "XmlParser.nextRow: row_tag_filter skips non-matching elements" {
