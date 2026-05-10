@@ -249,7 +249,8 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     //   header reflects the presence of --header/-H;
     //   output_format reflects the last --output-format/--json flag seen;
     //   input_format reflects the last --input-format flag seen;
-    //   max_rows reflects the presence of --max-rows
+    //   max_rows reflects the presence of --max-rows;
+    //   disk reflects the presence of --disk
     // Bounding function: args.len - i
     var i: usize = 1;
     while (i < args.len) : (i += 1) {

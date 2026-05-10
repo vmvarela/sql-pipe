@@ -1282,6 +1282,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_disk_tsv.step);
 
     // Integration test 125: --disk with NDJSON input
+    // age column is TEXT (NDJSON uses createAllTextTable); comparison works via
+    // SQLite implicit TEXT→NUMERIC conversion when compared against a numeric literal.
     const test_disk_ndjson = b.addSystemCommand(&.{
         "bash", "-c",
         \\result=$(printf '{"name":"Alice","age":30}\n{"name":"Bob","age":25}\n' \
@@ -1292,6 +1294,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_disk_ndjson.step);
 
     // Integration test 126: --disk with JSON input
+    // age column is TEXT (JSON uses createAllTextTable); comparison works via
+    // SQLite implicit TEXT→NUMERIC conversion when compared against a numeric literal.
     const test_disk_json = b.addSystemCommand(&.{
         "bash", "-c",
         \\result=$(printf '[{"name":"Alice","age":30},{"name":"Bob","age":25}]' \
@@ -1302,6 +1306,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_disk_json.step);
 
     // Integration test 127: --disk with XML input
+    // age column is TEXT (XML uses createAllTextTable); comparison works via
+    // SQLite implicit TEXT→NUMERIC conversion when compared against a numeric literal.
     const test_disk_xml = b.addSystemCommand(&.{
         "bash", "-c",
         \\result=$(printf '<data><row><name>Alice</name><age>30</age></row><row><name>Bob</name><age>25</age></row></data>' \
@@ -1320,6 +1326,41 @@ pub fn build(b: *std.Build) void {
     });
     test_disk_group_by.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_disk_group_by.step);
+
+    // Integration test 129: --disk with --no-type-inference (all TEXT columns)
+    // Uses SQLite implicit TEXT→NUMERIC conversion for the numeric comparison.
+    const test_disk_no_type_inference = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\nCarol,35' \
+        \\    | ./zig-out/bin/sql-pipe --disk --no-type-inference \
+        \\    'SELECT name FROM t WHERE age > 27 ORDER BY name')
+        \\[ "$result" = "$(printf 'Alice\nCarol')" ]
+    });
+    test_disk_no_type_inference.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_no_type_inference.step);
+
+    // Integration test 130: --disk with --header outputs column names in first row
+    const test_disk_header = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe --disk --header 'SELECT name, age FROM t ORDER BY age')
+        \\[ "$result" = "$(printf 'name,age\nBob,25\nAlice,30')" ]
+    });
+    test_disk_header.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_header.step);
+
+    // Integration test 131: --disk with --output writes results to file
+    const test_disk_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'name,val\nA,10\nB,20\n' \
+        \\    | ./zig-out/bin/sql-pipe --disk --output "$tmp" 'SELECT name FROM t WHERE val > 15'
+        \\result=$(cat "$tmp")
+        \\rm -f "$tmp"
+        \\[ "$result" = "B" ]
+    });
+    test_disk_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_disk_output.step);
 
     // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
     const unit_tests = b.addTest(.{
