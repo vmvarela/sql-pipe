@@ -179,22 +179,17 @@ pub fn loadJsonArray(
     max_rows: ?usize,
     stderr_writer: *std.Io.Writer,
 ) usize {
-    // Read all input into a buffer
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-    // Loop invariant I: buf contains all bytes read from reader so far
-    // Bounding function: bytes remaining in reader (finite input)
-    while (true) {
-        const byte = reader.takeByte() catch |err| switch (err) {
-            error.EndOfStream => break,
-            error.ReadFailed => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
-        };
-        buf.append(allocator, byte) catch fatal("out of memory reading JSON input", stderr_writer, .csv_error, .{});
-    }
+    // Read all input into a buffer using block reads instead of byte-by-byte takeByte()
+    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+        error.OutOfMemory => fatal("out of memory reading JSON input", stderr_writer, .csv_error, .{}),
+        error.ReadFailed => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
+        error.StreamTooLong => unreachable, // .unlimited never triggers this
+    };
+    defer allocator.free(buf);
 
-    if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
+    if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, buf.items, .{}) catch
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, buf, .{}) catch
         fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
     defer parsed.deinit();
 

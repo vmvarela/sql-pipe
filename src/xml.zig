@@ -694,18 +694,15 @@ pub fn getXmlColumnNames(
     xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) [][]const u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-    while (true) {
-        const byte = reader.takeByte() catch |err| switch (err) {
-            error.EndOfStream => break,
-            error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
-        };
-        buf.append(allocator, byte) catch fatal("out of memory reading XML", stderr_writer, .csv_error, .{});
-    }
-    if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
+    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+        error.OutOfMemory => fatal("out of memory reading XML", stderr_writer, .csv_error, .{}),
+        error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
+        error.StreamTooLong => unreachable, // .unlimited never triggers this
+    };
+    defer allocator.free(buf);
+    if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
-    var p = XmlParser.init(buf.items);
+    var p = XmlParser.init(buf);
     p.skipPrologue(stderr_writer);
     const root_name: []const u8 = if (xml_root) |r| blk: {
         p.navigateToRoot(r, stderr_writer);
@@ -758,18 +755,15 @@ pub fn summarizeXml(
     xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) XmlSummary {
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-    while (true) {
-        const byte = reader.takeByte() catch |err| switch (err) {
-            error.EndOfStream => break,
-            error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
-        };
-        buf.append(allocator, byte) catch fatal("out of memory reading XML", stderr_writer, .csv_error, .{});
-    }
-    if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
+    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+        error.OutOfMemory => fatal("out of memory reading XML", stderr_writer, .csv_error, .{}),
+        error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
+        error.StreamTooLong => unreachable, // .unlimited never triggers this
+    };
+    defer allocator.free(buf);
+    if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
-    var p = XmlParser.init(buf.items);
+    var p = XmlParser.init(buf);
     p.skipPrologue(stderr_writer);
     const root_name: []const u8 = if (xml_root) |r| blk: {
         p.navigateToRoot(r, stderr_writer);
@@ -831,18 +825,15 @@ pub fn loadXmlInput(
     max_rows: ?usize,
     stderr_writer: *std.Io.Writer,
 ) usize {
-    var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
-    while (true) {
-        const byte = reader.takeByte() catch |err| switch (err) {
-            error.EndOfStream => break,
-            error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
-        };
-        buf.append(allocator, byte) catch fatal("out of memory reading XML input", stderr_writer, .csv_error, .{});
-    }
-    if (buf.items.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
+    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+        error.OutOfMemory => fatal("out of memory reading XML input", stderr_writer, .csv_error, .{}),
+        error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
+        error.StreamTooLong => unreachable, // .unlimited never triggers this
+    };
+    defer allocator.free(buf);
+    if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
-    var p = XmlParser.init(buf.items);
+    var p = XmlParser.init(buf);
     p.skipPrologue(stderr_writer);
     const root_name: []const u8 = if (xml_root) |r| blk: {
         p.navigateToRoot(r, stderr_writer);
