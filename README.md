@@ -160,7 +160,7 @@ $ printf '[{"name":"Alice","score":95},{"name":"Bob","score":72}]' \
 Alice,95
 ```
 
-Columns are auto-detected as `INTEGER`, `REAL`, or `TEXT` based on the first 100 rows. Use `--no-type-inference` to force all columns to `TEXT`:
+Columns are auto-detected as `INTEGER`, `REAL`, `DATE`, `DATETIME`, or `TEXT` based on the first 100 rows. Date and datetime values are normalized to ISO 8601 on insert, so SQLite date functions (`date()`, `strftime()`, `julianday()`) work immediately. Use `--no-type-inference` to force all columns to `TEXT`:
 
 ```sh
 $ cat orders.csv | sql-pipe 'SELECT COUNT(*), AVG(amount) FROM t WHERE status = "paid"'
@@ -315,11 +315,13 @@ $ cat contacts.csv | sql-pipe 'SELECT DISTINCT email FROM t'
 $ cat users.csv | sql-pipe 'SELECT * FROM t WHERE email = "" OR email IS NULL'
 ```
 
-**Date range filter (dates stored as text):**
+**Date range filter:**
 
 ```sh
 $ cat logs.csv | sql-pipe 'SELECT * FROM t WHERE ts >= "2024-01-01" AND ts < "2024-02-01"'
 ```
+
+Date columns are auto-detected and stored as ISO 8601 text, so comparison operators and `strftime()` / `julianday()` work without any preprocessing.
 
 **Compute a derived column:**
 
@@ -464,9 +466,34 @@ $ curl -s "https://api.open-meteo.com/v1/forecast?latitude=40.4168&longitude=-3.
 2026-05-07,19.6,10.7,2.1
 ```
 
+**La Liga: season lengths reveal COVID and the World Cup**
+
+The same [engsoccerdata](https://github.com/jalapic/engsoccerdata) dataset has a
+`Date` column in `YYYY-MM-DD` format. `sql-pipe` auto-detects it as `DATE` and
+stores it as ISO 8601 text, so `julianday()` works directly — no preprocessing:
+
+```sh
+$ curl -s https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/spain.csv \
+    | sql-pipe 'SELECT Season,
+                       MIN(Date) AS start,
+                       MAX(Date) AS end,
+                       CAST(julianday(MAX(Date)) - julianday(MIN(Date)) AS INTEGER) AS days
+                FROM t WHERE tier=1 AND Season BETWEEN 2018 AND 2022
+                GROUP BY Season ORDER BY Season'
+2018,2018-08-17,2019-05-19,275
+2019,2019-08-16,2020-07-19,338
+2020,2020-09-12,2021-05-23,253
+2021,2021-08-13,2022-05-22,282
+2022,2022-08-12,2023-06-04,296
+```
+
+The 2019–20 season spans 338 days: COVID suspended play in March 2020 and pushed
+the final round to July. The 2022–23 season runs 296 days due to the November
+World Cup break. A normal season is ~275 days.
+
 ## How it works
 
-Each run opens a fresh `:memory:` SQLite database. The header row drives a `CREATE TABLE t (...)` with all columns as `TEXT`. Rows are loaded in a single transaction via a prepared `INSERT` statement, then `sqlite3_exec` runs your query and prints rows one by one.
+Each run opens a fresh `:memory:` SQLite database. The header row drives a `CREATE TABLE t (...)` with types inferred from the first 100 rows — `INTEGER`, `REAL`, `DATE`, `DATETIME`, or `TEXT`. Date variants use TEXT affinity so ISO 8601 string semantics are preserved and all SQLite date functions work correctly. Rows are loaded in a single transaction via a prepared `INSERT` statement, then `sqlite3_exec` runs your query and prints rows one by one.
 
 The database never touches disk and vanishes when the process exits. No state, no cleanup.
 

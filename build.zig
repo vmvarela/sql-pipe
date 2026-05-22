@@ -1438,7 +1438,161 @@ pub fn build(b: *std.Build) void {
     test_json_path_format_mismatch.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_json_path_format_mismatch.step);
 
-    // Unit tests for the RFC 4180 CSV parser (src/csv.zig)
+    // ─── Date / datetime type inference integration tests ────────────────────
+
+    // Integration test 140: ISO date column is stored and queryable as YYYY-MM-DD text
+    const test_date_iso = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,dob\n1,2024-01-15\n2,1999-12-31\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT dob FROM t WHERE id=1")
+        \\[ "$result" = "2024-01-15" ]
+    });
+    test_date_iso.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_date_iso.step);
+
+    // Integration test 141: ISO date column supports SQLite date() function
+    const test_date_iso_func = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,dob\n1,2024-01-15\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT date(dob) FROM t")
+        \\[ "$result" = "2024-01-15" ]
+    });
+    test_date_iso_func.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_date_iso_func.step);
+
+    // Integration test 142: EU-dash date (DD-MM-YYYY) normalized to ISO on insert
+    const test_date_eu_dash = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,dob\n1,15-01-2024\n2,31-12-1999\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT dob FROM t ORDER BY dob")
+        \\expected=$(printf '1999-12-31\n2024-01-15')
+        \\[ "$result" = "$expected" ]
+    });
+    test_date_eu_dash.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_date_eu_dash.step);
+
+    // Integration test 143: EU-slash date (DD/MM/YYYY) detected when d1 > 12
+    const test_date_eu_slash = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,dob\n1,15/01/2024\n2,31/12/1999\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT dob FROM t ORDER BY dob")
+        \\expected=$(printf '1999-12-31\n2024-01-15')
+        \\[ "$result" = "$expected" ]
+    });
+    test_date_eu_slash.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_date_eu_slash.step);
+
+    // Integration test 144: US-slash date (MM/DD/YYYY) detected when d2 > 12
+    const test_date_us_slash = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,dob\n1,01/15/2024\n2,12/31/1999\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT dob FROM t ORDER BY dob")
+        \\expected=$(printf '1999-12-31\n2024-01-15')
+        \\[ "$result" = "$expected" ]
+    });
+    test_date_us_slash.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_date_us_slash.step);
+
+    // Integration test 145: ambiguous slash date (both ≤ 12) → TEXT, no normalization
+    const test_date_slash_ambiguous = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,dob\n1,05/06/2024\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT dob FROM t")
+        \\[ "$result" = "05/06/2024" ]
+    });
+    test_date_slash_ambiguous.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_date_slash_ambiguous.step);
+
+    // Integration test 146: ISO datetime (space separator) stored as ISO and queryable
+    const test_datetime_iso_space = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,ts\n1,2024-01-15 10:30:00\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT ts FROM t")
+        \\[ "$result" = "2024-01-15 10:30:00" ]
+    });
+    test_datetime_iso_space.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_datetime_iso_space.step);
+
+    // Integration test 147: ISO datetime T-separator normalized to space on insert
+    const test_datetime_iso_t = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,ts\n1,2024-01-15T10:30:00\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT ts FROM t")
+        \\[ "$result" = "2024-01-15 10:30:00" ]
+    });
+    test_datetime_iso_t.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_datetime_iso_t.step);
+
+    // Integration test 148: EU-slash datetime (DD/MM/YYYY HH:MM) normalized to ISO
+    const test_datetime_eu_slash = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,ts\n1,15/01/2024 10:30\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT ts FROM t")
+        \\[ "$result" = "2024-01-15 10:30:00" ]
+    });
+    test_datetime_eu_slash.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_datetime_eu_slash.step);
+
+    // Integration test 149: US-slash datetime (MM/DD/YYYY HH:MM) normalized to ISO
+    const test_datetime_us_slash = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,ts\n1,01/15/2024 10:30\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT ts FROM t")
+        \\[ "$result" = "2024-01-15 10:30:00" ]
+    });
+    test_datetime_us_slash.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_datetime_us_slash.step);
+
+    // Integration test 150: --columns --verbose shows DATE for date column
+    const test_columns_date_type = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,dob\n1,2024-01-15\n' \
+        \\    | ./zig-out/bin/sql-pipe --columns --verbose)
+        \\echo "$result" | grep -q "dob DATE"
+    });
+    test_columns_date_type.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_date_type.step);
+
+    // Integration test 151: --columns --verbose shows DATETIME for datetime column
+    const test_columns_datetime_type = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,ts\n1,2024-01-15 10:30:00\n' \
+        \\    | ./zig-out/bin/sql-pipe --columns --verbose)
+        \\echo "$result" | grep -q "ts DATETIME"
+    });
+    test_columns_datetime_type.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_columns_datetime_type.step);
+
+    // Integration test 152: --validate shows DATE in schema summary
+    const test_validate_date_type = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,dob\n1,2024-01-15\n2,1999-12-31\n' \
+        \\    | ./zig-out/bin/sql-pipe --validate)
+        \\echo "$result" | grep -q "dob DATE"
+    });
+    test_validate_date_type.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_date_type.step);
+
+    // Integration test 153: date column supports ORDER BY (ISO sort = chronological)
+    const test_date_order_by = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,dob\nBob,15-01-1990\nAlice,20-03-1985\nCarol,01-07-1992\n' \
+        \\    | ./zig-out/bin/sql-pipe "SELECT name FROM t ORDER BY dob")
+        \\expected=$(printf 'Alice\nBob\nCarol')
+        \\[ "$result" = "$expected" ]
+    });
+    test_date_order_by.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_date_order_by.step);
+
+    // Integration test 154: --no-type-inference keeps date as TEXT (no normalization)
+    const test_date_no_type_inference = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,dob\n1,15/01/2024\n' \
+        \\    | ./zig-out/bin/sql-pipe --no-type-inference "SELECT dob FROM t")
+        \\[ "$result" = "15/01/2024" ]
+    });
+    test_date_no_type_inference.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_date_no_type_inference.step);
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/csv.zig"),
@@ -1472,4 +1626,26 @@ pub fn build(b: *std.Build) void {
     const run_xml_unit_tests = b.addRunArtifact(xml_unit_tests);
     test_step.dependOn(&run_xml_unit_tests.step);
     unit_test_step.dependOn(&run_xml_unit_tests.step);
+
+    // Unit tests for the CSV loader (src/loader.zig) — isDate, isDateTime, inferTypes, normalize helpers
+    const loader_unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/loader.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    loader_unit_tests.root_module.addImport("c", translate_c.createModule());
+    if (bundle_sqlite) {
+        loader_unit_tests.root_module.addIncludePath(b.path("lib"));
+        loader_unit_tests.root_module.addCSourceFile(.{
+            .file = b.path("lib/sqlite3.c"),
+            .flags = &.{"-DSQLITE_OMIT_LOAD_EXTENSION=1"},
+        });
+    } else {
+        loader_unit_tests.root_module.linkSystemLibrary("sqlite3", .{});
+    }
+    const run_loader_unit_tests = b.addRunArtifact(loader_unit_tests);
+    unit_test_step.dependOn(&run_loader_unit_tests.step);
 }

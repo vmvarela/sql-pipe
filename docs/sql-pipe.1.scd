@@ -17,9 +17,11 @@ DESCRIPTION
 	aggregations on CSV files without manual SQL database setup.
 
 	All input columns are automatically loaded into the table with names derived from
-	the CSV header row. By default, column types (TEXT, INTEGER, REAL) are inferred
-	from the first 100 rows of data. Use *--no-type-inference* to disable this
-	behavior and treat all columns as TEXT.
+	the CSV header row. By default, column types (TEXT, INTEGER, REAL, DATE, DATETIME)
+	are inferred from the first 100 rows of data. DATE and DATETIME values are
+	normalized to ISO 8601 on insert, enabling SQLite date functions (*date()*,
+	*strftime()*, *julianday()*) to work directly on those columns. Use
+	*--no-type-inference* to disable this behavior and treat all columns as TEXT.
 
 	By default, input fields are parsed as comma-separated values. Use
 	*--delimiter* (or *-d*) to parse other delimiters (1–8 characters), or *--tsv*
@@ -95,7 +97,7 @@ OPTIONS
 		Read the input header, print each column name on its own line to
 		standard output, and exit with code 0. Supported for CSV, TSV,
 		JSON, NDJSON, and XML input. When combined with *-v* / *--verbose*,
-		also shows the inferred type (INTEGER, REAL, or TEXT) for each column
+		also shows the inferred type (INTEGER, REAL, DATE, DATETIME, or TEXT) for each column
 		(CSV/TSV only; other formats always show TEXT), using the first 100
 		data rows for inference. Respects *--delimiter* and *--tsv*.
 		Mutually exclusive with a query argument.
@@ -104,7 +106,7 @@ OPTIONS
 		Print a schema comment block to standard error and the first <n> data
 		rows to standard output as delimited text (default: 10 rows if no value
 		is given). The schema block lists each column name and its inferred
-		SQLite type (INTEGER, REAL, or TEXT), each line prefixed with *#* so it
+		type (INTEGER, REAL, DATE, DATETIME, or TEXT), each line prefixed with *#* so it
 		is ignored by downstream CSV parsers. Column header is always printed as
 		the first output row (implies *--header*). Type inference reads up to
 		100 rows or <n> rows, whichever is larger, before emitting output.
