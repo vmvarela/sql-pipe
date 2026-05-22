@@ -114,7 +114,7 @@ pub fn runSample(
                         std.log.err("failed to write schema: {}", .{err});
                     };
                 }
-                stderr_writer.print("{s}\n", .{@tagName(t)}) catch |err| {
+                stderr_writer.print("{s}\n", .{t.displayName()}) catch |err| {
                     std.log.err("failed to write schema: {}", .{err});
                 };
             }

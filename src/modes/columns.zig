@@ -71,7 +71,7 @@ pub fn runColumns(
                     fatal("out of memory during type inference", stderr_writer, .csv_error, .{});
                 defer allocator.free(types);
                 for (cols, types) |col, t| {
-                    stdout_writer.print("{s} {s}\n", .{ col, @tagName(t) }) catch |err| {
+                    stdout_writer.print("{s} {s}\n", .{ col, t.displayName() }) catch |err| {
                         std.log.err("failed to write output: {}", .{err});
                     };
                 }

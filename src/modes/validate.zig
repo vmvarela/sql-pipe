@@ -129,7 +129,7 @@ pub fn runValidate(
                         std.process.exit(@intFromEnum(ExitCode.usage));
                     };
                 }
-                stdout_writer.print("{s} {s}", .{ col, @tagName(t) }) catch |err| {
+                stdout_writer.print("{s} {s}", .{ col, t.displayName() }) catch |err| {
                     std.log.err("failed to write output: {}", .{err});
                     std.process.exit(@intFromEnum(ExitCode.usage));
                 };

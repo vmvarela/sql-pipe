@@ -9,8 +9,57 @@ pub const ExitCode = args_mod.ExitCode;
 /// SQLITE_STATIC: caller manages string lifetime; SQLite must not free it.
 pub const sqlite_static: c.sqlite3_destructor_type = null;
 
-/// Inferred SQLite affinity for a CSV column.
-pub const ColumnType = enum { TEXT, INTEGER, REAL };
+/// Returns the SQLITE_TRANSIENT sentinel (-1 cast to destructor type).
+/// Defined as a function to force runtime evaluation: `const` locals are
+/// comptime-known in Zig and would trigger a compile-time alignment error;
+/// `var` makes `addr` runtime-unknown, so @ptrFromInt does a runtime check
+/// that we suppress with @setRuntimeSafety(false).
+/// SQLite checks this value by comparison, not by calling it, so the
+/// misalignment is harmless at runtime.
+pub fn sqliteTransient() c.sqlite3_destructor_type {
+    @setRuntimeSafety(false);
+    var addr: usize = @bitCast(@as(isize, -1));
+    _ = &addr; // prevent constant-folding
+    return @ptrFromInt(addr);
+}
+
+/// Inferred SQLite column type for a CSV column.
+///
+/// DATE and DATETIME variants track the source format for normalization at
+/// insert time. All DATE* variants map to TEXT affinity in DDL (SQLite stores
+/// dates as ISO 8601 text). displayName() returns "DATE" or "DATETIME" for
+/// user-facing output regardless of sub-variant.
+///
+/// Sub-variant semantics:
+///   DATE        — YYYY-MM-DD or DD-MM-YYYY (format detected at bind time by separator position)
+///   DATE_EU     — DD/MM/YYYY (European slash; D1 > 12 was found during inference)
+///   DATE_US     — MM/DD/YYYY (American slash; D2 > 12 was found during inference)
+///   DATETIME    — YYYY-MM-DD HH:MM:SS or YYYY-MM-DDTHH:MM:SS (19-char ISO)
+///   DATETIME_EU — DD/MM/YYYY HH:MM (16-char European slash)
+///   DATETIME_US — MM/DD/YYYY HH:MM (16-char American slash)
+pub const ColumnType = enum {
+    TEXT,
+    INTEGER,
+    REAL,
+    DATE,
+    DATE_EU,
+    DATE_US,
+    DATETIME,
+    DATETIME_EU,
+    DATETIME_US,
+
+    /// User-facing name used in --validate, --columns --verbose, and --sample output.
+    /// All DATE* variants display as "DATE"; all DATETIME* as "DATETIME".
+    pub fn displayName(self: ColumnType) []const u8 {
+        return switch (self) {
+            .TEXT => "TEXT",
+            .INTEGER => "INTEGER",
+            .REAL => "REAL",
+            .DATE, .DATE_EU, .DATE_US => "DATE",
+            .DATETIME, .DATETIME_EU, .DATETIME_US => "DATETIME",
+        };
+    }
+};
 
 /// fatal(fmt, writer, code, args) → noreturn
 ///
@@ -161,6 +210,13 @@ pub fn createTable(
             .INTEGER => " INTEGER",
             .REAL => " REAL",
             .TEXT => " TEXT",
+            // DATE* and DATETIME* emit TEXT in DDL to guarantee TEXT affinity.
+            // Declaring "DATE" or "DATETIME" would give NUMERIC affinity, which
+            // would attempt numeric coercion of ISO 8601 strings. TEXT affinity
+            // preserves string semantics and lets all SQLite date functions work.
+            .DATE, .DATE_EU, .DATE_US,
+            .DATETIME, .DATETIME_EU, .DATETIME_US,
+            => " TEXT",
         }) catch fatal("out of memory", writer, .csv_error, .{});
     }
     sql.appendSlice(allocator, ")") catch fatal("out of memory", writer, .csv_error, .{});
