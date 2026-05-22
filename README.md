@@ -481,13 +481,13 @@ $ curl -s https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-ra
                 FROM t WHERE tier=1 AND Season BETWEEN 2018 AND 2022
                 GROUP BY Season ORDER BY Season'
 2018,2018-08-17,2019-05-19,275
-2019,2019-08-16,2020-07-19,337
+2019,2019-08-16,2020-07-19,338
 2020,2020-09-12,2021-05-23,253
 2021,2021-08-13,2022-05-22,282
 2022,2022-08-12,2023-06-04,296
 ```
 
-The 2019–20 season spans 337 days: COVID suspended play in March 2020 and pushed
+The 2019–20 season spans 338 days: COVID suspended play in March 2020 and pushed
 the final round to July. The 2022–23 season runs 296 days due to the November
 World Cup break. A normal season is ~275 days.
 

@@ -1029,3 +1029,14 @@ test "inferTypes: detects DATETIME_US (slash datetime with d2 > 12)" {
     defer allocator.free(types);
     try std.testing.expectEqual(ColumnType.DATETIME_US, types[0]);
 }
+
+test "inferTypes: mixed ISO date and slash date → TEXT (d_has_nonslash && d_has_slash)" {
+    // Exercises loader.zig line 287: d_has_nonslash[j] and d_has_slash[j] → TEXT
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("2024-01-15")}; // ISO → d_has_nonslash
+    var f2: [1][]u8 = .{@constCast("15/01/2024")}; // EU slash → d_has_slash
+    const rows: []const [][]u8 = &.{ &f1, &f2 };
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.TEXT, types[0]);
+}
