@@ -989,3 +989,43 @@ test "inferTypes: empty values ignored in type inference" {
     defer allocator.free(types);
     try std.testing.expectEqual(ColumnType.DATE, types[0]);
 }
+
+test "inferTypes: detects DATE (EU-dash DD-MM-YYYY)" {
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("15-01-2024")};
+    var f2: [1][]u8 = .{@constCast("31-12-1999")};
+    const rows: []const [][]u8 = &.{ &f1, &f2 };
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.DATE, types[0]);
+}
+
+test "inferTypes: mixed ISO and EU-dash dates → DATE" {
+    // Both YYYY-MM-DD and DD-MM-YYYY are non-slash; both infer to .DATE.
+    // bind-time detection distinguishes them via val[4]=='-'.
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("2024-01-15")}; // ISO
+    var f2: [1][]u8 = .{@constCast("15-01-2024")}; // EU dash
+    const rows: []const [][]u8 = &.{ &f1, &f2 };
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.DATE, types[0]);
+}
+
+test "inferTypes: detects DATETIME_EU (slash datetime with d1 > 12)" {
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("15/01/2024 10:30")};
+    const rows: []const [][]u8 = &.{&f1};
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.DATETIME_EU, types[0]);
+}
+
+test "inferTypes: detects DATETIME_US (slash datetime with d2 > 12)" {
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("01/15/2024 10:30")};
+    const rows: []const [][]u8 = &.{&f1};
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.DATETIME_US, types[0]);
+}
