@@ -161,12 +161,6 @@ fn run(
         total_rows += rows;
     }
 
-    // If we have no data at all (no files and empty stdin), fail with a clear error
-    // But only if we actually tried to load stdin (parsed.has_stdin is true)
-    if (total_rows == 0 and parsed.files.len == 0 and parsed.has_stdin) {
-        fatal("empty input (no data from files or stdin)", stderr_writer, .csv_error, .{});
-    }
-
     // Print row count and elapsed time to stderr when stderr is a TTY or --verbose is set.
     const is_tty = std.Io.File.isTty(std.Io.File.stderr(), io) catch false;
     if (!parsed.silent and (parsed.verbose or is_tty)) {

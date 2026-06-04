@@ -219,7 +219,7 @@ pub fn loadJsonArray(
     };
     defer allocator.free(buf);
 
-    if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
+    if (buf.len == 0) return 0; // Empty input - return 0 rows gracefully
 
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, buf, .{}) catch
         fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
@@ -238,7 +238,7 @@ pub fn loadJsonArray(
             fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
     };
 
-    if (array.items.len == 0) fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});
+    if (array.items.len == 0) return 0; // Empty array - return 0 rows gracefully
 
     // Extract column names from the first object's keys (insertion order)
     const first_obj = switch (array.items[0]) {
@@ -377,7 +377,7 @@ pub fn loadNdjsonInput(
     }
 
     if (cols_owned == null)
-        fatal("empty NDJSON input", stderr_writer, .csv_error, .{});
+        return 0; // Empty NDJSON input - return 0 rows gracefully
 
     if (in_transaction) commitTransaction(db, stderr_writer);
     return rows_inserted;

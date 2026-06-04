@@ -843,7 +843,7 @@ pub fn loadXmlInput(
         error.StreamTooLong => unreachable, // .unlimited never triggers this
     };
     defer allocator.free(buf);
-    if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
+    if (buf.len == 0) return 0; // Empty input - return 0 rows gracefully
 
     var p = XmlParser.init(buf);
     p.skipPrologue(stderr_writer);

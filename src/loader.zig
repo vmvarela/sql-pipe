@@ -626,7 +626,11 @@ pub fn loadCsvInput(
     const header_record = csv_reader.nextRecord() catch |err| switch (err) {
         error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),
         else => fatal("row 1: failed to parse CSV header", stderr_writer, .csv_error, .{}),
-    } orelse fatal("empty input (no header row)", stderr_writer, .csv_error, .{});
+    } orelse {
+        // Empty input - return 0 rows instead of failing
+        // This allows graceful handling when stdin is /dev/null and we have file arguments
+        return 0;
+    };
     defer csv_reader.freeRecord(header_record);
 
     const cols = parseHeader(allocator, header_record, stderr_writer) catch |err| switch (err) {

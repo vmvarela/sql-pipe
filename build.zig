@@ -581,11 +581,11 @@ pub fn build(b: *std.Build) void {
     test_json_bool_value.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_json_bool_value.step);
 
-    // Integration test 56: empty JSON array → error exit 2
+    // Integration test 56: empty JSON array → no such table error (table not created)
     const test_json_empty_array = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf '[]' | ./zig-out/bin/sql-pipe -I json 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'empty JSON array' && echo "$msg" | grep -q 'EXIT:2'
+        \\echo "$msg" | grep -q 'no such table' && echo "$msg" | grep -q 'EXIT:3'
     });
     test_json_empty_array.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_json_empty_array.step);
@@ -1097,11 +1097,11 @@ pub fn build(b: *std.Build) void {
     test_xml_null_output.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_xml_null_output.step);
 
-    // Integration test 107: Documento XML vacío → error con "empty input"
+    // Integration test 107: Empty XML document → no such table error (table not created)
     const test_xml_empty_input = b.addSystemCommand(&.{
         "bash", "-c",
-        \\msg=$(printf '' | ./zig-out/bin/sql-pipe -I xml 'SELECT 1' 2>&1; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'empty input' && echo "$msg" | grep -qv 'EXIT:0'
+        \\msg=$(printf '' | ./zig-out/bin/sql-pipe -I xml 'SELECT 1 FROM t' 2>&1; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'no such table' && echo "$msg" | grep -q 'EXIT:3'
     });
     test_xml_empty_input.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_xml_empty_input.step);
