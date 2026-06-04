@@ -259,7 +259,6 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.MissingJsonFlagValue => fatal("--json-path requires a value", stderr_writer, .usage, .{}),
             error.JsonPathRequiresJson => fatal("--json-path requires -I json", stderr_writer, .usage, .{}),
             error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
-            error.InvalidFileArgument => fatal("positional argument is not a readable file", stderr_writer, .usage, .{}),
             error.DuplicateTableName => fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{}),
             else => {},
         }
@@ -313,6 +312,14 @@ pub fn main(init: std.process.Init.Minimal) void {
         .parsed => |mut_parsed| {
             var parsed = mut_parsed;
             parsed.has_stdin = has_stdin;
+            // Check for file-stdin table name collision (t is reserved for stdin)
+            if (parsed.has_stdin) {
+                for (parsed.files) |f| {
+                    if (std.mem.eql(u8, f.table_name, "t")) {
+                        fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{});
+                    }
+                }
+            }
             if (parsed.output) |output_path| {
                 const output_file = std.Io.Dir.createFile(std.Io.Dir.cwd(), io.io(), output_path, .{}) catch |err| {
                     stderr_writer.print("error: cannot create output file '{s}': {s}\n", .{ output_path, @errorName(err) }) catch |werr| {

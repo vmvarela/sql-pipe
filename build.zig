@@ -1699,6 +1699,18 @@ pub fn build(b: *std.Build) void {
     test_file_no_input.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_file_no_input.step);
 
+    // Integration test 155j: File named t.csv conflicts with stdin table t
+    const test_file_t_conflict = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'a,b\n1,2\n' > "$dir/t.csv"
+        \\msg=$(printf 'x,y\n3,4\n' | ./zig-out/bin/sql-pipe "$dir/t.csv" 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\rm -rf "$dir"
+        \\echo "$msg" | grep -q 'duplicate table name' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_file_t_conflict.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_t_conflict.step);
+
     // ─── Fixture-based integration tests ─────────────────────────────────────
     // These tests use sample files committed in tests/fixtures/ to exercise
     // the binary end-to-end with realistic data across all supported formats.

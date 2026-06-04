@@ -58,7 +58,6 @@ pub const SqlPipeError = error{
     SampleWithValidate,
     SampleWithOutput,
     InvalidSampleCount,
-    InvalidFileArgument,
     DuplicateTableName,
 };
 
