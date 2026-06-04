@@ -1,27 +1,39 @@
 sql-pipe(1)
 
 NAME
-	sql-pipe - Execute SQL queries on CSV data from stdin
+	sql-pipe - Execute SQL queries on CSV/JSON/XML data from stdin or files
 
 SYNOPSIS
+	*sql-pipe* [OPTIONS] [<file>...] <query>
 	*sql-pipe* [OPTIONS] <query>
-	*sql-pipe* --columns [OPTIONS]
-	*sql-pipe* --sample [<n>] [OPTIONS]
+	*sql-pipe* --columns [OPTIONS] [<file>]
+	*sql-pipe* --sample [<n>] [OPTIONS] [<file>]
 
 DESCRIPTION
-	sql-pipe reads CSV data from standard input, loads it into an in-memory SQLite
-	database table named *t*, executes the provided SQL query, and prints the results
-	as CSV (or JSON when *--json* is used) to standard output.
+	sql-pipe reads CSV, JSON, NDJSON, or XML data from standard input and/or
+	file arguments, loads it into an in-memory SQLite database, executes the
+	provided SQL query, and prints the results as CSV (or JSON/XML when
+	requested) to standard output.
 
-	This tool is useful for quick data transformations, filtering, grouping, and
-	aggregations on CSV files without manual SQL database setup.
+	When reading from stdin, data is loaded into a table named *t*. When files
+	are passed as positional arguments, each file becomes a table named after
+	its basename without extension (e.g., *orders.csv* becomes table *orders*).
+	Stdin and file arguments can be combined — stdin is always table *t*.
 
-	All input columns are automatically loaded into the table with names derived from
-	the CSV header row. By default, column types (TEXT, INTEGER, REAL, DATE, DATETIME)
-	are inferred from the first 100 rows of data. DATE and DATETIME values are
-	normalized to ISO 8601 on insert, enabling SQLite date functions (*date()*,
-	*strftime()*, *julianday()*) to work directly on those columns. Use
-	*--no-type-inference* to disable this behavior and treat all columns as TEXT.
+	Input format for files is auto-detected from the file extension (*.csv*,
+	*.tsv*, *.json*, *.ndjson*, *.xml*). Files without a recognized extension
+	fall back to the *-I* flag value (default: CSV).
+
+	This tool is useful for quick data transformations, filtering, grouping,
+	aggregations, and multi-file joins without manual SQL database setup.
+
+	All input columns are automatically loaded into the table with names derived
+	from the CSV header row (or JSON keys). By default, column types (TEXT,
+	INTEGER, REAL, DATE, DATETIME) are inferred from the first 100 rows of data.
+	DATE and DATETIME values are normalized to ISO 8601 on insert, enabling
+	SQLite date functions (*date()*, *strftime()*, *julianday()*) to work
+	directly on those columns. Use *--no-type-inference* to disable this
+	behavior and treat all columns as TEXT.
 
 	By default, input fields are parsed as comma-separated values. Use
 	*--delimiter* (or *-d*) to parse other delimiters (1–8 characters), or *--tsv*
@@ -126,14 +138,34 @@ OPTIONS
 	*-V, --version*
 		Print the version number and exit with code 0.
 
+	*--*
+		End of options. All remaining arguments are treated as positional
+		arguments (files or query), even if they start with a dash. Use this
+		when a filename begins with *-*.
+
 EXAMPLES
-	Select all rows:
+	Select all rows from stdin:
 
 		$ cat people.csv | sql-pipe 'SELECT name, age FROM t'
 
 	Output:++
 	Alice,30++
 	Bob,25
+
+	Query a file directly (table named after basename):
+
+		$ sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
+
+	Join two files:
+
+		$ sql-pipe orders.csv customers.csv ++
+		    'SELECT c.name, SUM(o.amount) FROM orders o ++
+		     JOIN customers c ON o.cust_id = c.id GROUP BY c.name'
+
+	Mix stdin (as table t) with a file argument:
+
+		$ cat events.csv | sql-pipe users.csv ++
+		    'SELECT * FROM t JOIN users ON t.uid = users.id'
 
 	Group data by region and sum revenue:
 

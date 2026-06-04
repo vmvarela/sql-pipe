@@ -815,21 +815,23 @@ pub fn summarizeXml(
     return .{ .row_count = row_count, .col_names = col_names.? };
 }
 
-/// loadXmlInput(allocator, reader, db, xml_root, xml_row, max_rows, stderr_writer) → usize
+/// loadXmlInput(allocator, reader, db, table_name, xml_root, xml_row, max_rows, stderr_writer) → usize
 ///
 /// Pre:  reader is positioned at the start of a row-based XML document
 ///       db is an open, empty SQLite database
-/// Post: table `t` is created with TEXT columns from the first row's element names;
+/// Post: table is created with TEXT columns from the first row's element names;
 ///       all row elements are inserted; transaction is committed
 ///       result = number of rows inserted
 ///       aborts the process on any parse, I/O, or SQL error
 ///
+/// table_name: name of the SQLite table to create
 /// xml_root: when non-null, navigate to this element as the row container
 /// xml_row:  when non-null, only elements with this tag are treated as rows
 pub fn loadXmlInput(
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
     db: *c.sqlite3,
+    table_name: []const u8,
     xml_root: ?[]const u8,
     xml_row: ?[]const u8,
     max_rows: ?usize,
@@ -897,10 +899,10 @@ pub fn loadXmlInput(
                 fatal("first XML row element has no column children", stderr_writer, .csv_error, .{});
             col_names = names.toOwnedSlice(allocator) catch fatal("out of memory", stderr_writer, .csv_error, .{});
 
-            createAllTextTable(allocator, db, col_names.?, stderr_writer);
+            createAllTextTable(allocator, db, table_name, col_names.?, stderr_writer);
             beginTransaction(db, stderr_writer);
             in_transaction = true;
-            insert_stmt = prepareInsertStmt(allocator, db, col_names.?.len, stderr_writer);
+            insert_stmt = prepareInsertStmt(allocator, db, table_name, col_names.?.len, stderr_writer);
         }
 
         // Bind column values by name (order in row may differ from schema order)

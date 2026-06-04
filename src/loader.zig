@@ -591,10 +591,10 @@ pub fn printProgress(writer: *std.Io.Writer, n: usize, max_rows: ?usize) void {
     writer.flush() catch |err| std.log.err("failed to flush progress: {}", .{err});
 }
 
-/// loadCsvInput loads all CSV rows from stdin into db table `t`.
-/// Pre:  db is an open in-memory SQLite handle with no tables yet
+/// loadCsvInput loads CSV rows from stdin or a file into db table `table_name`.
+/// Pre:  db is an open SQLite handle with no tables yet
 ///       parsed.delimiter is valid; allocator and writers are valid
-/// Post: table `t` exists in db with columns inferred from the CSV header;
+/// Post: table exists in db with columns inferred from the CSV header;
 ///       all CSV rows have been inserted; transaction has been committed
 ///       returns rows_inserted (data rows only, header not counted)
 ///       on error: writes message to stderr_writer and exits with appropriate code
@@ -602,12 +602,26 @@ pub fn loadCsvInput(
     allocator: std.mem.Allocator,
     io: std.Io,
     db: *c.sqlite3,
+    table_name: []const u8,
+    file_path: ?[]const u8,
     parsed: args_mod.ParsedArgs,
     stderr_writer: *std.Io.Writer,
 ) usize {
-    var stdin_buf: [4096]u8 = undefined;
-    var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-    var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, parsed.delimiter);
+    // Open the file if provided, otherwise use stdin
+    var file_handle: ?std.Io.File = null;
+    if (file_path) |fp| {
+        file_handle = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, fp, .{}) catch |err|
+            fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ fp, @errorName(err) });
+    }
+
+    var read_buf: [4096]u8 = undefined;
+    const source_file = if (file_handle) |f| f else std.Io.File.stdin();
+    var source_reader = std.Io.File.reader(source_file, io, &read_buf);
+
+    // Defer closing the file (if we opened one)
+    defer if (file_handle) |f| std.Io.File.close(f, io);
+
+    var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &source_reader.interface, parsed.delimiter);
 
     const header_record = csv_reader.nextRecord() catch |err| switch (err) {
         error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),
@@ -671,11 +685,11 @@ pub fn loadCsvInput(
 
     // ─── Phase 2: create table and insert rows ────────────────────────────────
 
-    sqlite_mod.createTable(allocator, db, cols, types, stderr_writer);
+    sqlite_mod.createTable(allocator, db, table_name, cols, types, stderr_writer);
 
     sqlite_mod.beginTransaction(db, stderr_writer);
 
-    const stmt = sqlite_mod.prepareInsertStmt(allocator, db, num_cols, stderr_writer);
+    const stmt = sqlite_mod.prepareInsertStmt(allocator, db, table_name, num_cols, stderr_writer);
     defer _ = c.sqlite3_finalize(stmt);
 
     const is_tty = std.Io.File.isTty(std.Io.File.stderr(), io) catch false;
@@ -689,7 +703,7 @@ pub fn loadCsvInput(
                 fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
         }
         insertRowTyped(stmt, row, types, @intCast(num_cols)) catch
-            fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+            fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
         if (is_tty and rows_inserted % progress_interval == 0)
             printProgress(stderr_writer, rows_inserted, parsed.max_rows);
     }
@@ -721,7 +735,7 @@ pub fn loadCsvInput(
                 fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
         }
         insertRowTyped(stmt, record, types, @intCast(num_cols)) catch
-            fatalSqlWithContext(allocator, db, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+            fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
         if (is_tty and rows_inserted % progress_interval == 0)
             printProgress(stderr_writer, rows_inserted, parsed.max_rows);
     }

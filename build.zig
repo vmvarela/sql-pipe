@@ -395,11 +395,11 @@ pub fn build(b: *std.Build) void {
     test_columns_tsv.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_columns_tsv.step);
 
-    // Integration test 37: --columns combined with a query argument exits 1 with error
+    // Integration test 37: --columns with a non-file positional arg exits 1 with error
     const test_columns_with_query = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --columns 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --columns cannot be combined with a query argument' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: positional argument is not a readable file' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_columns_with_query.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_columns_with_query.step);
@@ -809,11 +809,11 @@ pub fn build(b: *std.Build) void {
     test_validate_delimiter.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_validate_delimiter.step);
 
-    // Integration test 78: --validate with query argument exits 1
+    // Integration test 78: --validate with a non-file positional arg exits 1
     const test_validate_with_query = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --validate cannot be combined with a query argument' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: positional argument is not a readable file' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_validate_with_query.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_validate_with_query.step);
@@ -930,11 +930,11 @@ pub fn build(b: *std.Build) void {
     test_sample_zero.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_sample_zero.step);
 
-    // Integration test 90: --sample combined with a query argument exits 1 with error
+    // Integration test 90: --sample with a non-file positional arg exits 1 with error
     const test_sample_with_query = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --sample 5 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --sample cannot be combined with a query argument' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: positional argument is not a readable file' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_sample_with_query.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_sample_with_query.step);
@@ -1593,6 +1593,112 @@ pub fn build(b: *std.Build) void {
     });
     test_date_no_type_inference.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_date_no_type_inference.step);
+    // ─── File argument integration tests (issue #155) ───────────────────────
+
+    // Integration test 155a: Single file argument — query by table name
+    const test_file_single = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'name,amount\nAlice,150\nBob,80\nCarol,200\n' > "$dir/orders.csv"
+        \\result=$(./zig-out/bin/sql-pipe "$dir/orders.csv" 'SELECT name FROM orders WHERE amount > 100')
+        \\rm -rf "$dir"
+        \\[ "$result" = "$(printf 'Alice\nCarol')" ]
+    });
+    test_file_single.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_single.step);
+
+    // Integration test 155b: Multi-file join
+    const test_file_multi_join = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'id,name\n1,Alice\n2,Bob\n3,Carol\n' > "$dir/users.csv"
+        \\printf 'user_id,amount\n1,150\n2,80\n3,200\n1,50\n' > "$dir/orders.csv"
+        \\result=$(./zig-out/bin/sql-pipe "$dir/users.csv" "$dir/orders.csv" \
+        \\    'SELECT u.name, SUM(o.amount) FROM users u JOIN orders o ON u.id = o.user_id GROUP BY u.name ORDER BY u.name')
+        \\rm -rf "$dir"
+        \\expected=$(printf 'Alice,200\nBob,80\nCarol,200')
+        \\[ "$result" = "$expected" ]
+    });
+    test_file_multi_join.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_multi_join.step);
+
+    // Integration test 155c: Stdin + file mix
+    const test_file_stdin_mix = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'uid,name\n1,Alice\n2,Bob\n' > "$dir/users.csv"
+        \\result=$(printf 'user_id,amount\n1,150\n2,80\n' \
+        \\    | ./zig-out/bin/sql-pipe "$dir/users.csv" 'SELECT t.amount, u.name FROM t JOIN users u ON t.user_id = u.uid ORDER BY u.name')
+        \\rm -rf "$dir"
+        \\[ "$result" = "$(printf '150,Alice\n80,Bob')" ]
+    });
+    test_file_stdin_mix.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_stdin_mix.step);
+
+    // Integration test 155d: File with .tsv extension auto-detected as TSV
+    const test_file_tsv_ext = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'name\tage\nAlice\t30\nBob\t25\n' > "$dir/data.tsv"
+        \\result=$(./zig-out/bin/sql-pipe "$dir/data.tsv" 'SELECT name FROM data WHERE age > 27')
+        \\rm -rf "$dir"
+        \\[ "$result" = "Alice" ]
+    });
+    test_file_tsv_ext.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_tsv_ext.step);
+
+    // Integration test 155e: -- separator works
+    const test_file_dashdash = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'x,y\n1,2\n' > "$dir/data.csv"
+        \\result=$(./zig-out/bin/sql-pipe -- "$dir/data.csv" 'SELECT y FROM data')
+        \\rm -rf "$dir"
+        \\[ "$result" = "2" ]
+    });
+    test_file_dashdash.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_dashdash.step);
+
+    // Integration test 155f: Non-existent file argument exits 1
+    const test_file_not_found = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(./zig-out/bin/sql-pipe /tmp/nonexistent_file_xyz.csv 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: positional argument is not a readable file' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_file_not_found.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_not_found.step);
+
+    // Integration test 155g: File with no extension uses default CSV format
+    const test_file_no_ext = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'name,age\nAlice,30\n' > "$dir/mydata"
+        \\result=$(./zig-out/bin/sql-pipe "$dir/mydata" 'SELECT name FROM mydata')
+        \\rm -rf "$dir"
+        \\[ "$result" = "Alice" ]
+    });
+    test_file_no_ext.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_no_ext.step);
+
+    // Integration test 155h: Stdin still works as `t` (existing behavior preserved)
+    const test_file_stdin_only = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' \
+        \\    | ./zig-out/bin/sql-pipe 'SELECT name FROM t WHERE age > 27')
+        \\[ "$result" = "Alice" ]
+    });
+    test_file_stdin_only.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_stdin_only.step);
+
+    // Integration test 155i: No file args + no stdin + no query → error
+    const test_file_no_input = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(./zig-out/bin/sql-pipe 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'Usage:' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_file_no_input.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_no_input.step);
+
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/csv.zig"),

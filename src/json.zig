@@ -194,11 +194,11 @@ pub fn navigateJsonPath(
 
 // ─── Input loading ────────────────────────────────────
 
-/// loadJsonArray(allocator, reader, db, max_rows, json_path, stderr_writer) → usize
+/// loadJsonArray(allocator, reader, db, table_name, max_rows, json_path, stderr_writer) → usize
 ///
 /// Pre:  reader is positioned at the start of a JSON document
 ///       db is an open, empty SQLite database
-/// Post: table `t` is created with TEXT columns derived from the first object's keys;
+/// Post: table is created with TEXT columns derived from the first object's keys;
 ///       all elements of the JSON array are inserted as rows
 ///       result = number of rows inserted
 ///       aborts the process on any parse, I/O, or SQL error
@@ -206,6 +206,7 @@ pub fn loadJsonArray(
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
     db: *c.sqlite3,
+    table_name: []const u8,
     max_rows: ?usize,
     json_path: ?[]const u8,
     stderr_writer: *std.Io.Writer,
@@ -255,10 +256,10 @@ pub fn loadJsonArray(
     if (cols.items.len == 0) fatal("first JSON object has no keys", stderr_writer, .csv_error, .{});
 
     // Create all-TEXT table (column names are owned by parsed arena — valid until parsed.deinit())
-    createAllTextTable(allocator, db, cols.items, stderr_writer);
+    createAllTextTable(allocator, db, table_name, cols.items, stderr_writer);
     beginTransaction(db, stderr_writer);
 
-    const stmt = prepareInsertStmt(allocator, db, cols.items.len, stderr_writer);
+    const stmt = prepareInsertStmt(allocator, db, table_name, cols.items.len, stderr_writer);
     defer _ = c.sqlite3_finalize(stmt);
 
     var rows_inserted: usize = 0;
@@ -282,11 +283,11 @@ pub fn loadJsonArray(
     return rows_inserted;
 }
 
-/// loadNdjsonInput(allocator, reader, db, max_rows, stderr_writer) → usize
+/// loadNdjsonInput(allocator, reader, db, table_name, max_rows, stderr_writer) → usize
 ///
 /// Pre:  reader is positioned at the start of a newline-delimited JSON stream
 ///       db is an open, empty SQLite database
-/// Post: table `t` is created with TEXT columns derived from the first non-blank line;
+/// Post: table is created with TEXT columns from the first non-blank line;
 ///       every non-blank line is parsed as a JSON object and inserted as a row
 ///       result = number of rows inserted
 ///       aborts the process on any parse, I/O, or SQL error
@@ -294,6 +295,7 @@ pub fn loadNdjsonInput(
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
     db: *c.sqlite3,
+    table_name: []const u8,
     max_rows: ?usize,
     stderr_writer: *std.Io.Writer,
 ) usize {
@@ -356,11 +358,11 @@ pub fn loadNdjsonInput(
                 fatal("out of memory", stderr_writer, .csv_error, .{});
 
             const cols_const: []const []const u8 = @ptrCast(cols_owned.?);
-            createAllTextTable(allocator, db, cols_const, stderr_writer);
+            createAllTextTable(allocator, db, table_name, cols_const, stderr_writer);
             beginTransaction(db, stderr_writer);
             in_transaction = true;
 
-            insert_stmt = prepareInsertStmt(allocator, db, cols_owned.?.len, stderr_writer);
+            insert_stmt = prepareInsertStmt(allocator, db, table_name, cols_owned.?.len, stderr_writer);
         }
 
         rows_inserted += 1;

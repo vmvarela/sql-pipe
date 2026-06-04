@@ -4,12 +4,15 @@
 [![Release](https://img.shields.io/github/v/release/vmvarela/sql-pipe)](https://github.com/vmvarela/sql-pipe/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`sql-pipe` reads CSV, JSON, or NDJSON from stdin, loads it into an in-memory SQLite database, runs a SQL query, and prints the results. No server, no schema files, no setup.
+`sql-pipe` reads CSV, JSON, or NDJSON from stdin or file arguments, loads it into an in-memory SQLite database, runs a SQL query, and prints the results. No server, no schema files, no setup.
 
 It exists because `awk` is cryptic, spinning up a Python interpreter for a one-liner feels wrong, and `sqlite3 :memory:` takes four commands before you can query anything. If you know SQL and work with CSV in the terminal, this is the tool you've been reaching for.
 
 ```sh
 $ curl -s https://example.com/data.csv | sql-pipe 'SELECT region, SUM(revenue) FROM t GROUP BY region ORDER BY 2 DESC'
+
+# Or pass files directly — each file becomes a table named after its basename
+$ sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
 ```
 
 ## Quick Start
@@ -143,7 +146,11 @@ Binary lands at `./zig-out/bin/sql-pipe`. SQLite is compiled from the official a
 
 ## Usage
 
-The input comes from stdin. For CSV and TSV, the first row must be a header — those column names become the schema for a table called `t`. Results go to stdout as comma-separated values by default.
+Input comes from stdin or file arguments. For CSV and TSV, the first row must be a header — those column names become the schema. Results go to stdout as comma-separated values by default.
+
+### Stdin input (table `t`)
+
+When reading from stdin, data is loaded into a table called `t`:
 
 ```sh
 $ printf 'name,age\nAlice,30\nBob,25\nCarol,35' | sql-pipe 'SELECT * FROM t'
@@ -220,6 +227,36 @@ $ cat events.xml | sql-pipe -I xml --xml-root events --xml-row event \
     'SELECT name, date FROM t WHERE type = "conference"'
 ```
 
+### File arguments
+
+Pass files as positional arguments instead of piping through stdin. Each file becomes a table named after its basename (without extension). The input format is auto-detected from the file extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.xml`):
+
+```sh
+# Single file — no more cat
+$ sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
+
+# Multi-file join — the #1 reason people reach for DuckDB
+$ sql-pipe orders.csv customers.csv \
+    'SELECT c.name, SUM(o.amount) FROM orders o
+     JOIN customers c ON o.cust_id = c.id GROUP BY c.name'
+```
+
+Stdin still works and is always available as table `t`. Mix stdin with file arguments:
+
+```sh
+# Stdin as t, file as named table
+$ cat events.csv | sql-pipe users.csv 'SELECT * FROM t JOIN users ON t.uid = users.id'
+
+# Stdin still works the old way
+$ cat data.csv | sql-pipe 'SELECT * FROM t'
+```
+
+Use `--` to separate files from the query when needed (e.g. if a filename starts with `-`):
+
+```sh
+$ sql-pipe -- data.csv 'SELECT * FROM data'
+```
+
 Chain queries by piping back in — useful for two-pass aggregations. Pass `-H` to the first call so the second one sees column names:
 
 ```sh
@@ -250,6 +287,7 @@ $ cat events.csv \
 | `-s`, `--silent` | Suppress `Loaded <n> rows in <t>s` and the progress counter from stderr unconditionally. Cannot be combined with `-v`/`--verbose` |
 | `-h`, `--help` | Show usage help and exit |
 | `-V`, `--version` | Print version and exit |
+| `--` | End of options — treat all remaining arguments as files or query |
 
 After loading, `sql-pipe` prints `Loaded <n> rows in <t>s` to stderr whenever stderr is a TTY (interactive terminal). The message is suppressed in scripts and pipes to keep them noise-free. Use `-v` / `--verbose` to force it regardless of TTY, or `-s` / `--silent` to suppress it unconditionally (e.g. when stderr is a TTY but you want clean output):
 
@@ -296,6 +334,15 @@ error: no such column: amout
 ```
 
 ## Recipes
+
+**Multi-file join:**
+
+```sh
+$ sql-pipe orders.csv customers.csv \
+    'SELECT c.name, SUM(o.amount) as total
+     FROM orders o JOIN customers c ON o.cust_id = c.id
+     GROUP BY c.name ORDER BY total DESC'
+```
 
 **Top N rows by a column:**
 
@@ -499,7 +546,7 @@ The database never touches disk and vanishes when the process exits. No state, n
 
 ## Limitations
 
-- **Single table per invocation.** For joins, use chained `sql-pipe` calls or a `WITH` CTE.
+- **File format auto-detection** is based on file extension. Files without a recognized extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.xml`) fall back to the `-I` flag value (default: CSV).
 
 ## Related
 

@@ -18,6 +18,14 @@ pub const ExitCode = enum(u8) {
     sql_error = 3,
 };
 
+pub const FileInput = struct {
+    path: []const u8,
+    table_name: []const u8,
+    format: InputFormat,
+    /// Delimiter override for CSV/TSV files (null = use default from flags).
+    delimiter: ?[]const u8 = null,
+};
+
 pub const SqlPipeError = error{
     MissingQuery,
     InvalidDelimiter,
@@ -52,11 +60,16 @@ pub const SqlPipeError = error{
     SampleWithValidate,
     SampleWithOutput,
     InvalidSampleCount,
+    InvalidFileArgument,
 };
 
 pub const ParsedArgs = struct {
-    /// SQL query to execute against table `t`.
+    /// SQL query to execute.
     query: []const u8,
+    /// Input files as positional arguments; empty when reading from stdin only.
+    files: []const FileInput = &.{},
+    /// True when stdin has piped data (not a TTY).
+    has_stdin: bool = false,
     /// Infer column types from the first 100 buffered rows when true.
     type_inference: bool,
     /// CSV field delimiter — 1 to 8 bytes (default: ",").
@@ -92,6 +105,8 @@ pub const ParsedArgs = struct {
 };
 
 pub const ColumnsArgs = struct {
+    /// Input files as positional arguments; empty when reading from stdin only.
+    files: []const FileInput = &.{},
     /// CSV field delimiter — 1 to 8 bytes (default: ",").
     delimiter: []const u8,
     /// Show inferred type alongside name when true.
@@ -107,6 +122,8 @@ pub const ColumnsArgs = struct {
 };
 
 pub const ValidateArgs = struct {
+    /// Input files as positional arguments; empty when reading from stdin only.
+    files: []const FileInput = &.{},
     /// CSV field delimiter — 1 to 8 bytes (default: ",").
     delimiter: []const u8,
     /// Infer column types from the first 100 buffered rows when true.
@@ -122,6 +139,8 @@ pub const ValidateArgs = struct {
 };
 
 pub const SampleArgs = struct {
+    /// Input files as positional arguments; empty when reading from stdin only.
+    files: []const FileInput = &.{},
     /// CSV field delimiter — 1 to 8 bytes (default: ",").
     delimiter: []const u8,
     /// Input format (default: csv).
@@ -150,9 +169,14 @@ pub const ArgsResult = union(enum) {
 pub fn printUsage(writer: *std.Io.Writer) !void {
     try writer.writeAll(
         \\Usage: sql-pipe [OPTIONS] <query>
+        \\       sql-pipe [OPTIONS] <file>... <query>
         \\
-        \\Reads input from stdin, loads it into an in-memory SQLite table `t`,
-        \\runs <query>, and prints results to stdout.
+        \\Reads input from stdin and/or file arguments, loads each into an in-memory
+        \\SQLite table, runs <query>, and prints results to stdout.
+        \\
+        \\File arguments: each becomes a table named after its basename (sans extension).
+        \\Stdin (when piped) is always loaded into table `t`. Combine files with stdin
+        \\for joins: e.g. cat data.csv | sql-pipe lookup.csv 'SELECT ... FROM t JOIN lookup ...'
         \\
         \\Options:
         \\  -d, --delimiter <string>     Input field delimiter for CSV: 1–8 chars (default: ,)
@@ -199,6 +223,9 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  cat data.tsv | sql-pipe --tsv 'SELECT * FROM t'
         \\  cat data.psv | sql-pipe -d '|' 'SELECT * FROM t'
         \\  cat data.csv | sql-pipe 'SELECT region, SUM(revenue) FROM t GROUP BY region'
+        \\  sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
+        \\  sql-pipe orders.csv customers.csv 'SELECT c.name, SUM(o.amount) FROM orders o JOIN customers c ON o.cust_id = c.id GROUP BY c.name'
+        \\  cat events.csv | sql-pipe users.csv 'SELECT * FROM t JOIN users ON t.uid = users.id'
         \\  cat data.csv | sql-pipe --output-format json 'SELECT * FROM t'
         \\  cat data.json | sql-pipe --input-format json 'SELECT * FROM t'
         \\  cat data.ndjson | sql-pipe -I ndjson -O ndjson 'SELECT name FROM t WHERE age > 18'
@@ -230,7 +257,7 @@ pub fn isValidXmlName(s: []const u8) bool {
     return true;
 }
 
-pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
+pub fn parseArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]const u8) (SqlPipeError || std.mem.Allocator.Error)!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
     var delimiter: []const u8 = ",";
@@ -252,6 +279,9 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var sample_mode = false;
     var sample_n: usize = 10;
     var disk = false;
+    var seen_dashdash = false;
+    var positional_args: std.ArrayList([]const u8) = .empty;
+    defer positional_args.deinit(allocator);
 
     // Loop invariant I: all args[1..i] have been processed;
     //   query holds the first non-flag argument seen, or null;
@@ -266,7 +296,11 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
-        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+        if (seen_dashdash) {
+            try positional_args.append(allocator, arg);
+        } else if (std.mem.eql(u8, arg, "--")) {
+            seen_dashdash = true;
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             return .help;
         } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) {
             return .version;
@@ -374,7 +408,45 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         } else if (std.mem.eql(u8, arg, "--disk")) {
             disk = true;
         } else {
-            if (query == null) query = arg;
+            try positional_args.append(allocator, arg);
+        }
+    }
+
+    // ─── Convert positional args to files + query ──────────────────────────
+    const pos = positional_args.items;
+    const is_special_mode = list_columns or validate or sample_mode;
+
+    // Build file list from positional args
+    var files: std.ArrayList(FileInput) = .empty;
+
+    if (pos.len > 0) {
+        if (is_special_mode) {
+            // Special modes: every positional arg is a file input
+            for (pos) |p| {
+                if (!isReadableFile(io, p))
+                    return error.InvalidFileArgument;
+                const name = try tableNameFromPath(allocator, p);
+                const fmt = InputFormat.fromExtension(p) orelse input_format;
+                try files.append(allocator, .{
+                    .path = p,
+                    .table_name = name,
+                    .format = fmt,
+                });
+            }
+        } else {
+            // Normal mode: last positional is the query, rest are files
+            query = pos[pos.len - 1];
+            for (pos[0 .. pos.len - 1]) |p| {
+                if (!isReadableFile(io, p))
+                    return error.InvalidFileArgument;
+                const name = try tableNameFromPath(allocator, p);
+                const fmt = InputFormat.fromExtension(p) orelse input_format;
+                try files.append(allocator, .{
+                    .path = p,
+                    .table_name = name,
+                    .format = fmt,
+                });
+            }
         }
     }
 
@@ -439,6 +511,7 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     // --columns mode: list headers and exit
     if (list_columns)
         return .{ .columns = ColumnsArgs{
+            .files = files.items,
             .delimiter = delimiter,
             .verbose = verbose,
             .input_format = input_format,
@@ -450,6 +523,7 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     // --validate mode: parse CSV and print summary
     if (validate)
         return .{ .validate = ValidateArgs{
+            .files = files.items,
             .delimiter = delimiter,
             .type_inference = type_inference,
             .input_format = input_format,
@@ -461,6 +535,7 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
     // --sample mode: print schema + first n rows and exit
     if (sample_mode)
         return .{ .sample = SampleArgs{
+            .files = files.items,
             .delimiter = delimiter,
             .input_format = input_format,
             .n = sample_n,
@@ -469,6 +544,7 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
 
     return .{ .parsed = ParsedArgs{
         .query = query orelse return error.MissingQuery,
+        .files = files.items,
         .type_inference = type_inference,
         .delimiter = delimiter,
         .header = header,
@@ -485,4 +561,17 @@ pub fn parseArgs(args: []const [:0]const u8) SqlPipeError!ArgsResult {
         .json_path = json_path,
         .disk = disk,
     } };
+}
+
+/// Check whether a path refers to a readable file.
+fn isReadableFile(io: std.Io, path: []const u8) bool {
+    const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch return false;
+    defer std.Io.File.close(file, io);
+    return true;
+}
+
+/// Derive a table name from a file path (basename without extension).
+fn tableNameFromPath(allocator: std.mem.Allocator, path: []const u8) (std.mem.Allocator.Error)![]const u8 {
+    const stem = std.fs.path.stem(path);
+    return allocator.dupe(u8, stem);
 }
