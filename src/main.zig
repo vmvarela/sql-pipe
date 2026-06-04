@@ -161,6 +161,12 @@ fn run(
         total_rows += rows;
     }
 
+    // If we have no data at all (no files and empty stdin), fail with a clear error
+    // But only if we actually tried to load stdin (parsed.has_stdin is true)
+    if (total_rows == 0 and parsed.files.len == 0 and parsed.has_stdin) {
+        fatal("empty input (no data from files or stdin)", stderr_writer, .csv_error, .{});
+    }
+
     // Print row count and elapsed time to stderr when stderr is a TTY or --verbose is set.
     const is_tty = std.Io.File.isTty(std.Io.File.stderr(), io) catch false;
     if (!parsed.silent and (parsed.verbose or is_tty)) {
@@ -210,13 +216,10 @@ pub fn main(init: std.process.Init.Minimal) void {
         fatal("failed to read process arguments", stderr_writer, .usage, .{});
 
     // Determine whether stdin has piped data available.
-    // Strategy: if stdin is a TTY, no pipe. Otherwise, poll for readiness
-    // without blocking — only treat as piped if data is actually available.
-    const has_stdin = if (std.c.isatty(0) == 1) false else blk: {
-        var pfd: [1]std.posix.pollfd = .{.{ .fd = 0, .events = std.posix.POLL.IN, .revents = 0 }};
-        const ret = std.posix.poll(&pfd, 0) catch 0;
-        break :blk ret > 0 and (pfd[0].revents & std.posix.POLL.IN) != 0;
-    };
+    // Strategy: check if stdin is a TTY. If not, assume data is available.
+    // However, if we have file arguments, only load stdin if it's explicitly piped
+    // (not a TTY). This handles CI environments where stdin is /dev/null.
+    const has_stdin = !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
 
     const args_result = parseArgs(args_arena.allocator(), io.io(), args) catch |err| {
         switch (err) {
