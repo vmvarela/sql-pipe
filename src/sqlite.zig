@@ -274,18 +274,13 @@ pub fn levenshteinDistance(a: []const u8, b: []const u8) usize {
 /// Return column names of `table_name` via PRAGMA table_info.
 /// Caller owns the returned slice; free each element and the slice with allocator.
 /// Returns empty slice on PRAGMA failure.
-pub fn getTableColumns(allocator: std.mem.Allocator, db: *c.sqlite3, table_name: []const u8) ![][]const u8 {
+pub fn getTableColumns(allocator: std.mem.Allocator, db: *c.sqlite3, table_name: []const u8, writer: *std.Io.Writer) [][]const u8 {
     var sql: std.ArrayList(u8) = .empty;
     defer sql.deinit(allocator);
-    try sql.appendSlice(allocator, "PRAGMA table_info(");
-    try sql.append(allocator, '"');
-    for (table_name) |ch| {
-        if (ch == '"') try sql.append(allocator, '"');
-        try sql.append(allocator, ch);
-    }
-    try sql.append(allocator, '"');
-    try sql.append(allocator, ')');
-    try sql.append(allocator, 0);
+    sql.appendSlice(allocator, "PRAGMA table_info(") catch fatal("out of memory", writer, .csv_error, .{});
+    appendQuotedId(allocator, writer, &sql, table_name);
+    sql.append(allocator, ')') catch fatal("out of memory", writer, .csv_error, .{});
+    sql.append(allocator, 0) catch fatal("out of memory", writer, .csv_error, .{});
 
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.items.ptr, -1, &stmt, null) != c.SQLITE_OK)
@@ -293,22 +288,17 @@ pub fn getTableColumns(allocator: std.mem.Allocator, db: *c.sqlite3, table_name:
     defer _ = c.sqlite3_finalize(stmt);
 
     var cols = std.ArrayList([]const u8).empty;
-    errdefer {
-        for (cols.items) |col| allocator.free(col);
-        cols.deinit(allocator);
-    }
 
     while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
         // PRAGMA table_info columns: cid(0), name(1), type(2), notnull(3), dflt_value(4), pk(5)
         const ptr = c.sqlite3_column_text(stmt, 1);
         if (ptr == null) continue;
         const name = std.mem.span(@as([*:0]const u8, @ptrCast(ptr)));
-        const owned = try allocator.dupe(u8, name);
-        errdefer allocator.free(owned);
-        try cols.append(allocator, owned);
+        const owned = allocator.dupe(u8, name) catch fatal("out of memory", writer, .csv_error, .{});
+        cols.append(allocator, owned) catch fatal("out of memory", writer, .csv_error, .{});
     }
 
-    return cols.toOwnedSlice(allocator);
+    return cols.toOwnedSlice(allocator) catch fatal("out of memory", writer, .csv_error, .{});
 }
 
 /// Print column context to writer after a SQL error.
@@ -322,7 +312,7 @@ pub fn printSqlErrorContext(
     errmsg: []const u8,
     writer: *std.Io.Writer,
 ) void {
-    const columns = getTableColumns(allocator, db, table_name) catch return;
+    const columns = getTableColumns(allocator, db, table_name, writer);
     defer {
         for (columns) |col| allocator.free(col);
         allocator.free(columns);

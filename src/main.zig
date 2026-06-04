@@ -32,7 +32,7 @@ const InputFormat = format.InputFormat;
 const OutputFormat = format.OutputFormat;
 
 /// execQuery(db, query, allocator, writer, header, output_format) → !void
-/// Pre:  db is open with table `t` populated
+/// Pre:  db is open with tables populated
 ///       query is a valid SQL string (not null-terminated)
 ///       allocator is valid
 ///       when output_format = .json or .ndjson, header must not be set (caller's responsibility)
@@ -99,11 +99,23 @@ fn run(
     // Load each file argument into its named table
     for (parsed.files) |file_input| {
         const rows = switch (file_input.format) {
-            .csv => loadCsvInput(allocator, io, db, file_input.table_name, file_input.path, parsed, stderr_writer),
+            .csv => blk: {
+                var file_buf: [4096]u8 = undefined;
+                const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_input.path, .{}) catch |err|
+                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ file_input.path, @errorName(err) });
+                defer std.Io.File.close(file, io);
+                var file_reader = std.Io.File.reader(file, io, &file_buf);
+                break :blk loadCsvInput(allocator, io, db, file_input.table_name, &file_reader.interface, parsed, stderr_writer);
+            },
             .tsv => blk: {
+                var file_buf: [4096]u8 = undefined;
+                const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_input.path, .{}) catch |err|
+                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ file_input.path, @errorName(err) });
+                defer std.Io.File.close(file, io);
+                var file_reader = std.Io.File.reader(file, io, &file_buf);
                 var tsv_parsed = parsed;
                 tsv_parsed.delimiter = "\t";
-                break :blk loadCsvInput(allocator, io, db, file_input.table_name, file_input.path, tsv_parsed, stderr_writer);
+                break :blk loadCsvInput(allocator, io, db, file_input.table_name, &file_reader.interface, tsv_parsed, stderr_writer);
             },
             .json => blk: {
                 var file_buf: [4096]u8 = undefined;
@@ -130,17 +142,26 @@ fn run(
                 break :blk xml.loadXmlInput(allocator, &file_reader.interface, db, file_input.table_name, parsed.xml_root_input, parsed.xml_row_input, parsed.max_rows, stderr_writer);
             },
         };
+        if (rows == 0) {
+            fatal("empty input file: '{s}'", stderr_writer, .csv_error, .{file_input.path});
+        }
         total_rows += rows;
     }
 
     // Load stdin as `t` if piped
     if (parsed.has_stdin) {
         const rows = switch (parsed.input_format) {
-            .csv => loadCsvInput(allocator, io, db, "t", null, parsed, stderr_writer),
+            .csv => blk: {
+                var stdin_buf: [4096]u8 = undefined;
+                var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+                break :blk loadCsvInput(allocator, io, db, "t", &stdin_reader.interface, parsed, stderr_writer);
+            },
             .tsv => blk: {
+                var stdin_buf: [4096]u8 = undefined;
+                var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
                 var tsv_parsed = parsed;
                 tsv_parsed.delimiter = "\t";
-                break :blk loadCsvInput(allocator, io, db, "t", null, tsv_parsed, stderr_writer);
+                break :blk loadCsvInput(allocator, io, db, "t", &stdin_reader.interface, tsv_parsed, stderr_writer);
             },
             .json => blk: {
                 var stdin_buf: [4096]u8 = undefined;
@@ -215,7 +236,7 @@ pub fn main(init: std.process.Init.Minimal) void {
     // (not a TTY). This handles CI environments where stdin is /dev/null.
     const has_stdin = !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
 
-    const args_result = parseArgs(args_arena.allocator(), io.io(), args) catch |err| {
+    const args_result = parseArgs(args_arena.allocator(), args) catch |err| {
         switch (err) {
             error.IncompatibleFlags => fatal("--header cannot be combined with non-CSV/TSV output format", stderr_writer, .usage, .{}),
             error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),
@@ -239,6 +260,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.JsonPathRequiresJson => fatal("--json-path requires -I json", stderr_writer, .usage, .{}),
             error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
             error.InvalidFileArgument => fatal("positional argument is not a readable file", stderr_writer, .usage, .{}),
+            error.DuplicateTableName => fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{}),
             else => {},
         }
         printUsage(stderr_writer) catch |werr| std.log.err("failed to write usage: {}", .{werr});

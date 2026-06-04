@@ -591,9 +591,10 @@ pub fn printProgress(writer: *std.Io.Writer, n: usize, max_rows: ?usize) void {
     writer.flush() catch |err| std.log.err("failed to flush progress: {}", .{err});
 }
 
-/// loadCsvInput loads CSV rows from stdin or a file into db table `table_name`.
+/// loadCsvInput loads CSV rows from a reader into db table `table_name`.
 /// Pre:  db is an open SQLite handle with no tables yet
 ///       parsed.delimiter is valid; allocator and writers are valid
+///       reader is positioned at the start of CSV data
 /// Post: table exists in db with columns inferred from the CSV header;
 ///       all CSV rows have been inserted; transaction has been committed
 ///       returns rows_inserted (data rows only, header not counted)
@@ -603,25 +604,11 @@ pub fn loadCsvInput(
     io: std.Io,
     db: *c.sqlite3,
     table_name: []const u8,
-    file_path: ?[]const u8,
+    reader: *std.Io.Reader,
     parsed: args_mod.ParsedArgs,
     stderr_writer: *std.Io.Writer,
 ) usize {
-    // Open the file if provided, otherwise use stdin
-    var file_handle: ?std.Io.File = null;
-    if (file_path) |fp| {
-        file_handle = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, fp, .{}) catch |err|
-            fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ fp, @errorName(err) });
-    }
-
-    var read_buf: [4096]u8 = undefined;
-    const source_file = if (file_handle) |f| f else std.Io.File.stdin();
-    var source_reader = std.Io.File.reader(source_file, io, &read_buf);
-
-    // Defer closing the file (if we opened one)
-    defer if (file_handle) |f| std.Io.File.close(f, io);
-
-    var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &source_reader.interface, parsed.delimiter);
+    var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, reader, parsed.delimiter);
 
     const header_record = csv_reader.nextRecord() catch |err| switch (err) {
         error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),

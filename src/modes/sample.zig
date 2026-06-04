@@ -20,6 +20,12 @@ pub fn runSample(
     stderr_writer: *std.Io.Writer,
     stdout_writer: *std.Io.Writer,
 ) void {
+    // Determine input source: file argument or stdin
+    const input_source: union(enum) { file: []const u8, stdin } = if (args.files.len > 0)
+        .{ .file = args.files[0].path }
+    else
+        .stdin;
+
     switch (args.input_format) {
         .json, .ndjson, .xml => fatal(
             "--sample is only supported with CSV and TSV input",
@@ -29,9 +35,15 @@ pub fn runSample(
         ),
         .csv, .tsv => {
             const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
-            var stdin_buf: [4096]u8 = undefined;
-            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-            var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, col_delim);
+            var read_buf: [4096]u8 = undefined;
+            const source_file = switch (input_source) {
+                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
+                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
+                .stdin => std.Io.File.stdin(),
+            };
+            defer if (input_source == .file) std.Io.File.close(source_file, io);
+            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
+            var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &source_reader.interface, col_delim);
 
             const header_record = csv_reader.nextRecord() catch |err| switch (err) {
                 error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),

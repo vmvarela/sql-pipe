@@ -22,8 +22,6 @@ pub const FileInput = struct {
     path: []const u8,
     table_name: []const u8,
     format: InputFormat,
-    /// Delimiter override for CSV/TSV files (null = use default from flags).
-    delimiter: ?[]const u8 = null,
 };
 
 pub const SqlPipeError = error{
@@ -61,6 +59,7 @@ pub const SqlPipeError = error{
     SampleWithOutput,
     InvalidSampleCount,
     InvalidFileArgument,
+    DuplicateTableName,
 };
 
 pub const ParsedArgs = struct {
@@ -257,7 +256,7 @@ pub fn isValidXmlName(s: []const u8) bool {
     return true;
 }
 
-pub fn parseArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]const u8) (SqlPipeError || std.mem.Allocator.Error)!ArgsResult {
+pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlPipeError || std.mem.Allocator.Error)!ArgsResult {
     var query: ?[]const u8 = null;
     var type_inference = true;
     var delimiter: []const u8 = ",";
@@ -291,7 +290,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]con
     //   output_format reflects the last --output-format/--json flag seen;
     //   input_format reflects the last --input-format flag seen;
     //   max_rows reflects the presence of --max-rows;
-    //   disk reflects the presence of --disk
+    //   disk reflects the presence of --disk;
+    //   positional_args accumulates non-flag arguments for later
+    //     conversion into file inputs and the query string;
+    //   files is built from positional_args after the loop
     // Bounding function: args.len - i
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -423,8 +425,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]con
         if (is_special_mode) {
             // Special modes: every positional arg is a file input
             for (pos) |p| {
-                if (!isReadableFile(io, p))
-                    return error.InvalidFileArgument;
                 const name = try tableNameFromPath(allocator, p);
                 const fmt = InputFormat.fromExtension(p) orelse input_format;
                 try files.append(allocator, .{
@@ -437,8 +437,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]con
             // Normal mode: last positional is the query, rest are files
             query = pos[pos.len - 1];
             for (pos[0 .. pos.len - 1]) |p| {
-                if (!isReadableFile(io, p))
-                    return error.InvalidFileArgument;
                 const name = try tableNameFromPath(allocator, p);
                 const fmt = InputFormat.fromExtension(p) orelse input_format;
                 try files.append(allocator, .{
@@ -447,6 +445,16 @@ pub fn parseArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]con
                     .format = fmt,
                 });
             }
+        }
+    }
+
+    // Check for duplicate table names (would cause conflicting table definitions)
+    {
+        var seen = std.StringHashMap(void).init(allocator);
+        defer seen.deinit();
+        for (files.items) |f| {
+            const gop = try seen.getOrPut(f.table_name);
+            if (gop.found_existing) return error.DuplicateTableName;
         }
     }
 
@@ -561,13 +569,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]con
         .json_path = json_path,
         .disk = disk,
     } };
-}
-
-/// Check whether a path refers to a readable file.
-fn isReadableFile(io: std.Io, path: []const u8) bool {
-    const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch return false;
-    defer std.Io.File.close(file, io);
-    return true;
 }
 
 /// Derive a table name from a file path (basename without extension).

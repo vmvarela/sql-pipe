@@ -395,11 +395,11 @@ pub fn build(b: *std.Build) void {
     test_columns_tsv.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_columns_tsv.step);
 
-    // Integration test 37: --columns with a non-file positional arg exits 1 with error
+    // Integration test 37: --columns with a non-file positional arg exits 2 with error
     const test_columns_with_query = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --columns 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: positional argument is not a readable file' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: cannot open file' && echo "$msg" | grep -q 'EXIT:2'
     });
     test_columns_with_query.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_columns_with_query.step);
@@ -809,11 +809,11 @@ pub fn build(b: *std.Build) void {
     test_validate_delimiter.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_validate_delimiter.step);
 
-    // Integration test 78: --validate with a non-file positional arg exits 1
+    // Integration test 78: --validate with a non-file positional arg exits 2
     const test_validate_with_query = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: positional argument is not a readable file' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: cannot open file' && echo "$msg" | grep -q 'EXIT:2'
     });
     test_validate_with_query.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_validate_with_query.step);
@@ -930,11 +930,11 @@ pub fn build(b: *std.Build) void {
     test_sample_zero.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_sample_zero.step);
 
-    // Integration test 90: --sample with a non-file positional arg exits 1 with error
+    // Integration test 90: --sample with a non-file positional arg exits 2
     const test_sample_with_query = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --sample 5 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: positional argument is not a readable file' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: cannot open file' && echo "$msg" | grep -q 'EXIT:2'
     });
     test_sample_with_query.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_sample_with_query.step);
@@ -1659,11 +1659,11 @@ pub fn build(b: *std.Build) void {
     test_file_dashdash.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_file_dashdash.step);
 
-    // Integration test 155f: Non-existent file argument exits 1
+    // Integration test 155f: Non-existent file argument exits 2
     const test_file_not_found = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(./zig-out/bin/sql-pipe /tmp/nonexistent_file_xyz.csv 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: positional argument is not a readable file' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: cannot open file' && echo "$msg" | grep -q 'EXIT:2'
     });
     test_file_not_found.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_file_not_found.step);
@@ -1823,19 +1823,18 @@ pub fn build(b: *std.Build) void {
     });
     fixture_test_step.dependOn(&fixture_xml_stdin.step);
 
-    // Fixture test 14: Mixed format — CSV file + JSON file join (via shared column)
+    // Fixture test 13: Mixed format — CSV file + JSON file join (via shared column)
     // orders.csv has "product" column, products.json has "name" column
     const fixture_mixed_join = b.addSystemCommand(&.{
         "bash", "-c",
-        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/orders.csv tests/fixtures/products.csv \
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/orders.csv tests/fixtures/products.json \
         \\    'SELECT o.product, p.category, SUM(o.amount) FROM orders o JOIN products p ON o.product = p.name GROUP BY o.product ORDER BY o.product' 2>/dev/null)
-        \\# This will fail because products.csv doesn't exist — test that error is handled
-        \\# Actually let's test a valid scenario: CSV + stdin JSON
-        \\true
+        \\expected=$(printf 'Doohickey,hardware,200.0\nGadget,electronics,125.5\nThingamajig,electronics,300.0\nWidget,hardware,345.25')
+        \\[ "$result" = "$expected" ]
     });
     fixture_test_step.dependOn(&fixture_mixed_join.step);
 
-    // Fixture test 14 (revised): CSV file + NDJSON stdin mix
+    // Fixture test 14: CSV file + NDJSON stdin mix
     const fixture_csv_ndjson_mix = b.addSystemCommand(&.{
         "bash", "-c",
         \\result=$(cat tests/fixtures/events.ndjson | ./zig-out/bin/sql-pipe -I ndjson tests/fixtures/customers.csv \
@@ -1899,6 +1898,32 @@ pub fn build(b: *std.Build) void {
         \\[ "$result" = "$expected" ]
     });
     fixture_test_step.dependOn(&fixture_header.step);
+
+    // Fixture test 21: --columns with file argument
+    const fixture_columns_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/orders.csv --columns)
+        \\expected=$(printf 'id\ncustomer_id\nproduct\namount\ndate')
+        \\[ "$result" = "$expected" ]
+    });
+    fixture_test_step.dependOn(&fixture_columns_file.step);
+
+    // Fixture test 22: --validate with file argument
+    const fixture_validate_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/orders.csv --validate)
+        \\echo "$result" | grep -q 'OK: 7 rows, 5 columns'
+    });
+    fixture_test_step.dependOn(&fixture_validate_file.step);
+
+    // Fixture test 23: --sample with file argument
+    const fixture_sample_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/orders.csv --sample 2 2>/dev/null)
+        \\expected=$(printf 'id,customer_id,product,amount,date\n1,1,Widget,150.00,2024-01-15\n2,2,Gadget,80.50,2024-02-20')
+        \\[ "$result" = "$expected" ]
+    });
+    fixture_test_step.dependOn(&fixture_sample_file.step);
 
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
