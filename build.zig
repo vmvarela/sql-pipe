@@ -1705,6 +1705,7 @@ pub fn build(b: *std.Build) void {
 
     const fixture_test_step = b.step("fixture-test", "Run fixture-based integration tests");
     fixture_test_step.dependOn(b.getInstallStep());
+    test_step.dependOn(fixture_test_step);
 
     // Fixture test 1: CSV file argument — basic query
     const fixture_csv_basic = b.addSystemCommand(&.{
