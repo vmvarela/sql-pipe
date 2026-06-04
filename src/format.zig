@@ -28,6 +28,15 @@ pub const InputFormat = enum {
     pub fn parse(s: []const u8) error{InvalidInputFormat}!InputFormat {
         return std.meta.stringToEnum(InputFormat, s) orelse error.InvalidInputFormat;
     }
+
+    /// Detect input format from file extension.
+    /// Returns null for unrecognized extensions.
+    pub fn fromExtension(filename: []const u8) ?InputFormat {
+        const ext = std.fs.path.extension(filename);
+        if (ext.len == 0) return null;
+        const ext_no_dot = ext[1..]; // skip the leading '.'
+        return std.meta.stringToEnum(InputFormat, ext_no_dot);
+    }
 };
 
 // ─── Output format ─────────────────────────────────────

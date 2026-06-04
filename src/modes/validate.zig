@@ -22,12 +22,24 @@ pub fn runValidate(
     stderr_writer: *std.Io.Writer,
     stdout_writer: *std.Io.Writer,
 ) void {
+    // Determine input source: file argument or stdin
+    const input_source: union(enum) { file: []const u8, stdin } = if (args.files.len > 0)
+        .{ .file = args.files[0].path }
+    else
+        .stdin;
+
     switch (args.input_format) {
         .csv, .tsv => {
             const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
-            var stdin_buf: [4096]u8 = undefined;
-            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-            var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &stdin_file_reader.interface, col_delim);
+            var read_buf: [4096]u8 = undefined;
+            const source_file = switch (input_source) {
+                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
+                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
+                .stdin => std.Io.File.stdin(),
+            };
+            defer if (input_source == .file) std.Io.File.close(source_file, io);
+            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
+            var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &source_reader.interface, col_delim);
 
             const header_record = csv_reader.nextRecord() catch |err| switch (err) {
                 error.UnterminatedQuotedField => fatal("row 1: unterminated quoted field", stderr_writer, .csv_error, .{}),
@@ -140,10 +152,16 @@ pub fn runValidate(
             };
         },
         .json => {
-            var stdin_buf: [4096]u8 = undefined;
-            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+            var read_buf: [4096]u8 = undefined;
+            const source_file = switch (input_source) {
+                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
+                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
+                .stdin => std.Io.File.stdin(),
+            };
+            defer if (input_source == .file) std.Io.File.close(source_file, io);
+            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
 
-            const input = stdin_file_reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+            const input = source_reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
                 error.OutOfMemory => fatal("out of memory reading JSON input", stderr_writer, .csv_error, .{}),
                 error.ReadFailed, error.StreamTooLong => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
             };
@@ -201,8 +219,14 @@ pub fn runValidate(
             };
         },
         .ndjson => {
-            var stdin_buf: [4096]u8 = undefined;
-            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+            var read_buf: [4096]u8 = undefined;
+            const source_file = switch (input_source) {
+                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
+                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
+                .stdin => std.Io.File.stdin(),
+            };
+            defer if (input_source == .file) std.Io.File.close(source_file, io);
+            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
 
             var line_num: usize = 0;
             var row_count: usize = 0;
@@ -214,7 +238,7 @@ pub fn runValidate(
 
             while (true) {
                 line_num += 1;
-                const line = json_mod.readLine(allocator, &stdin_file_reader.interface) catch |err| switch (err) {
+                const line = json_mod.readLine(allocator, &source_reader.interface) catch |err| switch (err) {
                     error.OutOfMemory => fatal("out of memory reading NDJSON", stderr_writer, .csv_error, .{}),
                     error.ReadFailed => fatal("line {d}: failed to read NDJSON", stderr_writer, .csv_error, .{line_num}),
                 } orelse break;
@@ -281,10 +305,16 @@ pub fn runValidate(
             };
         },
         .xml => {
-            var stdin_buf: [4096]u8 = undefined;
-            var stdin_file_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+            var read_buf: [4096]u8 = undefined;
+            const source_file = switch (input_source) {
+                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
+                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
+                .stdin => std.Io.File.stdin(),
+            };
+            defer if (input_source == .file) std.Io.File.close(source_file, io);
+            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
 
-            const summary = xml_mod.summarizeXml(allocator, &stdin_file_reader.interface, args.xml_root_input, args.xml_row_input, stderr_writer);
+            const summary = xml_mod.summarizeXml(allocator, &source_reader.interface, args.xml_root_input, args.xml_row_input, stderr_writer);
             defer {
                 for (summary.col_names) |name| allocator.free(name);
                 allocator.free(summary.col_names);

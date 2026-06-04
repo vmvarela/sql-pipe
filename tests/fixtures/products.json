@@ -1,0 +1,6 @@
+[
+  {"name": "Widget", "price": 25.00, "category": "hardware", "stock": 150},
+  {"name": "Gadget", "price": 40.25, "category": "electronics", "stock": 75},
+  {"name": "Doohickey", "price": 50.00, "category": "hardware", "stock": 30},
+  {"name": "Thingamajig", "price": 60.00, "category": "electronics", "stock": 0}
+]
