@@ -1,0 +1,5 @@
+{"event": "login", "user": "alice", "ts": "2024-01-15T10:30:00", "duration_ms": 1250}
+{"event": "purchase", "user": "bob", "ts": "2024-02-20T14:15:00", "duration_ms": 3400}
+{"event": "login", "user": "carol", "ts": "2024-03-10T09:00:00", "duration_ms": 890}
+{"event": "logout", "user": "alice", "ts": "2024-01-15T11:45:00", "duration_ms": 200}
+{"event": "purchase", "user": "alice", "ts": "2024-03-10T16:20:00", "duration_ms": 5600}

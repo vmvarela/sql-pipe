@@ -1,0 +1,8 @@
+id,customer_id,product,amount,date
+1,1,Widget,150.00,2024-01-15
+2,2,Gadget,80.50,2024-02-20
+3,1,Doohickey,200.00,2024-03-10
+4,3,Widget,75.25,2024-01-25
+5,2,Thingamajig,300.00,2024-04-05
+6,1,Gadget,45.00,2024-05-12
+7,3,Widget,120.00,2024-06-18
