@@ -3,6 +3,7 @@ const c = @import("c");
 const json = @import("json.zig");
 const xml = @import("xml.zig");
 const format = @import("format.zig");
+const table = @import("table.zig");
 const build_options = @import("build_options");
 const args_mod = @import("args.zig");
 const sqlite_mod = @import("sqlite.zig");
@@ -17,6 +18,7 @@ const VERSION: []const u8 = build_options.version;
 const SqlPipeError = args_mod.SqlPipeError;
 const ParsedArgs = args_mod.ParsedArgs;
 const ExitCode = args_mod.ExitCode;
+const TableMode = args_mod.TableMode;
 const parseArgs = args_mod.parseArgs;
 const printUsage = args_mod.printUsage;
 
@@ -31,12 +33,13 @@ const InputFormat = format.InputFormat;
 /// Supported output formats (canonical definition lives in format.zig).
 const OutputFormat = format.OutputFormat;
 
-/// execQuery(db, query, allocator, writer, header, output_format) → !void
+/// execQuery(db, query, allocator, writer, header, output_format, use_table) → !void
 /// Pre:  db is open with tables populated
 ///       query is a valid SQL string (not null-terminated)
 ///       allocator is valid
 ///       when output_format = .json or .ndjson, header must not be set (caller's responsibility)
-/// Post: results are written to writer in the requested output format
+///       when use_table = true, output_format must be .csv or .tsv (caller's responsibility)
+/// Post: results are written to writer in the requested output format (or as a pretty table)
 ///       error.PrepareQueryFailed when sqlite3_prepare_v2 returns non-SQLITE_OK
 ///       propagates any writer I/O error
 fn execQuery(
@@ -48,7 +51,8 @@ fn execQuery(
     output_format: OutputFormat,
     xml_root: []const u8,
     xml_row: []const u8,
-) (SqlPipeError || std.mem.Allocator.Error || error{WriteFailed})!void {
+    use_table: bool,
+) (SqlPipeError || std.mem.Allocator.Error || error{WriteFailed, StepFailed})!void {
     const query_z = try allocator.dupeZ(u8, query);
     defer allocator.free(query_z);
 
@@ -58,6 +62,12 @@ fn execQuery(
     defer _ = c.sqlite3_finalize(stmt);
 
     const col_count = c.sqlite3_column_count(stmt);
+
+    // Table mode: buffer all rows and print a formatted table
+    if (use_table) {
+        try table.writeTable(allocator, writer, stmt.?, col_count);
+        return;
+    }
 
     var out_writer = format.OutputWriter.init(output_format, .{
         .header = header,
@@ -75,8 +85,9 @@ fn execQuery(
     try out_writer.end(writer);
 }
 
-/// run(allocator, io, parsed, stderr_writer, stdout_writer) → void
+/// run(allocator, io, parsed, stderr_writer, stdout_writer, use_table) → void
 /// Pre:  parsed contains a valid query; allocator and writers are valid
+///       use_table is true when output should be formatted as a pretty table
 /// Post: input from stdin has been loaded (dispatched on parsed.input_format),
 ///       query executed, results written to stdout in parsed.output_format
 ///       On error, an "error: ..." message is written to stderr and process
@@ -87,6 +98,7 @@ fn run(
     parsed: ParsedArgs,
     stderr_writer: *std.Io.Writer,
     stdout_writer: *std.Io.Writer,
+    use_table: bool,
 ) void {
     const query = parsed.query;
 
@@ -204,7 +216,7 @@ fn run(
     // Determine which table to show column context for on error
     const main_table: []const u8 = if (parsed.files.len > 0) parsed.files[0].table_name else "t";
 
-    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row) catch {
+    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, use_table) catch {
         stdout_writer.flush() catch |err| std.log.err("failed to flush output before fatal: {}", .{err});
         sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
     };
@@ -260,6 +272,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.JsonPathRequiresJson => fatal("--json-path requires -I json", stderr_writer, .usage, .{}),
             error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
             error.DuplicateTableName => fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{}),
+            error.TableWithNonCsv => fatal("--table requires CSV or TSV output format (not compatible with --json, -O json, etc.)", stderr_writer, .usage, .{}),
             else => {},
         }
         printUsage(stderr_writer) catch |werr| std.log.err("failed to write usage: {}", .{werr});
@@ -320,6 +333,15 @@ pub fn main(init: std.process.Init.Minimal) void {
                     }
                 }
             }
+            // Resolve table mode: auto-detect from stdout TTY when not explicitly set.
+            // Table output only applies when writing to stdout (not --output to a file)
+            // and only for CSV/TSV output formats (not JSON/XML).
+            const stdout_is_tty = std.Io.File.isTty(std.Io.File.stdout(), io.io()) catch false;
+            const use_table_stdout = switch (parsed.table_mode) {
+                .always => true,
+                .never => false,
+                .auto => stdout_is_tty and (parsed.output_format == .csv or parsed.output_format == .tsv),
+            };
             if (parsed.output) |output_path| {
                 const output_file = std.Io.Dir.createFile(std.Io.Dir.cwd(), io.io(), output_path, .{}) catch |err| {
                     stderr_writer.print("error: cannot create output file '{s}': {s}\n", .{ output_path, @errorName(err) }) catch |werr| {
@@ -331,12 +353,13 @@ pub fn main(init: std.process.Init.Minimal) void {
                 defer std.Io.File.close(output_file, io.io());
                 var output_buf: [4096]u8 = undefined;
                 var output_file_writer = std.Io.File.writer(output_file, io.io(), &output_buf);
-                run(allocator, io.io(), parsed, stderr_writer, &output_file_writer.interface);
+                // Table mode is disabled when writing to a file
+                run(allocator, io.io(), parsed, stderr_writer, &output_file_writer.interface, false);
                 output_file_writer.flush() catch |err| {
                     std.log.err("failed to flush output file: {}", .{err});
                 };
             } else {
-                run(allocator, io.io(), parsed, stderr_writer, stdout_writer);
+                run(allocator, io.io(), parsed, stderr_writer, stdout_writer, use_table_stdout);
                 stdout_file_writer.flush() catch |err| {
                     std.log.err("failed to flush stdout: {}", .{err});
                 };
