@@ -55,7 +55,7 @@ wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERS
 sudo dpkg -i sql-pipe_VERSION_linux_amd64.deb
 ```
 
-Replace `VERSION` with the release version (e.g. `0.9.0`) and `amd64` with your architecture (`arm64`, `arm7`, or `386`).
+Replace `VERSION` with the release version (e.g. `0.12.0`) and `amd64` with your architecture (`arm64`, `arm7`, or `386`).
 
 **Fedora / RHEL / openSUSE (RPM repository):**
 
@@ -71,7 +71,7 @@ Or install a single release asset directly:
 sudo rpm -i https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERSION_linux_amd64.rpm
 ```
 
-Replace `VERSION` with the release version (e.g. `0.9.0`) and `amd64` with your architecture (`arm64`).
+Replace `VERSION` with the release version (e.g. `0.12.0`) and `amd64` with your architecture (`arm64`).
 
 **Alpine Linux (APK repository):**
 
@@ -89,7 +89,7 @@ wget https://github.com/vmvarela/sql-pipe/releases/latest/download/sql-pipe_VERS
 sudo apk add --allow-untrusted sql-pipe_VERSION_linux_amd64.apk
 ```
 
-Replace `VERSION` with the release version (e.g. `0.9.0`) and `amd64` with your architecture (`arm64`).
+Replace `VERSION` with the release version (e.g. `0.12.0`) and `amd64` with your architecture (`arm64`).
 
 **Arch Linux (AUR):** install with your preferred AUR helper:
 
@@ -158,6 +158,21 @@ Alice,30
 Bob,25
 Carol,35
 ```
+
+When stdout is a terminal (not piped), results are automatically formatted as an aligned table:
+
+```sh
+$ printf 'name,age\nAlice,30\nBob,25\nCarol,35' | sql-pipe 'SELECT * FROM t'
+┌───────┬─────┐
+│ name  │ age │
+├───────┼─────┤
+│ Alice │  30 │
+│ Bob   │  25 │
+│ Carol │  35 │
+└───────┴─────┘
+```
+
+Numeric columns are right-aligned, text columns left-aligned. Pipe the output and it stays CSV — no behavior change for scripts. Use `--table` to force table output or `--no-table` to force CSV.
 
 For JSON and NDJSON input, pass `-I json` (reads an array of objects) or `-I ndjson` (one object per line). Column names are taken from the keys of the first object:
 
@@ -283,6 +298,8 @@ $ cat events.csv \
 | `--xml-root <name>` | Root element name for XML I/O (default: `results`) |
 | `--xml-row <name>` | Row element name for XML I/O (default: `row`) |
 | `--output <file>` | Write results to the given file instead of stdout. Creates or overwrites the file. Exits 1 if the file cannot be created. |
+| `--table` | Force pretty-printed table output (auto-detected when stdout is a TTY). Requires CSV/TSV output format. |
+| `--no-table` | Force CSV output even when stdout is a TTY |
 | `-v`, `--verbose` | Print `Loaded <n> rows in <t>s` to stderr after loading (always on TTY; forced with flag) |
 | `-s`, `--silent` | Suppress `Loaded <n> rows in <t>s` and the progress counter from stderr unconditionally. Cannot be combined with `-v`/`--verbose` |
 | `-h`, `--help` | Show usage help and exit |
@@ -550,6 +567,6 @@ The database never touches disk and vanishes when the process exits. No state, n
 
 ## Related
 
-- **[q](https://harelba.github.io/q/)** — similar concept in Python; handles quoted CSV fields and more formats. Better if you're already in a Python environment.
-- **[trdsql](https://github.com/noborus/trdsql)** — Go alternative with multi-format support (JSON, LTSV) and output formatting. Better if you need non-CSV inputs.
-- **[sqlite-utils](https://sqlite-utils.datasette.io/)** — better if you need persistent databases, schema management, or Python scripting.
+- **[q](https://harelba.github.io/q/)** — Python-based SQL on tabular data. Similar concept, but requires Python runtime. Better if you're already in a Python environment or need Python-specific integrations.
+- **[trdsql](https://github.com/noborus/trdsql)** — Go alternative with broader format support (LTSV, TBLN) and more output options. Better if you need formats beyond CSV/JSON/NDJSON/XML or want more output formatting choices.
+- **[sqlite-utils](https://sqlite-utils.datasette.io/)** — better if you need persistent databases, schema management, or Python scripting. sql-pipe is designed for one-shot queries on ephemeral in-memory data.

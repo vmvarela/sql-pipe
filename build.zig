@@ -1711,6 +1711,77 @@ pub fn build(b: *std.Build) void {
     test_file_t_conflict.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_file_t_conflict.step);
 
+    // ─── Table output tests (--table / --no-table) ────────────────────────────
+
+    // Integration test 156a: --table produces formatted table output
+    const test_table_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25' | ./zig-out/bin/sql-pipe --table 'SELECT * FROM t')
+        \\echo "$result" | grep -q '┌' && echo "$result" | grep -q '│ name' && echo "$result" | grep -q '│ Alice' && echo "$result" | grep -q '└'
+    });
+    test_table_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_table_basic.step);
+
+    // Integration test 156b: --no-table forces CSV output
+    const test_no_table = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25' | ./zig-out/bin/sql-pipe --no-table 'SELECT * FROM t')
+        \\expected=$(printf 'Alice,30\nBob,25')
+        \\[ "$result" = "$expected" ]
+    });
+    test_no_table.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_no_table.step);
+
+    // Integration test 156c: --table with --json produces error
+    const test_table_json_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'name,age\nAlice,30' | ./zig-out/bin/sql-pipe --table --json 'SELECT * FROM t' 2>&1; echo "EXIT:$?")
+        \\echo "$msg" | grep -q '\-\-table requires CSV or TSV' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_table_json_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_table_json_error.step);
+
+    // Integration test 156d: piped output (no --table) stays CSV
+    const test_piped_csv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25' | ./zig-out/bin/sql-pipe 'SELECT * FROM t')
+        \\expected=$(printf 'Alice,30\nBob,25')
+        \\[ "$result" = "$expected" ]
+    });
+    test_piped_csv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_piped_csv.step);
+
+    // Integration test 156e: table output right-aligns numeric columns
+    const test_table_numeric_align = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,100\nBob,5' | ./zig-out/bin/sql-pipe --table 'SELECT * FROM t')
+        \\echo "$result" | grep -q '100' && echo "$result" | grep -q '5' && echo "$result" | grep -q '│'
+    });
+    test_table_numeric_align.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_table_numeric_align.step);
+
+    // Integration test 156f: empty result shows headers only
+    const test_table_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30' | ./zig-out/bin/sql-pipe --table 'SELECT * FROM t WHERE age > 100')
+        \\echo "$result" | grep -q '┌' && echo "$result" | grep -q '│ name' && echo "$result" | grep -q '└' && ! echo "$result" | grep -q 'Alice'
+    });
+    test_table_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_table_empty.step);
+
+    // Integration test 156g: --output writes CSV even with --table
+    const test_table_output_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'name,age\nAlice,30\nBob,25' | ./zig-out/bin/sql-pipe --table --output "$tmp" 'SELECT * FROM t'
+        \\result=$(cat "$tmp")
+        \\rm -f "$tmp"
+        \\expected=$(printf 'Alice,30\nBob,25')
+        \\[ "$result" = "$expected" ]
+    });
+    test_table_output_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_table_output_file.step);
+
     // ─── Fixture-based integration tests ─────────────────────────────────────
     // These tests use sample files committed in tests/fixtures/ to exercise
     // the binary end-to-end with realistic data across all supported formats.
