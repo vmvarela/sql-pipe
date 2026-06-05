@@ -52,7 +52,7 @@ fn execQuery(
     xml_root: []const u8,
     xml_row: []const u8,
     use_table: bool,
-) (SqlPipeError || std.mem.Allocator.Error || error{WriteFailed})!void {
+) (SqlPipeError || std.mem.Allocator.Error || error{WriteFailed, StepFailed})!void {
     const query_z = try allocator.dupeZ(u8, query);
     defer allocator.free(query_z);
 
@@ -65,7 +65,7 @@ fn execQuery(
 
     // Table mode: buffer all rows and print a formatted table
     if (use_table) {
-        try table.writeTable(allocator, stmt.?, col_count, writer);
+        try table.writeTable(allocator, writer, stmt.?, col_count);
         return;
     }
 
@@ -334,12 +334,13 @@ pub fn main(init: std.process.Init.Minimal) void {
                 }
             }
             // Resolve table mode: auto-detect from stdout TTY when not explicitly set.
-            // Table output only applies when writing to stdout (not --output to a file).
+            // Table output only applies when writing to stdout (not --output to a file)
+            // and only for CSV/TSV output formats (not JSON/XML).
             const stdout_is_tty = std.Io.File.isTty(std.Io.File.stdout(), io.io()) catch false;
             const use_table_stdout = switch (parsed.table_mode) {
                 .always => true,
                 .never => false,
-                .auto => stdout_is_tty,
+                .auto => stdout_is_tty and (parsed.output_format == .csv or parsed.output_format == .tsv),
             };
             if (parsed.output) |output_path| {
                 const output_file = std.Io.Dir.createFile(std.Io.Dir.cwd(), io.io(), output_path, .{}) catch |err| {
