@@ -474,6 +474,13 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         }
     }
 
+    // Effective input format: per-file auto-detection when a file is present,
+    // else the global default (CSV) or explicit -I value.
+    const effective_input_format: InputFormat = if (files.items.len > 0)
+        (if (input_format_explicit) input_format else files.items[0].format)
+    else
+        input_format;
+
     // Check for duplicate table names (would cause conflicting table definitions)
     {
         var seen = std.StringHashMap(void).init(allocator);
@@ -533,13 +540,13 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         return error.SilentVerboseConflict;
 
     // --xml-root and --xml-row must be valid XML element names (only validated in XML mode)
-    if (input_format == .xml or output_format == .xml) {
+    if (effective_input_format == .xml or output_format == .xml) {
         if (!isValidXmlName(xml_root) or !isValidXmlName(xml_row))
             return error.InvalidXmlName;
     }
 
-    // --json-path requires -I json (the flag only applies to JSON object navigation)
-    if (json_path != null and input_format != .json)
+    // --json-path requires JSON input (the flag only applies to JSON object navigation)
+    if (json_path != null and effective_input_format != .json)
         return error.JsonPathRequiresJson;
 
     // --table requires CSV or TSV output format (table formatting is visual only)
@@ -552,7 +559,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             .files = files.items,
             .delimiter = delimiter,
             .verbose = verbose,
-            .input_format = input_format,
+            .input_format = effective_input_format,
             .xml_root_input = xml_root_input,
             .xml_row_input = xml_row_input,
             .json_path = json_path,
@@ -564,7 +571,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             .files = files.items,
             .delimiter = delimiter,
             .type_inference = type_inference,
-            .input_format = input_format,
+            .input_format = effective_input_format,
             .xml_root_input = xml_root_input,
             .xml_row_input = xml_row_input,
             .json_path = json_path,
@@ -575,7 +582,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         return .{ .sample = SampleArgs{
             .files = files.items,
             .delimiter = delimiter,
-            .input_format = input_format,
+            .input_format = effective_input_format,
             .n = sample_n,
             .type_inference = type_inference,
         } };
