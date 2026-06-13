@@ -6,6 +6,7 @@ NAME
 SYNOPSIS
 	*sql-pipe* [OPTIONS] [<file>...] <query>
 	*sql-pipe* [OPTIONS] <query>
+	*sql-pipe* -f <file> [OPTIONS] [<file>...]
 	*sql-pipe* --columns [OPTIONS] [<file>]
 	*sql-pipe* --sample [<n>] [OPTIONS] [<file>]
 
@@ -144,6 +145,13 @@ OPTIONS
 		*--header*, CSV). Exits with code 1 and an error message if the file
 		cannot be created (bad path or insufficient permissions).
 
+	*-f, --file* <file>
+		Read the SQL query from <file> instead of the command line. When
+		this flag is used, all positional arguments are treated as data
+		files (no positional query is needed). Exits with code 1 and an
+		error message if the file does not exist, cannot be read, or is
+		empty.
+
 	*-h, --help*
 		Print the help message and exit with code 0.
 
@@ -186,6 +194,14 @@ EXAMPLES
 
 		$ cat events.csv | sql-pipe users.csv ++
 		    'SELECT * FROM t JOIN users ON t.uid = users.id'
+
+	Read query from a file:
+
+		$ sql-pipe -f analysis.sql orders.csv
+
+	Combine -f with stdin:
+
+		$ cat data.csv | sql-pipe -f analysis.sql
 
 	Group data by region and sum revenue:
 
