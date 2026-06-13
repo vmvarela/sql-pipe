@@ -325,6 +325,13 @@ pub fn main(init: std.process.Init.Minimal) void {
         .parsed => |mut_parsed| {
             var parsed = mut_parsed;
             parsed.has_stdin = has_stdin;
+            // Read query from file if -f/--file was used
+            if (parsed.query_file) |path| {
+                const contents = std.Io.Dir.cwd().readFileAlloc(io.io(), path, allocator, .limited(10 * 1024 * 1024)) catch |err| {
+                    fatal("cannot read query file '{s}': {s}", stderr_writer, .usage, .{ path, @errorName(err) });
+                };
+                parsed.query = contents;
+            }
             // Check for file-stdin table name collision (t is reserved for stdin)
             if (parsed.has_stdin) {
                 for (parsed.files) |f| {

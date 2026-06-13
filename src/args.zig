@@ -75,6 +75,8 @@ pub const SqlPipeError = error{
 pub const ParsedArgs = struct {
     /// SQL query to execute.
     query: []const u8,
+    /// Path to file containing SQL query (when using -f/--file); null = query from positional arg.
+    query_file: ?[]const u8 = null,
     /// Input files as positional arguments; empty when reading from stdin only.
     files: []const FileInput = &.{},
     /// True when stdin has piped data (not a TTY).
@@ -181,6 +183,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
     try writer.writeAll(
         \\Usage: sql-pipe [OPTIONS] <query>
         \\       sql-pipe [OPTIONS] <file>... <query>
+        \\       sql-pipe -f <file> [OPTIONS] [<file>...]
         \\
         \\Reads input from stdin and/or file arguments, loads each into an in-memory
         \\SQLite table, runs <query>, and prints results to stdout.
@@ -223,6 +226,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\                               Also sets PRAGMA temp_store = FILE for transient structures
         \\  --table                      Force pretty-printed table output (auto-detected on TTY)
         \\  --no-table                   Force CSV output even when stdout is a TTY
+        \\  -f, --file <file>            Read SQL query from file instead of command line
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
         \\
@@ -247,6 +251,8 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  cat data.ndjson | sql-pipe -I ndjson -O ndjson 'SELECT name FROM t WHERE age > 18'
         \\  cat data.xml | sql-pipe -I xml --xml-root channel --xml-row item "SELECT title FROM t"
         \\  cat data.csv | sql-pipe --sample 5
+        \\  sql-pipe -f query.sql data.csv
+        \\  cat data.csv | sql-pipe -f query.sql
         \\
     );
 }
@@ -275,6 +281,7 @@ pub fn isValidXmlName(s: []const u8) bool {
 
 pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlPipeError || std.mem.Allocator.Error)!ArgsResult {
     var query: ?[]const u8 = null;
+    var query_file: ?[]const u8 = null;
     var type_inference = true;
     var delimiter: []const u8 = ",";
     var header = false;
@@ -435,6 +442,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             table_mode = .always;
         } else if (std.mem.eql(u8, arg, "--no-table")) {
             table_mode = .never;
+        } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--file")) {
+            i += 1;
+            if (i >= args.len) return error.MissingQuery;
+            query_file = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--file=")) {
+            query_file = arg["--file=".len..];
+        } else if (std.mem.startsWith(u8, arg, "-f=")) {
+            query_file = arg["-f=".len..];
         } else {
             try positional_args.append(allocator, arg);
         }
@@ -448,8 +463,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var files: std.ArrayList(FileInput) = .empty;
 
     if (pos.len > 0) {
-        if (is_special_mode) {
-            // Special modes: every positional arg is a file input
+        if (is_special_mode or query_file != null) {
+            // Special modes or -f: every positional arg is a file input
             for (pos) |p| {
                 const name = try tableNameFromPath(allocator, p);
                 const fmt = if (input_format_explicit) input_format else (InputFormat.fromExtension(p) orelse input_format);
@@ -588,7 +603,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         } };
 
     return .{ .parsed = ParsedArgs{
-        .query = query orelse return error.MissingQuery,
+        .query = query orelse (if (query_file != null) "" else return error.MissingQuery),
+        .query_file = query_file,
         .files = files.items,
         .type_inference = type_inference,
         .delimiter = delimiter,

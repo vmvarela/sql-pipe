@@ -1711,6 +1711,82 @@ pub fn build(b: *std.Build) void {
     test_file_t_conflict.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_file_t_conflict.step);
 
+    // ─── -f/--file flag integration tests (issue #157) ────────────────────────
+
+    // Integration test 157a: -f reads query from file, file arg for data
+    const test_f_flag_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'name,age\nAlice,30\nBob,25\nCarol,35' > "$dir/data.csv"
+        \\printf 'SELECT name FROM data WHERE age > 27' > "$dir/query.sql"
+        \\result=$(./zig-out/bin/sql-pipe -f "$dir/query.sql" "$dir/data.csv")
+        \\rm -rf "$dir"
+        \\[ "$result" = "$(printf 'Alice\nCarol')" ]
+    });
+    test_f_flag_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_basic.step);
+
+    // Integration test 157b: -f with stdin input
+    const test_f_flag_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'SELECT name FROM t WHERE age > 27' > "$dir/query.sql"
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\nCarol,35' \
+        \\    | ./zig-out/bin/sql-pipe -f "$dir/query.sql")
+        \\rm -rf "$dir"
+        \\[ "$result" = "$(printf 'Alice\nCarol')" ]
+    });
+    test_f_flag_stdin.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_stdin.step);
+
+    // Integration test 157c: --file long form
+    const test_file_flag_long = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'name,age\nAlice,30\nBob,25\nCarol,35' > "$dir/data.csv"
+        \\printf 'SELECT name FROM data WHERE age > 27' > "$dir/query.sql"
+        \\result=$(./zig-out/bin/sql-pipe --file "$dir/query.sql" "$dir/data.csv")
+        \\rm -rf "$dir"
+        \\[ "$result" = "$(printf 'Alice\nCarol')" ]
+    });
+    test_file_flag_long.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_flag_long.step);
+
+    // Integration test 157d: --file= equals form
+    const test_file_flag_equals = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'name,age\nAlice,30\n' > "$dir/data.csv"
+        \\printf 'SELECT name FROM data' > "$dir/query.sql"
+        \\result=$(./zig-out/bin/sql-pipe --file="$dir/query.sql" "$dir/data.csv")
+        \\rm -rf "$dir"
+        \\[ "$result" = "Alice" ]
+    });
+    test_file_flag_equals.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_file_flag_equals.step);
+
+    // Integration test 157e: -f= equals form
+    const test_f_flag_eq = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'name,age\nAlice,30\n' > "$dir/data.csv"
+        \\printf 'SELECT name FROM data' > "$dir/query.sql"
+        \\result=$(./zig-out/bin/sql-pipe -f="$dir/query.sql" "$dir/data.csv")
+        \\rm -rf "$dir"
+        \\[ "$result" = "Alice" ]
+    });
+    test_f_flag_eq.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_eq.step);
+
+    // Integration test 157f: Error case — file doesn't exist
+    const test_f_flag_not_found = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(./zig-out/bin/sql-pipe -f /tmp/nonexistent_query_file.sql 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q "cannot read query file" && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_f_flag_not_found.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_not_found.step);
+
     // ─── Table output tests (--table / --no-table) ────────────────────────────
 
     // Integration test 156a: --table produces formatted table output
