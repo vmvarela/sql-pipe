@@ -1799,6 +1799,70 @@ pub fn build(b: *std.Build) void {
     test_f_flag_empty.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_f_flag_empty.step);
 
+    // Integration test 157h: Error case — whitespace-only query file
+    const test_f_flag_whitespace = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf '  \n\t  \n' > "$dir/ws.sql"
+        \\msg=$(./zig-out/bin/sql-pipe -f "$dir/ws.sql" 2>&1 >/dev/null; echo "EXIT:$?")
+        \\rm -rf "$dir"
+        \\echo "$msg" | grep -q "query file.*is empty" && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_f_flag_whitespace.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_whitespace.step);
+
+    // Integration test 157i: Error case — -f with --columns
+    const test_f_flag_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'SELECT 1' > "$dir/q.sql"
+        \\printf 'name,age\nAlice,30' > "$dir/data.csv"
+        \\msg=$(./zig-out/bin/sql-pipe --columns -f "$dir/q.sql" "$dir/data.csv" 2>&1 >/dev/null; echo "EXIT:$?")
+        \\rm -rf "$dir"
+        \\echo "$msg" | grep -q "cannot be combined with" && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_f_flag_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_columns.step);
+
+    // Integration test 157j: Error case — -f with --validate
+    const test_f_flag_validate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'SELECT 1' > "$dir/q.sql"
+        \\printf 'name,age\nAlice,30' > "$dir/data.csv"
+        \\msg=$(./zig-out/bin/sql-pipe --validate -f "$dir/q.sql" "$dir/data.csv" 2>&1 >/dev/null; echo "EXIT:$?")
+        \\rm -rf "$dir"
+        \\echo "$msg" | grep -q "cannot be combined with" && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_f_flag_validate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_validate.step);
+
+    // Integration test 157k: Error case — -f with --sample
+    const test_f_flag_sample = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'SELECT 1' > "$dir/q.sql"
+        \\printf 'name,age\nAlice,30' > "$dir/data.csv"
+        \\msg=$(./zig-out/bin/sql-pipe --sample -f "$dir/q.sql" "$dir/data.csv" 2>&1 >/dev/null; echo "EXIT:$?")
+        \\rm -rf "$dir"
+        \\echo "$msg" | grep -q "cannot be combined with" && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_f_flag_sample.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_sample.step);
+
+    // Integration test 157l: Error case — multiple -f flags
+    const test_f_flag_multiple = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'SELECT 1' > "$dir/q1.sql"
+        \\printf 'SELECT 2' > "$dir/q2.sql"
+        \\msg=$(./zig-out/bin/sql-pipe -f "$dir/q1.sql" -f "$dir/q2.sql" 2>&1 >/dev/null; echo "EXIT:$?")
+        \\rm -rf "$dir"
+        \\echo "$msg" | grep -q "only one -f/--file" && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_f_flag_multiple.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_multiple.step);
+
     // ─── Table output tests (--table / --no-table) ────────────────────────────
 
     // Integration test 156a: --table produces formatted table output

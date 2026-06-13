@@ -71,6 +71,7 @@ pub const SqlPipeError = error{
     DuplicateTableName,
     TableWithNonCsv,
     InvalidQueryFile,
+    MultipleQueryFiles,
 };
 
 pub const ParsedArgs = struct {
@@ -283,6 +284,7 @@ pub fn isValidXmlName(s: []const u8) bool {
 pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlPipeError || std.mem.Allocator.Error)!ArgsResult {
     var query: ?[]const u8 = null;
     var query_file: ?[]const u8 = null;
+    var query_file_seen = false;
     var type_inference = true;
     var delimiter: []const u8 = ",";
     var header = false;
@@ -447,11 +449,17 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             i += 1;
             if (i >= args.len) return error.InvalidQueryFile;
             if (args[i].len == 0) return error.InvalidQueryFile;
+            if (query_file_seen) return error.MultipleQueryFiles;
+            query_file_seen = true;
             query_file = args[i];
         } else if (std.mem.startsWith(u8, arg, "--file=")) {
+            if (query_file_seen) return error.MultipleQueryFiles;
+            query_file_seen = true;
             query_file = arg["--file=".len..];
             if (query_file.?.len == 0) return error.InvalidQueryFile;
         } else if (std.mem.startsWith(u8, arg, "-f=")) {
+            if (query_file_seen) return error.MultipleQueryFiles;
+            query_file_seen = true;
             query_file = arg["-f=".len..];
             if (query_file.?.len == 0) return error.InvalidQueryFile;
         } else {
@@ -530,16 +538,16 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (validate and list_columns)
         return error.ValidateWithColumns;
 
-    // --columns is mutually exclusive with a query argument
-    if (list_columns and query != null)
+    // --columns is mutually exclusive with a query argument (positional or -f)
+    if (list_columns and (query != null or query_file != null))
         return error.ColumnsWithQuery;
 
-    // --validate is mutually exclusive with a query argument
-    if (validate and query != null)
+    // --validate is mutually exclusive with a query argument (positional or -f)
+    if (validate and (query != null or query_file != null))
         return error.ValidateWithQuery;
 
-    // --sample is mutually exclusive with a query argument
-    if (sample_mode and query != null)
+    // --sample is mutually exclusive with a query argument (positional or -f)
+    if (sample_mode and (query != null or query_file != null))
         return error.SampleWithQuery;
 
     // --sample is mutually exclusive with --json / json output format

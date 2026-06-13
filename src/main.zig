@@ -272,6 +272,7 @@ pub fn main(init: std.process.Init.Minimal) void {
                 // Fall through to printUsage + exit below
             },
             error.InvalidQueryFile => fatal("-f/--file requires a non-empty file path", stderr_writer, .usage, .{}),
+            error.MultipleQueryFiles => fatal("only one -f/--file flag is allowed", stderr_writer, .usage, .{}),
             error.MissingXmlFlagValue => fatal("--xml-root and --xml-row require a value", stderr_writer, .usage, .{}),
             error.MissingJsonFlagValue => fatal("--json-path requires a value", stderr_writer, .usage, .{}),
             error.JsonPathRequiresJson => fatal("--json-path requires -I json", stderr_writer, .usage, .{}),
@@ -336,10 +337,11 @@ pub fn main(init: std.process.Init.Minimal) void {
                 const contents = std.Io.Dir.cwd().readFileAlloc(io.io(), path, args_arena.allocator(), .limited(10 * 1024 * 1024)) catch |err| {
                     fatal("cannot read query file '{s}': {s}", stderr_writer, .usage, .{ path, @errorName(err) });
                 };
-                if (contents.len == 0) {
+                const trimmed = std.mem.trim(u8, contents, " \t\r\n");
+                if (trimmed.len == 0) {
                     fatal("query file '{s}' is empty", stderr_writer, .usage, .{path});
                 }
-                parsed.query = contents;
+                parsed.query = trimmed;
             }
             // Check for file-stdin table name collision (t is reserved for stdin)
             if (parsed.has_stdin) {

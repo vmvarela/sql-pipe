@@ -7,6 +7,7 @@ SYNOPSIS
 	*sql-pipe* [OPTIONS] [<file>...] <query>
 	*sql-pipe* [OPTIONS] <query>
 	*sql-pipe* -f <file> [OPTIONS] [<file>...]
+	*sql-pipe* -f <file> [OPTIONS]
 	*sql-pipe* --columns [OPTIONS] [<file>]
 	*sql-pipe* --sample [<n>] [OPTIONS] [<file>]
 
