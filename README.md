@@ -289,6 +289,18 @@ $ cat events.csv \
   | sql-pipe 'SELECT * FROM t WHERE n > 100'
 ```
 
+### Query from file
+
+For complex queries, store the SQL in a file and pass it with `-f` / `--file`:
+
+```sh
+$ sql-pipe -f analysis.sql orders.csv
+$ cat data.csv | sql-pipe -f analysis.sql
+$ sql-pipe --file=query.sql orders.csv customers.csv
+```
+
+When `-f` is used, all positional arguments are treated as data files (no positional query needed).
+
 ### Flags
 
 | Flag | Description |
@@ -309,6 +321,7 @@ $ cat events.csv \
 | `--output <file>` | Write results to the given file instead of stdout. Creates or overwrites the file. Exits 1 if the file cannot be created. |
 | `--table` | Force pretty-printed table output (auto-detected when stdout is a TTY). Requires CSV/TSV output format. |
 | `--no-table` | Force CSV output even when stdout is a TTY |
+| `-f`, `--file <file>` | Read SQL query from file instead of command line |
 | `-v`, `--verbose` | Print `Loaded <n> rows in <t>s` to stderr after loading (always on TTY; forced with flag) |
 | `-s`, `--silent` | Suppress `Loaded <n> rows in <t>s` and the progress counter from stderr unconditionally. Cannot be combined with `-v`/`--verbose` |
 | `-h`, `--help` | Show usage help and exit |
