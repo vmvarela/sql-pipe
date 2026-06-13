@@ -250,10 +250,19 @@ Pass files as positional arguments instead of piping through stdin. Each file be
 # Single file — no more cat
 $ sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
 
+# JSON file — extension tells sql-pipe the format, no -I needed
+$ sql-pipe data.json 'SELECT * FROM data WHERE score > 80'
+
 # Multi-file join — the #1 reason people reach for DuckDB
 $ sql-pipe orders.csv customers.csv \
     'SELECT c.name, SUM(o.amount) FROM orders o
      JOIN customers c ON o.cust_id = c.id GROUP BY c.name'
+```
+
+Use `-I` to override auto-detection when the extension is wrong or ambiguous (`.txt`, `.dat`):
+
+```sh
+$ sql-pipe -I tsv data.txt 'SELECT * FROM data'
 ```
 
 Stdin still works and is always available as table `t`. Mix stdin with file arguments:
@@ -286,7 +295,7 @@ $ cat events.csv \
 |------|-------------|
 | `-d`, `--delimiter <char>` | Input field delimiter (single character, default `,`) |
 | `--tsv` | Alias for `--delimiter '\t'` |
-| `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson`, `xml` |
+| `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson`, `xml`. Overrides file extension auto-detection. |
 | `-O`, `--output-format <fmt>` | Output format: `csv` (default), `tsv`, `json`, `ndjson`, `xml` |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
 | `-H`, `--header` | Print column names as the first output row |
@@ -563,7 +572,7 @@ The database never touches disk and vanishes when the process exits. No state, n
 
 ## Limitations
 
-- **File format auto-detection** is based on file extension. Files without a recognized extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.xml`) fall back to the `-I` flag value (default: CSV).
+- **File format auto-detection** is based on file extension. Files without a recognized extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.xml`) default to CSV. Use `-I` to override.
 
 ## Related
 
