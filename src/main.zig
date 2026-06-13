@@ -267,6 +267,11 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.SampleWithValidate => fatal("--sample cannot be combined with --validate", stderr_writer, .usage, .{}),
             error.SampleWithOutput => fatal("--sample cannot be combined with --output", stderr_writer, .usage, .{}),
             error.InvalidSampleCount => fatal("--sample requires a positive integer value", stderr_writer, .usage, .{}),
+            error.MissingQuery => {
+                stderr_writer.writeAll("error: no SQL query provided\n") catch |werr| std.log.err("failed to write error: {}", .{werr});
+                // Fall through to printUsage + exit below
+            },
+            error.InvalidQueryFile => fatal("-f/--file requires a non-empty file path", stderr_writer, .usage, .{}),
             error.MissingXmlFlagValue => fatal("--xml-root and --xml-row require a value", stderr_writer, .usage, .{}),
             error.MissingJsonFlagValue => fatal("--json-path requires a value", stderr_writer, .usage, .{}),
             error.JsonPathRequiresJson => fatal("--json-path requires -I json", stderr_writer, .usage, .{}),
@@ -325,9 +330,10 @@ pub fn main(init: std.process.Init.Minimal) void {
         .parsed => |mut_parsed| {
             var parsed = mut_parsed;
             parsed.has_stdin = has_stdin;
-            // Read query from file if -f/--file was used
+            // Read query from file if -f/--file was used.
+            // Arena-allocated to match the lifetime of parsed args.
             if (parsed.query_file) |path| {
-                const contents = std.Io.Dir.cwd().readFileAlloc(io.io(), path, allocator, .limited(10 * 1024 * 1024)) catch |err| {
+                const contents = std.Io.Dir.cwd().readFileAlloc(io.io(), path, args_arena.allocator(), .limited(10 * 1024 * 1024)) catch |err| {
                     fatal("cannot read query file '{s}': {s}", stderr_writer, .usage, .{ path, @errorName(err) });
                 };
                 parsed.query = contents;

@@ -70,6 +70,7 @@ pub const SqlPipeError = error{
     InvalidSampleCount,
     DuplicateTableName,
     TableWithNonCsv,
+    InvalidQueryFile,
 };
 
 pub const ParsedArgs = struct {
@@ -444,12 +445,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             table_mode = .never;
         } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--file")) {
             i += 1;
-            if (i >= args.len) return error.MissingQuery;
+            if (i >= args.len) return error.InvalidQueryFile;
+            if (args[i].len == 0) return error.InvalidQueryFile;
             query_file = args[i];
         } else if (std.mem.startsWith(u8, arg, "--file=")) {
             query_file = arg["--file=".len..];
+            if (query_file.?.len == 0) return error.InvalidQueryFile;
         } else if (std.mem.startsWith(u8, arg, "-f=")) {
             query_file = arg["-f=".len..];
+            if (query_file.?.len == 0) return error.InvalidQueryFile;
         } else {
             try positional_args.append(allocator, arg);
         }
