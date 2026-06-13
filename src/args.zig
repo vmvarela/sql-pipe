@@ -193,6 +193,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  -d, --delimiter <string>     Input field delimiter for CSV: 1–8 chars (default: ,)
         \\  --tsv                        Alias for --delimiter '\t'
         \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml
+        \\                               Overrides file extension auto-detection; stdin always uses this value
         \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml
         \\  --json                       Alias for --output-format json
         \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
@@ -237,6 +238,8 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  cat data.psv | sql-pipe -d '|' 'SELECT * FROM t'
         \\  cat data.csv | sql-pipe 'SELECT region, SUM(revenue) FROM t GROUP BY region'
         \\  sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
+        \\  sql-pipe data.json 'SELECT * FROM data WHERE score > 80'
+        \\  sql-pipe -I tsv data.txt 'SELECT * FROM data'
         \\  sql-pipe orders.csv customers.csv 'SELECT c.name, SUM(o.amount) FROM orders o JOIN customers c ON o.cust_id = c.id GROUP BY c.name'
         \\  cat events.csv | sql-pipe users.csv 'SELECT * FROM t JOIN users ON t.uid = users.id'
         \\  cat data.csv | sql-pipe --output-format json 'SELECT * FROM t'
@@ -276,6 +279,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var delimiter: []const u8 = ",";
     var header = false;
     var input_format: InputFormat = .csv;
+    var input_format_explicit = false;
     var output_format: OutputFormat = .csv;
 
     var max_rows: ?usize = null;
@@ -341,10 +345,13 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             i += 1;
             if (i >= args.len) return error.InvalidInputFormat;
             input_format = InputFormat.parse(args[i]) catch return error.InvalidInputFormat;
+            input_format_explicit = true;
         } else if (std.mem.startsWith(u8, arg, "--input-format=")) {
             input_format = InputFormat.parse(arg["--input-format=".len..]) catch return error.InvalidInputFormat;
+            input_format_explicit = true;
         } else if (std.mem.startsWith(u8, arg, "-I=")) {
             input_format = InputFormat.parse(arg["-I=".len..]) catch return error.InvalidInputFormat;
+            input_format_explicit = true;
         } else if (std.mem.eql(u8, arg, "-O") or std.mem.eql(u8, arg, "--output-format")) {
             i += 1;
             if (i >= args.len) return error.InvalidOutputFormat;
@@ -445,7 +452,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             // Special modes: every positional arg is a file input
             for (pos) |p| {
                 const name = try tableNameFromPath(allocator, p);
-                const fmt = InputFormat.fromExtension(p) orelse input_format;
+                const fmt = if (input_format_explicit) input_format else (InputFormat.fromExtension(p) orelse input_format);
                 try files.append(allocator, .{
                     .path = p,
                     .table_name = name,
@@ -457,7 +464,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             query = pos[pos.len - 1];
             for (pos[0 .. pos.len - 1]) |p| {
                 const name = try tableNameFromPath(allocator, p);
-                const fmt = InputFormat.fromExtension(p) orelse input_format;
+                const fmt = if (input_format_explicit) input_format else (InputFormat.fromExtension(p) orelse input_format);
                 try files.append(allocator, .{
                     .path = p,
                     .table_name = name,

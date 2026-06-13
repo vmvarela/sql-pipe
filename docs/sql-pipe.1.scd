@@ -21,8 +21,9 @@ DESCRIPTION
 	Stdin and file arguments can be combined — stdin is always table *t*.
 
 	Input format for files is auto-detected from the file extension (*.csv*,
-	*.tsv*, *.json*, *.ndjson*, *.xml*). Files without a recognized extension
-	fall back to the *-I* flag value (default: CSV).
+	*.tsv*, *.json*, *.ndjson*, *.xml*). Unrecognized or missing extensions
+	default to CSV. Use *-I* to override auto-detection (e.g., when a
+	TSV file has a *.txt* extension).
 
 	This tool is useful for quick data transformations, filtering, grouping,
 	aggregations, and multi-file joins without manual SQL database setup.
@@ -51,6 +52,17 @@ OPTIONS
 
 	*--tsv*
 		Alias for *--delimiter '\\t'*. Parses tab-separated input.
+
+	*-I, --input-format* <fmt>
+		Set the input format explicitly: *csv* (default), *tsv*, *json*,
+		*ndjson*, or *xml*. When set, overrides file extension auto-detection
+		for all file arguments. Stdin always uses this value (no filename
+		to inspect). Useful when a file has an ambiguous extension (*.txt*,
+		*.dat*) or no extension at all.
+
+	*-O, --output-format* <fmt>
+		Set the output format: *csv* (default), *tsv*, *json*, *ndjson*,
+		or *xml*.
 
 	*--no-type-inference*
 		Treat all columns as TEXT. Skips automatic type detection and uses plain
@@ -161,6 +173,14 @@ EXAMPLES
 		$ sql-pipe orders.csv customers.csv ++
 		    'SELECT c.name, SUM(o.amount) FROM orders o ++
 		     JOIN customers c ON o.cust_id = c.id GROUP BY c.name'
+
+	Query a JSON file (format auto-detected from extension):
+
+		$ sql-pipe data.json 'SELECT * FROM data WHERE score > 80'
+
+	Override auto-detection when the extension is wrong:
+
+		$ sql-pipe -I tsv data.txt 'SELECT * FROM data'
 
 	Mix stdin (as table t) with a file argument:
 

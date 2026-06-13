@@ -1782,6 +1782,100 @@ pub fn build(b: *std.Build) void {
     test_table_output_file.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_table_output_file.step);
 
+    // Integration test 157a: Auto-detect .json extension without -I flag
+    const test_autodetect_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/products.json 'SELECT name FROM products WHERE CAST(stock AS INTEGER) > 0 ORDER BY name')
+        \\expected=$(printf 'Doohickey\nGadget\nWidget')
+        \\[ "$result" = "$expected" ]
+    });
+    test_autodetect_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_autodetect_json.step);
+
+    // Integration test 157b: Auto-detect .ndjson extension without -I flag
+    const test_autodetect_ndjson = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/events.ndjson 'SELECT event, COUNT(*) FROM events GROUP BY event ORDER BY event')
+        \\expected=$(printf 'login,2\nlogout,1\npurchase,2')
+        \\[ "$result" = "$expected" ]
+    });
+    test_autodetect_ndjson.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_autodetect_ndjson.step);
+
+    // Integration test 157c: -I flag overrides file extension (JSON file forced to CSV)
+    const test_override_json_to_csv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=/tmp/sqlpipe_test_override.json
+        \\printf 'name,age\nAlice,30\nBob,25' > "$tmp"
+        \\result=$(./zig-out/bin/sql-pipe -I csv "$tmp" 'SELECT name FROM sqlpipe_test_override ORDER BY name')
+        \\rm -f "$tmp"
+        \\expected=$(printf 'Alice\nBob')
+        \\[ "$result" = "$expected" ]
+    });
+    test_override_json_to_csv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_override_json_to_csv.step);
+
+    // Integration test 157d: Ambiguous .txt extension defaults to CSV
+    const test_ambiguous_txt_csv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=/tmp/sqlpipe_test_ambiguous.txt
+        \\printf 'name,age\nAlice,30\nBob,25' > "$tmp"
+        \\result=$(./zig-out/bin/sql-pipe "$tmp" 'SELECT name FROM sqlpipe_test_ambiguous ORDER BY name')
+        \\rm -f "$tmp"
+        \\expected=$(printf 'Alice\nBob')
+        \\[ "$result" = "$expected" ]
+    });
+    test_ambiguous_txt_csv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_ambiguous_txt_csv.step);
+
+    // Integration test 157e: -I override with --input-format= syntax
+    const test_override_long_flag = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=/tmp/sqlpipe_test_long.json
+        \\printf 'name,age\nAlice,30\nBob,25' > "$tmp"
+        \\result=$(./zig-out/bin/sql-pipe --input-format=csv "$tmp" 'SELECT name FROM sqlpipe_test_long ORDER BY name')
+        \\rm -f "$tmp"
+        \\expected=$(printf 'Alice\nBob')
+        \\[ "$result" = "$expected" ]
+    });
+    test_override_long_flag.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_override_long_flag.step);
+
+    // Integration test 157f: -I override with -I= syntax
+    const test_override_short_eq = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=/tmp/sqlpipe_test_short.json
+        \\printf 'name,age\nAlice,30\nBob,25' > "$tmp"
+        \\result=$(./zig-out/bin/sql-pipe -I=csv "$tmp" 'SELECT name FROM sqlpipe_test_short ORDER BY name')
+        \\rm -f "$tmp"
+        \\expected=$(printf 'Alice\nBob')
+        \\[ "$result" = "$expected" ]
+    });
+    test_override_short_eq.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_override_short_eq.step);
+
+    // Integration test 157g: Ambiguous .txt extension with -I tsv override
+    const test_ambiguous_txt_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=/tmp/sqlpipe_test_tsv.txt
+        \\printf 'name\tage\nAlice\t30\nBob\t25' > "$tmp"
+        \\result=$(./zig-out/bin/sql-pipe -I tsv "$tmp" 'SELECT name FROM sqlpipe_test_tsv ORDER BY name')
+        \\rm -f "$tmp"
+        \\expected=$(printf 'Alice\nBob')
+        \\[ "$result" = "$expected" ]
+    });
+    test_ambiguous_txt_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_ambiguous_txt_tsv.step);
+
+    // Integration test 157h: Auto-detect .xml extension without -I flag
+    const test_autodetect_xml = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/feed.xml --xml-root channel --xml-row item 'SELECT COUNT(*) FROM feed')
+        \\[ "$result" = "3" ]
+    });
+    test_autodetect_xml.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_autodetect_xml.step);
+
     // ─── Fixture-based integration tests ─────────────────────────────────────
     // These tests use sample files committed in tests/fixtures/ to exercise
     // the binary end-to-end with realistic data across all supported formats.
@@ -1917,11 +2011,11 @@ pub fn build(b: *std.Build) void {
     });
     fixture_test_step.dependOn(&fixture_mixed_join.step);
 
-    // Fixture test 14: CSV file + NDJSON stdin mix
+    // Fixture test 14: CSV file + NDJSON file mix (auto-detected from extensions)
     const fixture_csv_ndjson_mix = b.addSystemCommand(&.{
         "bash", "-c",
-        \\result=$(cat tests/fixtures/events.ndjson | ./zig-out/bin/sql-pipe -I ndjson tests/fixtures/customers.csv \
-        \\    'SELECT c.name, e.event FROM t e JOIN customers c ON LOWER(e.user) = LOWER(c.name) ORDER BY c.name, e.event')
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/events.ndjson tests/fixtures/customers.csv \
+        \\    'SELECT c.name, e.event FROM events e JOIN customers c ON LOWER(e.user) = LOWER(c.name) ORDER BY c.name, e.event')
         \\expected=$(printf 'Alice,login\nAlice,logout\nAlice,purchase\nBob,purchase\nCarol,login')
         \\[ "$result" = "$expected" ]
     });
