@@ -336,6 +336,9 @@ pub fn main(init: std.process.Init.Minimal) void {
                 const contents = std.Io.Dir.cwd().readFileAlloc(io.io(), path, args_arena.allocator(), .limited(10 * 1024 * 1024)) catch |err| {
                     fatal("cannot read query file '{s}': {s}", stderr_writer, .usage, .{ path, @errorName(err) });
                 };
+                if (contents.len == 0) {
+                    fatal("query file '{s}' is empty", stderr_writer, .usage, .{path});
+                }
                 parsed.query = contents;
             }
             // Check for file-stdin table name collision (t is reserved for stdin)

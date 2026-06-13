@@ -1787,6 +1787,18 @@ pub fn build(b: *std.Build) void {
     test_f_flag_not_found.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_f_flag_not_found.step);
 
+    // Integration test 157g: Error case — empty query file
+    const test_f_flag_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf '' > "$dir/empty.sql"
+        \\msg=$(./zig-out/bin/sql-pipe -f "$dir/empty.sql" 2>&1 >/dev/null; echo "EXIT:$?")
+        \\rm -rf "$dir"
+        \\echo "$msg" | grep -q "query file.*is empty" && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_f_flag_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_f_flag_empty.step);
+
     // ─── Table output tests (--table / --no-table) ────────────────────────────
 
     // Integration test 156a: --table produces formatted table output
