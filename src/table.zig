@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const c = @import("c");
+const sqlite_mod = @import("sqlite.zig");
 
 /// Write a formatted table from SQLite query results to the given writer.
 ///
@@ -34,12 +35,7 @@ pub fn writeTable(
     // 1. Collect column names (duped for safety)
     const col_names = try a.alloc([]const u8, ncols);
     for (0..ncols) |i| {
-        const name_ptr = c.sqlite3_column_name(stmt, @intCast(i));
-        if (name_ptr != null) {
-            col_names[i] = try a.dupe(u8, std.mem.span(@as([*:0]const u8, @ptrCast(name_ptr))));
-        } else {
-            col_names[i] = "";
-        }
+        col_names[i] = try a.dupe(u8, sqlite_mod.columnName(stmt, @intCast(i)) orelse "");
     }
 
     // 2. Pass 1: Compute column widths and detect numeric columns
@@ -197,9 +193,7 @@ fn writeDataRow(
                 try writeSpaces(writer, w - null_text.len);
             }
         } else {
-            const ptr = c.sqlite3_column_text(stmt, idx);
-            if (ptr != null) {
-                const val = std.mem.span(@as([*:0]const u8, @ptrCast(ptr)));
+            if (sqlite_mod.columnText(stmt, idx)) |val| {
                 const vw = visualWidth(val);
                 const padding = w - vw;
                 if (numeric[i] and val.len > 0) {

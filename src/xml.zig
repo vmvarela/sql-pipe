@@ -70,8 +70,6 @@ fn decodeEntities(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     var i: usize = 0;
-    // Loop invariant: out contains the decoded prefix of s[0..i]
-    // Bounding function: s.len - i
     while (i < s.len) {
         if (s[i] == '&') {
             if (std.mem.startsWith(u8, s[i..], "&amp;")) {
@@ -161,8 +159,6 @@ pub fn writeXmlRow(
     try writer.writeByte('<');
     try writer.writeAll(row_name);
     try writer.writeByte('>');
-    // Loop invariant I: columns 0..i-1 have been written
-    // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         const name = std.mem.span(col_names[@intCast(i)]);
@@ -181,9 +177,8 @@ pub fn writeXmlRow(
                 }
             },
             else => {
-                const ptr = c.sqlite3_column_text(stmt, i);
-                if (ptr != null) {
-                    try writeXmlEscaped(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
+                if (sqlite_helpers.columnText(stmt, i)) |text| {
+                    try writeXmlEscaped(writer, text);
                 }
             },
         }
@@ -311,8 +306,6 @@ pub const XmlParser = struct {
     }
 
     fn skipWsAndMisc(self: *XmlParser, err_writer: *std.Io.Writer) void {
-        // Loop invariant: all whitespace and misc nodes before self.pos have been consumed
-        // Bounding function: self.data.len - self.pos
         while (true) {
             self.skipWs();
             if (self.startsWith("<!--")) self.skipComment(err_writer)
@@ -344,8 +337,6 @@ pub const XmlParser = struct {
 
     /// Skip attributes and close the tag.  Returns true when self-closing (`/>`).
     fn skipAttrsClose(self: *XmlParser, err_writer: *std.Io.Writer) bool {
-        // Loop invariant: all attribute tokens before self.pos consumed
-        // Bounding function: distance to '>' or '/>'
         while (true) {
             if (self.peek() == null) self.fatalAt("unexpected end of input in tag", err_writer, .{});
             const ch = self.peek().?;
@@ -398,8 +389,6 @@ pub const XmlParser = struct {
         var tag_stack: std.ArrayList([]const u8) = .empty;
         defer tag_stack.deinit(allocator);
 
-        // Loop invariant: depth = number of unclosed nested elements
-        // Bounding function: self.data.len - self.pos (finite input)
         while (self.pos < self.data.len) {
             if (self.peek().? != '<') {
                 self.advance();
@@ -467,8 +456,6 @@ pub const XmlParser = struct {
     fn skipElementBody(self: *XmlParser, tag: []const u8, err_writer: *std.Io.Writer) void {
         // depth counts unclosed nested elements inside the one we are skipping
         var depth: usize = 0;
-        // Loop invariant: depth = number of open nested elements not yet closed
-        // Bounding function: self.data.len - self.pos (finite input)
         while (true) {
             const ch = self.peek() orelse break;
             if (ch != '<') {
@@ -561,8 +548,6 @@ pub const XmlParser = struct {
             self.fatalAt("element '{s}' not found (actual root '{s}' is self-closing)", err_writer, .{ xml_root, actual_root });
 
         // Search direct children of the actual root for xml_root
-        // Loop invariant: all direct children before current position have been examined
-        // Bounding function: distance to end of actual root element (finite)
         while (true) {
             self.skipWsAndMisc(err_writer);
             if (self.peek() == null)
@@ -603,8 +588,6 @@ pub const XmlParser = struct {
         row_tag_filter: ?[]const u8,
         err_writer: *std.Io.Writer,
     ) !?[]Column {
-        // Loop invariant: rows before current position have been processed or skipped
-        // Bounding function: distance to root closing tag (finite)
         while (true) {
             self.skipWsAndMisc(err_writer);
             if (self.peek() == null)
@@ -644,8 +627,6 @@ pub const XmlParser = struct {
             }
 
             if (!row_self_close) {
-                // Loop invariant: cols contains all column elements of this row parsed so far
-                // Bounding function: distance to row closing tag
                 while (true) {
                     self.skipWsAndMisc(err_writer);
                     if (self.peek() == null)
@@ -686,6 +667,15 @@ pub const XmlParser = struct {
     }
 };
 
+/// Fatal with a message that the XML document has no row elements.
+/// When xml_row is non-null, the message includes the expected row tag name.
+fn fatalNoRows(xml_row: ?[]const u8, stderr_writer: *std.Io.Writer) noreturn {
+    if (xml_row) |row_tag|
+        fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
+    else
+        fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
+}
+
 // ─── Public input functions ───────────────────────────
 
 /// getXmlColumnNames(allocator, reader, xml_root, xml_row, stderr_writer) → [][]const u8
@@ -704,11 +694,7 @@ pub fn getXmlColumnNames(
     xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) [][]const u8 {
-    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-        error.OutOfMemory => fatal("out of memory reading XML", stderr_writer, .csv_error, .{}),
-        error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
-        error.StreamTooLong => unreachable, // .unlimited never triggers this
-    };
+    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "XML input");
     defer allocator.free(buf);
     if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
@@ -721,12 +707,7 @@ pub fn getXmlColumnNames(
 
     const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
         fatal("out of memory parsing XML", stderr_writer, .csv_error, .{});
-    if (cols == null) {
-        if (xml_row) |row_tag|
-            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
-        else
-            fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
-    }
+    if (cols == null) fatalNoRows(xml_row, stderr_writer);
     defer {
         for (cols.?) |col| if (col.value) |v| allocator.free(v);
         allocator.free(cols.?);
@@ -765,11 +746,7 @@ pub fn summarizeXml(
     xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) XmlSummary {
-    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-        error.OutOfMemory => fatal("out of memory reading XML", stderr_writer, .csv_error, .{}),
-        error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
-        error.StreamTooLong => unreachable, // .unlimited never triggers this
-    };
+    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "XML input");
     defer allocator.free(buf);
     if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
@@ -783,8 +760,6 @@ pub fn summarizeXml(
     var row_count: usize = 0;
     var col_names: ?[][]const u8 = null;
 
-    // Loop invariant: row_count = rows processed so far; col_names set after first row
-    // Bounding function: rows remaining in the XML document (finite)
     while (true) {
         const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
             fatal("out of memory parsing XML", stderr_writer, .csv_error, .{});
@@ -806,12 +781,7 @@ pub fn summarizeXml(
         }
     }
 
-    if (col_names == null) {
-        if (xml_row) |row_tag|
-            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
-        else
-            fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
-    }
+    if (col_names == null) fatalNoRows(xml_row, stderr_writer);
     return .{ .row_count = row_count, .col_names = col_names.? };
 }
 
@@ -837,11 +807,7 @@ pub fn loadXmlInput(
     max_rows: ?usize,
     stderr_writer: *std.Io.Writer,
 ) usize {
-    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-        error.OutOfMemory => fatal("out of memory reading XML input", stderr_writer, .csv_error, .{}),
-        error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
-        error.StreamTooLong => unreachable, // .unlimited never triggers this
-    };
+    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "XML input");
     defer allocator.free(buf);
     if (buf.len == 0) return 0; // Empty input - return 0 rows gracefully
 
@@ -867,10 +833,6 @@ pub fn loadXmlInput(
     var rows_inserted: usize = 0;
     var in_transaction = false;
 
-    // Loop invariant: rows_inserted = rows inserted so far;
-    //   col_names and insert_stmt are set after the first row is processed;
-    //   in_transaction = true after the first insert
-    // Bounding function: row elements remaining in the document (finite)
     while (true) {
         const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
             fatal("out of memory parsing XML", stderr_writer, .csv_error, .{});
@@ -882,10 +844,7 @@ pub fn loadXmlInput(
         }
 
         rows_inserted += 1;
-        if (max_rows) |limit| {
-            if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
-        }
+        sqlite_helpers.checkMaxRows(rows_inserted, max_rows, stderr_writer);
 
         if (col_names == null) {
             // First row: extract schema, create table, begin transaction
@@ -910,8 +869,6 @@ pub fn loadXmlInput(
         _ = c.sqlite3_reset(stmt);
         _ = c.sqlite3_clear_bindings(stmt);
 
-        // Loop invariant: params 1..j bound for col_names[0..j-1]
-        // Bounding function: col_names.?.len - j
         for (col_names.?, 0..) |col_name, j| {
             const param_idx: c_int = @intCast(j + 1);
             // Find this column's value in the current row (linear search; n is small)
@@ -934,12 +891,7 @@ pub fn loadXmlInput(
             fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
 
-    if (col_names == null) {
-        if (xml_row) |row_tag|
-            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
-        else
-            fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
-    }
+    if (col_names == null) fatalNoRows(xml_row, stderr_writer);
     if (in_transaction) commitTransaction(db, stderr_writer);
     return rows_inserted;
 }

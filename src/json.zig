@@ -47,8 +47,6 @@ pub fn readLine(
     var line: std.ArrayList(u8) = .empty;
     errdefer line.deinit(allocator);
     var got_any = false;
-    // Loop invariant I: line contains bytes of the current line read so far (excl. terminator)
-    // Bounding function: bytes remaining in stream (stream is finite for well-formed input)
     while (true) {
         const byte = reader.takeByte() catch |err| switch (err) {
             error.EndOfStream => {
@@ -148,8 +146,6 @@ pub fn insertRowFromJson(
         deferred_allocs.deinit(allocator);
     }
 
-    // Loop invariant I: params 1..col_idx-1 are bound for cols[0..col_idx-2]
-    // Bounding function: cols.len - j
     for (cols, 0..) |col, j| {
         const col_idx: c_int = @intCast(j + 1);
         if (obj.get(col)) |val| {
@@ -174,8 +170,6 @@ pub fn navigateJsonPath(
 ) std.json.Value {
     var current = value;
     var remaining = path;
-    // Loop invariant: current is the value at the path prefix consumed so far
-    // Bounding function: remaining.len (strictly decreasing per segment consumed)
     while (remaining.len > 0) {
         const dot = std.mem.indexOfScalar(u8, remaining, '.') orelse remaining.len;
         const key = remaining[0..dot];
@@ -190,6 +184,40 @@ pub fn navigateJsonPath(
             fatal("--json-path '{s}': key '{s}' not found in JSON document", stderr_writer, .csv_error, .{ path, key });
     }
     return current;
+}
+
+/// Result of firstJsonObject, providing both the resolved array and its first object.
+pub const FirstJsonResult = struct {
+    array: std.json.Array,
+    first_obj: ?std.json.ObjectMap,
+};
+
+/// Navigate a parsed JSON value to the target array and return the array and its first object.
+/// Returns `first_obj = null` for empty arrays. Fatals if the path doesn't resolve to an array of objects.
+pub fn firstJsonObject(
+    parsed_value: std.json.Value,
+    json_path: ?[]const u8,
+    stderr_writer: *std.Io.Writer,
+) FirstJsonResult {
+    const target: std.json.Value = if (json_path) |path|
+        navigateJsonPath(parsed_value, path, stderr_writer)
+    else
+        parsed_value;
+
+    const array = switch (target) {
+        .array => |a| a,
+        else => if (json_path) |path|
+            fatal("--json-path '{s}': resolved to a non-array value; expected an array of objects", stderr_writer, .csv_error, .{path})
+        else
+            fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
+    };
+    if (array.items.len == 0) return .{ .array = array, .first_obj = null };
+
+    const first_obj = switch (array.items[0]) {
+        .object => |o| o,
+        else => fatal("JSON array elements must be objects", stderr_writer, .csv_error, .{}),
+    };
+    return .{ .array = array, .first_obj = first_obj };
 }
 
 // ─── Input loading ────────────────────────────────────
@@ -212,11 +240,7 @@ pub fn loadJsonArray(
     stderr_writer: *std.Io.Writer,
 ) usize {
     // Read all input into a buffer using block reads instead of byte-by-byte takeByte()
-    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-        error.OutOfMemory => fatal("out of memory reading JSON input", stderr_writer, .csv_error, .{}),
-        error.ReadFailed => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
-        error.StreamTooLong => unreachable, // .unlimited never triggers this
-    };
+    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "JSON input");
     defer allocator.free(buf);
 
     if (buf.len == 0) return 0; // Empty input - return 0 rows gracefully
@@ -225,26 +249,9 @@ pub fn loadJsonArray(
         fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
     defer parsed.deinit();
 
-    const target: std.json.Value = if (json_path) |path|
-        navigateJsonPath(parsed.value, path, stderr_writer)
-    else
-        parsed.value;
-
-    const array = switch (target) {
-        .array => |a| a,
-        else => if (json_path) |path|
-            fatal("--json-path '{s}': resolved to a non-array value; expected an array of objects", stderr_writer, .csv_error, .{path})
-        else
-            fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
-    };
-
-    if (array.items.len == 0) return 0; // Empty array - return 0 rows gracefully
-
-    // Extract column names from the first object's keys (insertion order)
-    const first_obj = switch (array.items[0]) {
-        .object => |o| o,
-        else => fatal("JSON array elements must be objects", stderr_writer, .csv_error, .{}),
-    };
+    const fj = firstJsonObject(parsed.value, json_path, stderr_writer);
+    const first_obj = fj.first_obj orelse return 0; // Empty array - return 0 rows gracefully
+    const array = fj.array;
 
     var cols: std.ArrayList([]const u8) = .empty;
     defer cols.deinit(allocator);
@@ -263,18 +270,13 @@ pub fn loadJsonArray(
     defer _ = c.sqlite3_finalize(stmt);
 
     var rows_inserted: usize = 0;
-    // Loop invariant I: array.items[0..rows_inserted] have been inserted into t
-    // Bounding function: array.items.len - rows_inserted
     for (array.items) |item| {
         const obj = switch (item) {
             .object => |o| o,
             else => fatal("JSON array element is not an object", stderr_writer, .csv_error, .{}),
         };
         rows_inserted += 1;
-        if (max_rows) |limit| {
-            if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
-        }
+        sqlite_helpers.checkMaxRows(rows_inserted, max_rows, stderr_writer);
         insertRowFromJson(allocator, stmt, cols.items, obj) catch
             fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
@@ -311,9 +313,6 @@ pub fn loadNdjsonInput(
     var rows_inserted: usize = 0;
     var in_transaction = false;
 
-    // Loop invariant I: all non-blank lines 1..line_num have been processed;
-    //   rows_inserted = number of objects inserted; in_transaction is true after first object
-    // Bounding function: lines remaining in reader (finite input)
     while (true) {
         line_num += 1;
         const line = readLine(allocator, reader) catch |err| switch (err) {
@@ -366,10 +365,7 @@ pub fn loadNdjsonInput(
         }
 
         rows_inserted += 1;
-        if (max_rows) |limit| {
-            if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
-        }
+        sqlite_helpers.checkMaxRows(rows_inserted, max_rows, stderr_writer);
 
         const cols_const: []const []const u8 = @ptrCast(cols_owned.?);
         insertRowFromJson(allocator, insert_stmt.?, cols_const, obj) catch
@@ -425,8 +421,6 @@ pub fn printJsonRow(
 ) !void {
     if (!is_first) try writer.writeByte(',');
     try writer.writeByte('{');
-    // Loop invariant I: columns 0..i-1 have been written, separated by commas
-    // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (i > 0) try writer.writeByte(',');
@@ -445,9 +439,8 @@ pub fn printJsonRow(
                 }
             },
             else => {
-                const ptr = c.sqlite3_column_text(stmt, i);
-                if (ptr != null) {
-                    try writeJsonString(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
+                if (sqlite_helpers.columnText(stmt, i)) |text| {
+                    try writeJsonString(writer, text);
                 } else {
                     try writer.writeAll("null");
                 }
@@ -469,8 +462,6 @@ pub fn printNdjsonRow(
     writer: *std.Io.Writer,
 ) !void {
     try writer.writeByte('{');
-    // Loop invariant I: columns 0..i-1 have been written, separated by commas
-    // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (i > 0) try writer.writeByte(',');
@@ -489,9 +480,8 @@ pub fn printNdjsonRow(
                 }
             },
             else => {
-                const ptr = c.sqlite3_column_text(stmt, i);
-                if (ptr != null) {
-                    try writeJsonString(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
+                if (sqlite_helpers.columnText(stmt, i)) |text| {
+                    try writeJsonString(writer, text);
                 } else {
                     try writer.writeAll("null");
                 }

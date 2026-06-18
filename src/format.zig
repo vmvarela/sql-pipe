@@ -3,7 +3,6 @@
 //! This module owns:
 //!   InputFormat   — supported input formats, with parse()
 //!   OutputFormat  — supported output formats, with parse()
-//!   LoadOpts      — common options forwarded to input-format loaders
 //!   WriteOpts     — options forwarded to OutputWriter
 //!   OutputWriter  — stateful writer that dispatches on OutputFormat
 //!   writeField    — RFC 4180 CSV field writer (used by OutputWriter and --sample mode)
@@ -11,6 +10,7 @@
 const std = @import("std");
 const c = @import("c");
 const json_mod = @import("json.zig");
+const sqlite_mod = @import("sqlite.zig");
 const xml_mod = @import("xml.zig");
 
 // ─── Input format ──────────────────────────────────────
@@ -54,22 +54,6 @@ pub const OutputFormat = enum {
     pub fn parse(s: []const u8) error{InvalidOutputFormat}!OutputFormat {
         return std.meta.stringToEnum(OutputFormat, s) orelse error.InvalidOutputFormat;
     }
-};
-
-// ─── Load options ───────────────────────────────────────
-
-/// Options forwarded to input-format loaders.
-pub const LoadOpts = struct {
-    /// Abort if more than this many data rows are read; null = unlimited.
-    max_rows: ?usize = null,
-    /// CSV/TSV field delimiter (1–8 bytes).
-    delimiter: []const u8 = ",",
-    /// Infer INTEGER/REAL column types from the first 100 rows (CSV/TSV only).
-    type_inference: bool = true,
-    /// Root element to navigate to for XML input; null = actual document root.
-    xml_root: ?[]const u8 = null,
-    /// Row tag filter for XML input; null = any direct child element.
-    xml_row: ?[]const u8 = null,
 };
 
 // ─── Write options ──────────────────────────────────────
@@ -239,17 +223,14 @@ fn csvPrintRow(
     writer: *std.Io.Writer,
     delimiter: []const u8,
 ) !void {
-    // Loop invariant I: columns 0..i-1 have been written, separated by delimiter
-    // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (i > 0) try writer.writeAll(delimiter);
         if (c.sqlite3_column_type(stmt, i) == c.SQLITE_NULL) {
             try writer.writeAll("NULL");
         } else {
-            const ptr = c.sqlite3_column_text(stmt, i);
-            if (ptr != null) {
-                try writeField(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))), delimiter);
+            if (sqlite_mod.columnText(stmt, i)) |text| {
+                try writeField(writer, text, delimiter);
             } else {
                 try writer.writeAll("NULL");
             }
@@ -265,14 +246,11 @@ fn csvPrintHeaderRow(
     writer: *std.Io.Writer,
     delimiter: []const u8,
 ) !void {
-    // Loop invariant I: columns 0..i-1 names have been written, separated by delimiter
-    // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (i > 0) try writer.writeAll(delimiter);
-        const name_ptr = c.sqlite3_column_name(stmt, i);
-        if (name_ptr != null) {
-            try writeField(writer, std.mem.span(@as([*:0]const u8, @ptrCast(name_ptr))), delimiter);
+        if (sqlite_mod.columnName(stmt, i)) |name| {
+            try writeField(writer, name, delimiter);
         }
     }
     try writer.writeByte('\n');
