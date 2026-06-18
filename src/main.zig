@@ -77,12 +77,36 @@ fn execQuery(
     defer out_writer.deinit(allocator);
 
     try out_writer.begin(allocator, stmt.?, col_count, writer);
-    // Loop invariant I: all SQLITE_ROW results returned so far have been written
-    // Bounding function: number of remaining rows in the result set (finite)
     while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
         try out_writer.writeRow(stmt.?, writer);
     }
     try out_writer.end(writer);
+}
+
+/// loadInput(allocator, io, db, table_name, input_format, reader, parsed, stderr_writer) → usize
+/// Pre:  reader points to open input (file or stdin)
+/// Post: dispatches to the correct loader based on format; returns number of rows loaded
+fn loadInput(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    db: *c.sqlite3,
+    table_name: []const u8,
+    input_format: InputFormat,
+    reader: *std.Io.Reader,
+    parsed: ParsedArgs,
+    stderr_writer: *std.Io.Writer,
+) usize {
+    return switch (input_format) {
+        .csv => loadCsvInput(allocator, io, db, table_name, reader, parsed, stderr_writer),
+        .tsv => blk: {
+            var tsv_parsed = parsed;
+            tsv_parsed.delimiter = "\t";
+            break :blk loadCsvInput(allocator, io, db, table_name, reader, tsv_parsed, stderr_writer);
+        },
+        .json => json.loadJsonArray(allocator, reader, db, table_name, parsed.max_rows, parsed.json_path, stderr_writer),
+        .ndjson => json.loadNdjsonInput(allocator, reader, db, table_name, parsed.max_rows, stderr_writer),
+        .xml => xml.loadXmlInput(allocator, reader, db, table_name, parsed.xml_root_input, parsed.xml_row_input, parsed.max_rows, stderr_writer),
+    };
 }
 
 /// run(allocator, io, parsed, stderr_writer, stdout_writer, use_table) → void
@@ -110,50 +134,12 @@ fn run(
 
     // Load each file argument into its named table
     for (parsed.files) |file_input| {
-        const rows = switch (file_input.format) {
-            .csv => blk: {
-                var file_buf: [4096]u8 = undefined;
-                const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_input.path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ file_input.path, @errorName(err) });
-                defer std.Io.File.close(file, io);
-                var file_reader = std.Io.File.reader(file, io, &file_buf);
-                break :blk loadCsvInput(allocator, io, db, file_input.table_name, &file_reader.interface, parsed, stderr_writer);
-            },
-            .tsv => blk: {
-                var file_buf: [4096]u8 = undefined;
-                const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_input.path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ file_input.path, @errorName(err) });
-                defer std.Io.File.close(file, io);
-                var file_reader = std.Io.File.reader(file, io, &file_buf);
-                var tsv_parsed = parsed;
-                tsv_parsed.delimiter = "\t";
-                break :blk loadCsvInput(allocator, io, db, file_input.table_name, &file_reader.interface, tsv_parsed, stderr_writer);
-            },
-            .json => blk: {
-                var file_buf: [4096]u8 = undefined;
-                const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_input.path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ file_input.path, @errorName(err) });
-                defer std.Io.File.close(file, io);
-                var file_reader = std.Io.File.reader(file, io, &file_buf);
-                break :blk json.loadJsonArray(allocator, &file_reader.interface, db, file_input.table_name, parsed.max_rows, parsed.json_path, stderr_writer);
-            },
-            .ndjson => blk: {
-                var file_buf: [4096]u8 = undefined;
-                const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_input.path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ file_input.path, @errorName(err) });
-                defer std.Io.File.close(file, io);
-                var file_reader = std.Io.File.reader(file, io, &file_buf);
-                break :blk json.loadNdjsonInput(allocator, &file_reader.interface, db, file_input.table_name, parsed.max_rows, stderr_writer);
-            },
-            .xml => blk: {
-                var file_buf: [4096]u8 = undefined;
-                const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_input.path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ file_input.path, @errorName(err) });
-                defer std.Io.File.close(file, io);
-                var file_reader = std.Io.File.reader(file, io, &file_buf);
-                break :blk xml.loadXmlInput(allocator, &file_reader.interface, db, file_input.table_name, parsed.xml_root_input, parsed.xml_row_input, parsed.max_rows, stderr_writer);
-            },
-        };
+        var file_buf: [4096]u8 = undefined;
+        const file = std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_input.path, .{}) catch |err|
+            fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ file_input.path, @errorName(err) });
+        defer std.Io.File.close(file, io);
+        var file_reader = std.Io.File.reader(file, io, &file_buf);
+        const rows = loadInput(allocator, io, db, file_input.table_name, file_input.format, &file_reader.interface, parsed, stderr_writer);
         if (rows == 0) {
             fatal("empty input file: '{s}'", stderr_writer, .csv_error, .{file_input.path});
         }
@@ -162,35 +148,9 @@ fn run(
 
     // Load stdin as `t` if piped
     if (parsed.has_stdin) {
-        const rows = switch (parsed.input_format) {
-            .csv => blk: {
-                var stdin_buf: [4096]u8 = undefined;
-                var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-                break :blk loadCsvInput(allocator, io, db, "t", &stdin_reader.interface, parsed, stderr_writer);
-            },
-            .tsv => blk: {
-                var stdin_buf: [4096]u8 = undefined;
-                var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-                var tsv_parsed = parsed;
-                tsv_parsed.delimiter = "\t";
-                break :blk loadCsvInput(allocator, io, db, "t", &stdin_reader.interface, tsv_parsed, stderr_writer);
-            },
-            .json => blk: {
-                var stdin_buf: [4096]u8 = undefined;
-                var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-                break :blk json.loadJsonArray(allocator, &stdin_reader.interface, db, "t", parsed.max_rows, parsed.json_path, stderr_writer);
-            },
-            .ndjson => blk: {
-                var stdin_buf: [4096]u8 = undefined;
-                var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-                break :blk json.loadNdjsonInput(allocator, &stdin_reader.interface, db, "t", parsed.max_rows, stderr_writer);
-            },
-            .xml => blk: {
-                var stdin_buf: [4096]u8 = undefined;
-                var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-                break :blk xml.loadXmlInput(allocator, &stdin_reader.interface, db, "t", parsed.xml_root_input, parsed.xml_row_input, parsed.max_rows, stderr_writer);
-            },
-        };
+        var stdin_buf: [4096]u8 = undefined;
+        var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+        const rows = loadInput(allocator, io, db, "t", parsed.input_format, &stdin_reader.interface, parsed, stderr_writer);
         total_rows += rows;
     }
 

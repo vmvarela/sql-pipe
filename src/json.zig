@@ -47,8 +47,6 @@ pub fn readLine(
     var line: std.ArrayList(u8) = .empty;
     errdefer line.deinit(allocator);
     var got_any = false;
-    // Loop invariant I: line contains bytes of the current line read so far (excl. terminator)
-    // Bounding function: bytes remaining in stream (stream is finite for well-formed input)
     while (true) {
         const byte = reader.takeByte() catch |err| switch (err) {
             error.EndOfStream => {
@@ -148,8 +146,6 @@ pub fn insertRowFromJson(
         deferred_allocs.deinit(allocator);
     }
 
-    // Loop invariant I: params 1..col_idx-1 are bound for cols[0..col_idx-2]
-    // Bounding function: cols.len - j
     for (cols, 0..) |col, j| {
         const col_idx: c_int = @intCast(j + 1);
         if (obj.get(col)) |val| {
@@ -174,8 +170,6 @@ pub fn navigateJsonPath(
 ) std.json.Value {
     var current = value;
     var remaining = path;
-    // Loop invariant: current is the value at the path prefix consumed so far
-    // Bounding function: remaining.len (strictly decreasing per segment consumed)
     while (remaining.len > 0) {
         const dot = std.mem.indexOfScalar(u8, remaining, '.') orelse remaining.len;
         const key = remaining[0..dot];
@@ -263,8 +257,6 @@ pub fn loadJsonArray(
     defer _ = c.sqlite3_finalize(stmt);
 
     var rows_inserted: usize = 0;
-    // Loop invariant I: array.items[0..rows_inserted] have been inserted into t
-    // Bounding function: array.items.len - rows_inserted
     for (array.items) |item| {
         const obj = switch (item) {
             .object => |o| o,
@@ -311,9 +303,6 @@ pub fn loadNdjsonInput(
     var rows_inserted: usize = 0;
     var in_transaction = false;
 
-    // Loop invariant I: all non-blank lines 1..line_num have been processed;
-    //   rows_inserted = number of objects inserted; in_transaction is true after first object
-    // Bounding function: lines remaining in reader (finite input)
     while (true) {
         line_num += 1;
         const line = readLine(allocator, reader) catch |err| switch (err) {
@@ -425,8 +414,6 @@ pub fn printJsonRow(
 ) !void {
     if (!is_first) try writer.writeByte(',');
     try writer.writeByte('{');
-    // Loop invariant I: columns 0..i-1 have been written, separated by commas
-    // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (i > 0) try writer.writeByte(',');
@@ -469,8 +456,6 @@ pub fn printNdjsonRow(
     writer: *std.Io.Writer,
 ) !void {
     try writer.writeByte('{');
-    // Loop invariant I: columns 0..i-1 have been written, separated by commas
-    // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (i > 0) try writer.writeByte(',');

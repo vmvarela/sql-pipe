@@ -99,14 +99,6 @@ pub const CsvReader = struct {
         var state: State = .field_start;
         var has_data = false;
 
-        // Loop invariant I:
-        //   `state` satisfies the representation invariant of the automaton.
-        //   `field` contains the decoded bytes of the field currently being parsed.
-        //   `fields` contains the completed, heap-allocated fields of this record.
-        //   All bytes read from `reader` so far have been processed exactly once.
-        // Bounding function:
-        //   Number of bytes remaining in `reader` (finite input; decreases by 1
-        //   each iteration except on the EOF branch which exits immediately).
         while (true) {
             const byte = self.reader.takeByte() catch |err| switch (err) {
                 error.EndOfStream => {

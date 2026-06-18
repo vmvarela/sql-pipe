@@ -70,8 +70,6 @@ pub fn runSample(
             }
 
             var csv_row_count: usize = 1;
-            // Loop invariant I: row_buffer contains all non-empty data rows read so far (up to buf_size)
-            // Bounding function: buf_size - row_buffer.items.len
             while (row_buffer.items.len < buf_size) {
                 const rec = csv_reader.nextRecord() catch |err| switch (err) {
                     error.UnterminatedQuotedField => fatal(
@@ -110,8 +108,6 @@ pub fn runSample(
             stderr_writer.print("# Schema ({d} columns):\n", .{cols.len}) catch |err| {
                 std.log.err("failed to write schema: {}", .{err});
             };
-            // Loop invariant I: cols[0..i] have been printed with aligned type annotation
-            // Bounding function: cols.len - i
             for (cols, types) |col, t| {
                 stderr_writer.writeAll("#   ") catch |err| {
                     std.log.err("failed to write schema: {}", .{err});
@@ -133,8 +129,6 @@ pub fn runSample(
             stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
 
             // ─── Print header row to stdout ────────────────────────────────────────
-            // Loop invariant I: cols[0..i] names have been written, separated by col_delim
-            // Bounding function: cols.len - i
             for (cols, 0..) |col, i| {
                 if (i > 0) stdout_writer.writeAll(col_delim) catch
                     fatal("failed to write header", stderr_writer, .csv_error, .{});
@@ -146,12 +140,8 @@ pub fn runSample(
 
             // ─── Print first n data rows to stdout ────────────────────────────────
             const rows_to_print = @min(args.n, row_buffer.items.len);
-            // Loop invariant I: row_buffer[0..r] have been printed as delimited rows
-            // Bounding function: rows_to_print - r
             for (row_buffer.items[0..rows_to_print]) |row| {
                 var col_idx: usize = 0;
-                // Loop invariant I: cols[0..col_idx] fields have been written for this row
-                // Bounding function: cols.len - col_idx
                 while (col_idx < cols.len) : (col_idx += 1) {
                     if (col_idx > 0) stdout_writer.writeAll(col_delim) catch
                         fatal("failed to write field separator", stderr_writer, .csv_error, .{});

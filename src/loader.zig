@@ -26,8 +26,6 @@ pub fn isInteger(val: []const u8) bool {
     var i: usize = 0;
     if (val[0] == '+' or val[0] == '-') i = 1;
     if (i >= val.len) return false; // sign only → not an integer
-    // Loop invariant I: val[0..i] is a valid integer prefix (sign + digits)
-    // Bounding function: val.len - i
     while (i < val.len) : (i += 1) {
         if (val[i] < '0' or val[i] > '9') return false;
     }
@@ -143,6 +141,25 @@ fn accumSlashOrder(current: SlashOrder, vote: SlashOrder) SlashOrder {
     };
 }
 
+/// Per-column inference state, packed into a single allocation instead of 11
+/// parallel arrays. All fields have sensible defaults via struct initialisation.
+const ColumnInference = struct {
+    // Numeric
+    can_be_integer: bool = true,
+    can_be_real: bool = true,
+    has_data: bool = false,
+    // Datetime
+    can_be_datetime: bool = true,
+    dt_has_iso: bool = false,
+    dt_has_slash: bool = false,
+    slash_order_dt: SlashOrder = .unknown,
+    // Date
+    can_be_date: bool = true,
+    d_has_nonslash: bool = false,
+    d_has_slash: bool = false,
+    slash_order_d: SlashOrder = .unknown,
+};
+
 /// inferTypes(buffer, num_cols, allocator) → []ColumnType
 /// Pre:  buffer is a slice of rows (each row is a slice of field strings)
 ///       num_cols > 0; allocator is valid
@@ -169,113 +186,69 @@ pub fn inferTypes(
     const types = try allocator.alloc(ColumnType, num_cols);
     errdefer allocator.free(types);
 
-    // Numeric tracking (existing)
-    const can_be_integer = try allocator.alloc(bool, num_cols);
-    defer allocator.free(can_be_integer);
-    const can_be_real = try allocator.alloc(bool, num_cols);
-    defer allocator.free(can_be_real);
-    const has_data = try allocator.alloc(bool, num_cols);
-    defer allocator.free(has_data);
+    // Single struct allocation — initialize each element to apply field defaults
+    const inferences = try allocator.alloc(ColumnInference, num_cols);
+    defer allocator.free(inferences);
+    for (inferences) |*inf| inf.* = .{};
 
-    // Datetime tracking
-    const can_be_datetime = try allocator.alloc(bool, num_cols);
-    defer allocator.free(can_be_datetime);
-    const dt_has_iso = try allocator.alloc(bool, num_cols); // 19-char ISO datetime values seen
-    defer allocator.free(dt_has_iso);
-    const dt_has_slash = try allocator.alloc(bool, num_cols); // 16-char slash datetime values seen
-    defer allocator.free(dt_has_slash);
-    const slash_order_dt = try allocator.alloc(SlashOrder, num_cols);
-    defer allocator.free(slash_order_dt);
-
-    // Date tracking
-    const can_be_date = try allocator.alloc(bool, num_cols);
-    defer allocator.free(can_be_date);
-    const d_has_nonslash = try allocator.alloc(bool, num_cols); // YYYY-MM-DD or DD-MM-YYYY seen
-    defer allocator.free(d_has_nonslash);
-    const d_has_slash = try allocator.alloc(bool, num_cols); // D1/D2/YYYY slash values seen
-    defer allocator.free(d_has_slash);
-    const slash_order_d = try allocator.alloc(SlashOrder, num_cols);
-    defer allocator.free(slash_order_d);
-
-    for (0..num_cols) |j| {
-        can_be_integer[j] = true;
-        can_be_real[j] = true;
-        has_data[j] = false;
-        can_be_datetime[j] = true;
-        dt_has_iso[j] = false;
-        dt_has_slash[j] = false;
-        slash_order_dt[j] = .unknown;
-        can_be_date[j] = true;
-        d_has_nonslash[j] = false;
-        d_has_slash[j] = false;
-        slash_order_d[j] = .unknown;
-    }
-
-    // Loop invariant I: for each j in 0..num_cols and each value seen so far,
-    //   can_be_datetime[j] = true  ⟺  all non-empty values pass isDateTime
-    //   can_be_date[j]     = true  ⟺  all non-empty values pass isDate and not isDateTime
-    //   can_be_integer[j]  = true  ⟺  all non-empty values are integers
-    //   can_be_real[j]     = true  ⟺  all non-empty values are numeric
-    //   has_data[j]        = true  ⟺  at least one non-empty value has been seen
-    // Bounding function: buffer.len - row_idx
     for (buffer) |row| {
         for (row, 0..) |val, j| {
             if (j >= num_cols) break;
             if (val.len == 0) continue;
-            has_data[j] = true;
+            inferences[j].has_data = true;
 
             // ── Datetime check (highest priority) ────────────────────────────
-            if (can_be_datetime[j]) {
+            if (inferences[j].can_be_datetime) {
                 if (!isDateTime(val)) {
-                    can_be_datetime[j] = false;
+                    inferences[j].can_be_datetime = false;
                 } else if (val.len == 16) {
                     // Slash datetime: accumulate D1/D2 order vote
-                    dt_has_slash[j] = true;
+                    inferences[j].dt_has_slash = true;
                     const d1: u8 = (val[0] - '0') * 10 + (val[1] - '0');
                     const d2: u8 = (val[3] - '0') * 10 + (val[4] - '0');
                     const vote: SlashOrder = if (d1 > 12) .eu else if (d2 > 12) .us else .unknown;
-                    slash_order_dt[j] = accumSlashOrder(slash_order_dt[j], vote);
+                    inferences[j].slash_order_dt = accumSlashOrder(inferences[j].slash_order_dt, vote);
                 } else {
-                    dt_has_iso[j] = true;
+                    inferences[j].dt_has_iso = true;
                 }
             }
 
             // ── Date check (isDate is length-10 only; no overlap with isDateTime) ──
-            if (can_be_date[j]) {
+            if (inferences[j].can_be_date) {
                 if (!isDate(val)) {
-                    can_be_date[j] = false;
+                    inferences[j].can_be_date = false;
                 } else if (val[2] == '/') {
                     // Slash date: accumulate D1/D2 order vote
-                    d_has_slash[j] = true;
+                    inferences[j].d_has_slash = true;
                     const d1: u8 = (val[0] - '0') * 10 + (val[1] - '0');
                     const d2: u8 = (val[3] - '0') * 10 + (val[4] - '0');
                     const vote: SlashOrder = if (d1 > 12) .eu else if (d2 > 12) .us else .unknown;
-                    slash_order_d[j] = accumSlashOrder(slash_order_d[j], vote);
+                    inferences[j].slash_order_d = accumSlashOrder(inferences[j].slash_order_d, vote);
                 } else {
-                    d_has_nonslash[j] = true; // YYYY-MM-DD or DD-MM-YYYY
+                    inferences[j].d_has_nonslash = true; // YYYY-MM-DD or DD-MM-YYYY
                 }
             }
 
             // ── Numeric check ────────────────────────────────────────────────
-            if (!can_be_real[j]) continue;
+            if (!inferences[j].can_be_real) continue;
             if (!isReal(val)) {
-                can_be_real[j] = false;
-                can_be_integer[j] = false;
+                inferences[j].can_be_real = false;
+                inferences[j].can_be_integer = false;
             } else if (!isInteger(val)) {
-                can_be_integer[j] = false;
+                inferences[j].can_be_integer = false;
             }
         }
     }
 
     // Determine final type per column (DATETIME > DATE > INTEGER > REAL > TEXT)
     for (0..num_cols) |j| {
-        if (!has_data[j]) {
+        if (!inferences[j].has_data) {
             types[j] = .TEXT;
-        } else if (can_be_datetime[j]) {
-            if (dt_has_iso[j] and dt_has_slash[j]) {
+        } else if (inferences[j].can_be_datetime) {
+            if (inferences[j].dt_has_iso and inferences[j].dt_has_slash) {
                 types[j] = .TEXT; // mixed ISO + slash datetime formats
-            } else if (dt_has_slash[j]) {
-                types[j] = switch (slash_order_dt[j]) {
+            } else if (inferences[j].dt_has_slash) {
+                types[j] = switch (inferences[j].slash_order_dt) {
                     .eu => .DATETIME_EU,
                     .us => .DATETIME_US,
                     else => .TEXT, // unknown (all ambiguous) or contradictory
@@ -283,11 +256,11 @@ pub fn inferTypes(
             } else {
                 types[j] = .DATETIME; // pure ISO datetime
             }
-        } else if (can_be_date[j]) {
-            if (d_has_nonslash[j] and d_has_slash[j]) {
+        } else if (inferences[j].can_be_date) {
+            if (inferences[j].d_has_nonslash and inferences[j].d_has_slash) {
                 types[j] = .TEXT; // mixed ISO/dash + slash date formats
-            } else if (d_has_slash[j]) {
-                types[j] = switch (slash_order_d[j]) {
+            } else if (inferences[j].d_has_slash) {
+                types[j] = switch (inferences[j].slash_order_d) {
                     .eu => .DATE_EU,
                     .us => .DATE_US,
                     else => .TEXT, // unknown (all ambiguous) or contradictory
@@ -295,9 +268,9 @@ pub fn inferTypes(
             } else {
                 types[j] = .DATE; // YYYY-MM-DD or DD-MM-YYYY (detected at bind time)
             }
-        } else if (can_be_integer[j]) {
+        } else if (inferences[j].can_be_integer) {
             types[j] = .INTEGER;
-        } else if (can_be_real[j]) {
+        } else if (inferences[j].can_be_real) {
             types[j] = .REAL;
         } else {
             types[j] = .TEXT;
@@ -344,10 +317,6 @@ pub fn parseHeader(
     var seen = std.StringHashMap(usize).init(allocator);
     defer seen.deinit();
 
-    // Loop invariant I: cols contains trimmed, non-empty (possibly suffixed) names for record[0..i]
-    //                   seen maps each base name to its occurrence count up to i
-    //                   all items in cols are heap-allocated (owned by allocator)
-    // Bounding function: record.len - i  (natural, decreasing, lower-bounded by 0)
     for (record) |field| {
         const base = std.mem.trim(u8, field, " \t\r");
         if (base.len == 0) return error.EmptyColumnName;
@@ -388,9 +357,6 @@ pub fn insertRowTyped(
 
     var col_idx: c_int = 1;
 
-    // Loop invariant I: row[0..col_idx-1] are bound to params 1..col_idx-1
-    //                   using the appropriate SQLite bind function for each column type.
-    // Bounding function: row.len + 1 - col_idx (decreasing toward 0)
     for (row) |val| {
         if (col_idx > param_count) break;
         const j: usize = @intCast(col_idx - 1);
@@ -444,7 +410,6 @@ pub fn insertRowTyped(
     }
 
     // Bind NULL for any trailing columns the row is short of
-    // Loop invariant: params 1..col_idx-1 are bound; col_idx..param_count become NULL
     while (col_idx <= param_count) : (col_idx += 1) {
         if (c.sqlite3_bind_null(stmt, col_idx) != c.SQLITE_OK)
             return error.BindFailed;
@@ -554,9 +519,6 @@ pub fn fmtThousands(buf: []u8, n: usize) []const u8 {
     const len = digits.len;
     const first_group = len % 3; // digits in the leading group (0 means groups of 3 from start)
     var out_len: usize = 0;
-    // Loop invariant I: buf[0..out_len] = formatted prefix of digits[0..i]
-    //                   commas inserted before every third digit counted from the right
-    // Bounding function: len - i
     for (digits, 0..) |ch, i| {
         if ((i > 0 and i == first_group) or
             (i > first_group and (i - first_group) % 3 == 0))
@@ -1036,7 +998,7 @@ test "inferTypes: detects DATETIME_US (slash datetime with d2 > 12)" {
 }
 
 test "inferTypes: mixed ISO date and slash date → TEXT (d_has_nonslash && d_has_slash)" {
-    // Exercises loader.zig line 287: d_has_nonslash[j] and d_has_slash[j] → TEXT
+    // Exercises loader.zig line 287: inferences[j].d_has_nonslash and inferences[j].d_has_slash → TEXT
     const allocator = std.testing.allocator;
     var f1: [1][]u8 = .{@constCast("2024-01-15")}; // ISO → d_has_nonslash
     var f2: [1][]u8 = .{@constCast("15/01/2024")}; // EU slash → d_has_slash

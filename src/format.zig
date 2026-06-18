@@ -239,8 +239,6 @@ fn csvPrintRow(
     writer: *std.Io.Writer,
     delimiter: []const u8,
 ) !void {
-    // Loop invariant I: columns 0..i-1 have been written, separated by delimiter
-    // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (i > 0) try writer.writeAll(delimiter);
@@ -265,8 +263,6 @@ fn csvPrintHeaderRow(
     writer: *std.Io.Writer,
     delimiter: []const u8,
 ) !void {
-    // Loop invariant I: columns 0..i-1 names have been written, separated by delimiter
-    // Bounding function: col_count - i
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (i > 0) try writer.writeAll(delimiter);

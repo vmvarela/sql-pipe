@@ -311,19 +311,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var positional_args: std.ArrayList([]const u8) = .empty;
     defer positional_args.deinit(allocator);
 
-    // Loop invariant I: all args[1..i] have been processed;
-    //   query holds the first non-flag argument seen, or null;
-    //   type_inference reflects the presence of --no-type-inference;
-    //   delimiter reflects -d/--delimiter/--tsv if present;
-    //   header reflects the presence of --header/-H;
-    //   output_format reflects the last --output-format/--json flag seen;
-    //   input_format reflects the last --input-format flag seen;
-    //   max_rows reflects the presence of --max-rows;
-    //   disk reflects the presence of --disk;
-    //   positional_args accumulates non-flag arguments for later
-    //     conversion into file inputs and the query string;
-    //   files is built from positional_args after the loop
-    // Bounding function: args.len - i
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
