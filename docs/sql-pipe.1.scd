@@ -64,7 +64,7 @@ OPTIONS
 
 	*-O, --output-format* <fmt>
 		Set the output format: *csv* (default), *tsv*, *json*, *ndjson*,
-		or *xml*.
+		*xml*, or *markdown* (alias: *md*).
 
 	*--no-type-inference*
 		Treat all columns as TEXT. Skips automatic type detection and uses plain
@@ -263,6 +263,18 @@ EXAMPLES
 
 		$ cat data.csv \
 		    | sql-pipe -O xml --xml-root feed --xml-row entry 'SELECT * FROM t'
+
+	Output results as a Markdown table:
+
+		$ printf 'name,age\nAlice,30\nBob,25\nCarol,35' \
+		    | sql-pipe -O markdown 'SELECT * FROM t'
+
+	Output:++
+	| name  | age |++
+	|-------|-----|++
+	| Alice |  30 |++
+	| Bob   |  25 |++
+	| Carol |  35 |
 
 	Preview schema and first 3 rows of a CSV file:
 

@@ -48,10 +48,12 @@ pub const OutputFormat = enum {
     json,
     ndjson,
     xml,
+    markdown,
 
     /// Parse a format name string.
     /// Returns error.InvalidOutputFormat when the value is unrecognised.
     pub fn parse(s: []const u8) error{InvalidOutputFormat}!OutputFormat {
+        if (std.mem.eql(u8, s, "md")) return .markdown;
         return std.meta.stringToEnum(OutputFormat, s) orelse error.InvalidOutputFormat;
     }
 };
@@ -142,6 +144,7 @@ pub const OutputWriter = struct {
                 if (self.opts.header and col_count > 0)
                     try csvPrintHeaderRow(stmt, col_count, writer, self.csvDelimiter());
             },
+            .markdown => unreachable, // handled before OutputWriter in execQuery
         }
 
         // Write format-specific preamble.
@@ -174,6 +177,7 @@ pub const OutputWriter = struct {
                 writer,
                 self.opts.xml_row,
             ),
+            .markdown => unreachable, // handled before OutputWriter in execQuery
         }
     }
 

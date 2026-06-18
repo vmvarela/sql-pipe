@@ -2028,6 +2028,62 @@ pub fn build(b: *std.Build) void {
     test_autodetect_xml.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_autodetect_xml.step);
 
+    // ─── Markdown output integration tests ──────────────────────────────────────
+
+    // Integration test 158a: Basic markdown output
+    const test_markdown_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe -O markdown 'SELECT * FROM t ORDER BY name')
+        \\echo "$result" | grep -Fq '| name' && echo "$result" | grep -Fq '| Alice' && echo "$result" | grep -q -e '---'
+    });
+    test_markdown_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_markdown_basic.step);
+
+    // Integration test 158b: -O md alias works
+    const test_markdown_alias = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe -O md 'SELECT * FROM t')
+        \\echo "$result" | grep -Fq '| name' && echo "$result" | grep -Fq '| Alice'
+    });
+    test_markdown_alias.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_markdown_alias.step);
+
+    // Integration test 158c: Numeric right-alignment (age column)
+    const test_markdown_numeric = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,100\nBob,5\n' | ./zig-out/bin/sql-pipe -O markdown 'SELECT * FROM t ORDER BY name')
+        \\echo "$result" | grep -Fq '100' && echo "$result" | grep -Fq '   5'
+    });
+    test_markdown_numeric.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_markdown_numeric.step);
+
+    // Integration test 158d: NULL renders as empty cell (not the string "NULL")
+    const test_markdown_null = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,\n' | ./zig-out/bin/sql-pipe -O markdown 'SELECT * FROM t ORDER BY name')
+        \\echo "$result" | grep -Fq 'Bob' && echo "$result" | grep -qv 'NULL'
+    });
+    test_markdown_null.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_markdown_null.step);
+
+    // Integration test 158e: Aggregation query produces valid markdown table
+    const test_markdown_aggregate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'region,amount\nEast,100\nWest,200\nEast,150\n' | ./zig-out/bin/sql-pipe -O markdown 'SELECT region, SUM(amount) as total FROM t GROUP BY region ORDER BY region')
+        \\echo "$result" | grep -Fq '| region' && echo "$result" | grep -Fq '| East' && echo "$result" | grep -Fq 'West' && echo "$result" | grep -q -e '---'
+    });
+    test_markdown_aggregate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_markdown_aggregate.step);
+
+    // Integration test 158f: Markdown with empty result set (headers + separator only)
+    const test_markdown_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe -O markdown 'SELECT * FROM t WHERE age > 100')
+        \\echo "$result" | grep -Fq '|' && echo "$result" | grep -q -e '---' && ! echo "$result" | grep -q 'Alice'
+    });
+    test_markdown_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_markdown_empty.step);
+
     // ─── Fixture-based integration tests ─────────────────────────────────────
     // These tests use sample files committed in tests/fixtures/ to exercise
     // the binary end-to-end with realistic data across all supported formats.
