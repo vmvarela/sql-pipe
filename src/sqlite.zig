@@ -81,6 +81,48 @@ pub fn fatal(comptime fmt: []const u8, writer: *std.Io.Writer, code: ExitCode, a
     std.process.exit(@intFromEnum(code));
 }
 
+/// Read all remaining input from a reader into an allocated buffer. Fatal on error.
+/// `context` is included in error messages (e.g. "JSON input", "XML input").
+pub fn readAllInput(reader: *std.Io.Reader, allocator: std.mem.Allocator, stderr_writer: *std.Io.Writer, context: []const u8) []u8 {
+    return reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+        error.OutOfMemory => fatal("out of memory reading {s}", stderr_writer, .csv_error, .{context}),
+        error.ReadFailed => fatal("failed to read {s}", stderr_writer, .csv_error, .{context}),
+        error.StreamTooLong => unreachable,
+    };
+}
+
+/// Fatal if rows_inserted exceeds the max_rows limit.
+pub fn checkMaxRows(rows_inserted: usize, max_rows: ?usize, stderr_writer: *std.Io.Writer) void {
+    if (max_rows) |limit| {
+        if (rows_inserted > limit)
+            fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
+    }
+}
+
+/// Execute a SQL statement via sqlite3_exec; fatal on error with the SQLite error message.
+fn execSql(db: *c.sqlite3, sql: [*c]const u8, writer: *std.Io.Writer) void {
+    var errmsg: [*c]u8 = null;
+    if (c.sqlite3_exec(db, sql, null, null, &errmsg) != c.SQLITE_OK) {
+        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
+        if (errmsg != null) c.sqlite3_free(errmsg);
+        fatal("{s}", writer, .sql_error, .{msg});
+    }
+}
+
+/// Get the name of a SQLite column as a Zig slice. Returns null if unavailable.
+pub fn columnName(stmt: *c.sqlite3_stmt, col: c_int) ?[]const u8 {
+    const ptr = c.sqlite3_column_name(stmt, col);
+    if (ptr == null) return null;
+    return std.mem.span(@as([*:0]const u8, @ptrCast(ptr)));
+}
+
+/// Get the text value of a SQLite column as a Zig slice. Returns null for SQL NULL.
+pub fn columnText(stmt: *c.sqlite3_stmt, col: c_int) ?[]const u8 {
+    const ptr = c.sqlite3_column_text(stmt, col);
+    if (ptr == null) return null;
+    return std.mem.span(@as([*:0]const u8, @ptrCast(ptr)));
+}
+
 /// Create a table with all-TEXT columns. Column names are double-quote–escaped
 /// per SQL identifier rules.
 pub fn createAllTextTable(
@@ -108,12 +150,7 @@ pub fn createAllTextTable(
     sql.appendSlice(allocator, ")") catch fatal("out of memory", writer, .csv_error, .{});
     sql.append(allocator, 0) catch fatal("out of memory", writer, .csv_error, .{});
 
-    var errmsg: [*c]u8 = null;
-    if (c.sqlite3_exec(db, sql.items.ptr, null, null, &errmsg) != c.SQLITE_OK) {
-        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-        if (errmsg != null) c.sqlite3_free(errmsg);
-        fatal("{s}", writer, .sql_error, .{msg});
-    }
+    execSql(db, sql.items.ptr, writer);
 }
 
 /// Prepare `INSERT INTO <table_name> VALUES (?, …, ?)` with n parameters.
@@ -144,21 +181,11 @@ pub fn prepareInsertStmt(
 }
 
 pub fn beginTransaction(db: *c.sqlite3, writer: *std.Io.Writer) void {
-    var errmsg: [*c]u8 = null;
-    if (c.sqlite3_exec(db, "BEGIN TRANSACTION", null, null, &errmsg) != c.SQLITE_OK) {
-        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-        if (errmsg != null) c.sqlite3_free(errmsg);
-        fatal("{s}", writer, .sql_error, .{msg});
-    }
+    execSql(db, "BEGIN TRANSACTION", writer);
 }
 
 pub fn commitTransaction(db: *c.sqlite3, writer: *std.Io.Writer) void {
-    var errmsg: [*c]u8 = null;
-    if (c.sqlite3_exec(db, "COMMIT", null, null, &errmsg) != c.SQLITE_OK) {
-        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-        if (errmsg != null) c.sqlite3_free(errmsg);
-        fatal("{s}", writer, .sql_error, .{msg});
-    }
+    execSql(db, "COMMIT", writer);
 }
 
 /// openDb(disk, writer) → *sqlite3
@@ -185,12 +212,7 @@ pub fn openDb(disk: bool, writer: *std.Io.Writer) *c.sqlite3 {
     }
 
     // Ensure transient structures (ORDER BY sorts, GROUP BY indices) also spill to disk.
-    var errmsg: [*c]u8 = null;
-    if (c.sqlite3_exec(db.?, "PRAGMA temp_store = FILE", null, null, &errmsg) != c.SQLITE_OK) {
-        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-        if (errmsg != null) c.sqlite3_free(errmsg);
-        fatal("failed to set PRAGMA temp_store = FILE: {s}", writer, .sql_error, .{msg});
-    }
+    execSql(db.?, "PRAGMA temp_store = FILE", writer);
 
     return db.?;
 }
@@ -242,12 +264,7 @@ pub fn createTable(
     sql.appendSlice(allocator, ")") catch fatal("out of memory", writer, .csv_error, .{});
     sql.append(allocator, 0) catch fatal("out of memory", writer, .csv_error, .{});
 
-    var errmsg: [*c]u8 = null;
-    if (c.sqlite3_exec(db, sql.items.ptr, null, null, &errmsg) != c.SQLITE_OK) {
-        const msg = if (errmsg != null) std.mem.span(errmsg) else std.mem.span(c.sqlite3_errmsg(db));
-        if (errmsg != null) c.sqlite3_free(errmsg);
-        fatal("{s}", writer, .sql_error, .{msg});
-    }
+    execSql(db, sql.items.ptr, writer);
 }
 
 /// Compute the Levenshtein edit distance between two strings.
@@ -291,9 +308,7 @@ pub fn getTableColumns(allocator: std.mem.Allocator, db: *c.sqlite3, table_name:
 
     while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
         // PRAGMA table_info columns: cid(0), name(1), type(2), notnull(3), dflt_value(4), pk(5)
-        const ptr = c.sqlite3_column_text(stmt, 1);
-        if (ptr == null) continue;
-        const name = std.mem.span(@as([*:0]const u8, @ptrCast(ptr)));
+        const name = columnText(stmt.?, 1) orelse continue;
         const owned = allocator.dupe(u8, name) catch fatal("out of memory", writer, .csv_error, .{});
         cols.append(allocator, owned) catch fatal("out of memory", writer, .csv_error, .{});
     }

@@ -177,9 +177,8 @@ pub fn writeXmlRow(
                 }
             },
             else => {
-                const ptr = c.sqlite3_column_text(stmt, i);
-                if (ptr != null) {
-                    try writeXmlEscaped(writer, std.mem.span(@as([*:0]const u8, @ptrCast(ptr))));
+                if (sqlite_helpers.columnText(stmt, i)) |text| {
+                    try writeXmlEscaped(writer, text);
                 }
             },
         }
@@ -668,6 +667,15 @@ pub const XmlParser = struct {
     }
 };
 
+/// Fatal with a message that the XML document has no row elements.
+/// When xml_row is non-null, the message includes the expected row tag name.
+fn fatalNoRows(xml_row: ?[]const u8, stderr_writer: *std.Io.Writer) noreturn {
+    if (xml_row) |row_tag|
+        fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
+    else
+        fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
+}
+
 // ─── Public input functions ───────────────────────────
 
 /// getXmlColumnNames(allocator, reader, xml_root, xml_row, stderr_writer) → [][]const u8
@@ -686,11 +694,7 @@ pub fn getXmlColumnNames(
     xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) [][]const u8 {
-    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-        error.OutOfMemory => fatal("out of memory reading XML", stderr_writer, .csv_error, .{}),
-        error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
-        error.StreamTooLong => unreachable, // .unlimited never triggers this
-    };
+    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "XML input");
     defer allocator.free(buf);
     if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
@@ -703,12 +707,7 @@ pub fn getXmlColumnNames(
 
     const cols = p.nextRow(allocator, root_name, xml_row, stderr_writer) catch
         fatal("out of memory parsing XML", stderr_writer, .csv_error, .{});
-    if (cols == null) {
-        if (xml_row) |row_tag|
-            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
-        else
-            fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
-    }
+    if (cols == null) fatalNoRows(xml_row, stderr_writer);
     defer {
         for (cols.?) |col| if (col.value) |v| allocator.free(v);
         allocator.free(cols.?);
@@ -747,11 +746,7 @@ pub fn summarizeXml(
     xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) XmlSummary {
-    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-        error.OutOfMemory => fatal("out of memory reading XML", stderr_writer, .csv_error, .{}),
-        error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
-        error.StreamTooLong => unreachable, // .unlimited never triggers this
-    };
+    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "XML input");
     defer allocator.free(buf);
     if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
@@ -786,12 +781,7 @@ pub fn summarizeXml(
         }
     }
 
-    if (col_names == null) {
-        if (xml_row) |row_tag|
-            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
-        else
-            fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
-    }
+    if (col_names == null) fatalNoRows(xml_row, stderr_writer);
     return .{ .row_count = row_count, .col_names = col_names.? };
 }
 
@@ -817,11 +807,7 @@ pub fn loadXmlInput(
     max_rows: ?usize,
     stderr_writer: *std.Io.Writer,
 ) usize {
-    const buf = reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-        error.OutOfMemory => fatal("out of memory reading XML input", stderr_writer, .csv_error, .{}),
-        error.ReadFailed => fatal("failed to read XML input", stderr_writer, .csv_error, .{}),
-        error.StreamTooLong => unreachable, // .unlimited never triggers this
-    };
+    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "XML input");
     defer allocator.free(buf);
     if (buf.len == 0) return 0; // Empty input - return 0 rows gracefully
 
@@ -858,10 +844,7 @@ pub fn loadXmlInput(
         }
 
         rows_inserted += 1;
-        if (max_rows) |limit| {
-            if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
-        }
+        sqlite_helpers.checkMaxRows(rows_inserted, max_rows, stderr_writer);
 
         if (col_names == null) {
             // First row: extract schema, create table, begin transaction
@@ -908,12 +891,7 @@ pub fn loadXmlInput(
             fatal("{s}", stderr_writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
     }
 
-    if (col_names == null) {
-        if (xml_row) |row_tag|
-            fatal("XML document has no '{s}' elements (check --xml-row value)", stderr_writer, .csv_error, .{row_tag})
-        else
-            fatal("XML document has no row elements", stderr_writer, .csv_error, .{});
-    }
+    if (col_names == null) fatalNoRows(xml_row, stderr_writer);
     if (in_transaction) commitTransaction(db, stderr_writer);
     return rows_inserted;
 }

@@ -11,6 +11,7 @@ const inference_buffer_size = loader.inference_buffer_size;
 
 const ExitCode = args_mod.ExitCode;
 const fatal = @import("../sqlite.zig").fatal;
+const readAllInput = @import("../sqlite.zig").readAllInput;
 
 pub fn runColumns(
     allocator: std.mem.Allocator,
@@ -105,10 +106,7 @@ pub fn runColumns(
             defer if (input_source == .file) std.Io.File.close(source_file, io);
             var source_reader = std.Io.File.reader(source_file, io, &read_buf);
 
-            const input = source_reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-                error.OutOfMemory => fatal("out of memory reading JSON input", stderr_writer, .csv_error, .{}),
-                error.ReadFailed, error.StreamTooLong => fatal("failed to read JSON input", stderr_writer, .csv_error, .{}),
-            };
+            const input = readAllInput(&source_reader.interface, allocator, stderr_writer, "JSON input");
             defer allocator.free(input);
             if (input.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
@@ -116,24 +114,8 @@ pub fn runColumns(
                 fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
             defer parsed.deinit();
 
-            const target: std.json.Value = if (args.json_path) |path|
-                json_mod.navigateJsonPath(parsed.value, path, stderr_writer)
-            else
-                parsed.value;
-
-            const array = switch (target) {
-                .array => |a| a,
-                else => if (args.json_path) |path|
-                    fatal("--json-path '{s}': resolved to a non-array value; expected an array of objects", stderr_writer, .csv_error, .{path})
-                else
-                    fatal("JSON input must be an array of objects", stderr_writer, .csv_error, .{}),
-            };
-            if (array.items.len == 0) fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});
-
-            const first_obj = switch (array.items[0]) {
-                .object => |o| o,
-                else => fatal("JSON array elements must be objects", stderr_writer, .csv_error, .{}),
-            };
+            const first_obj = json_mod.firstJsonObject(parsed.value, args.json_path, stderr_writer).first_obj orelse
+                fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});
 
             var ki = first_obj.iterator();
             while (ki.next()) |entry| {

@@ -651,10 +651,7 @@ pub fn loadCsvInput(
     // Insert buffered rows
     for (row_buffer.items) |row| {
         rows_inserted += 1;
-        if (parsed.max_rows) |limit| {
-            if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
-        }
+        sqlite_mod.checkMaxRows(rows_inserted, parsed.max_rows, stderr_writer);
         insertRowTyped(stmt, row, types, @intCast(num_cols)) catch
             fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
         if (is_tty and rows_inserted % progress_interval == 0)
@@ -683,10 +680,7 @@ pub fn loadCsvInput(
         if (record.len == 0) continue;
 
         rows_inserted += 1;
-        if (parsed.max_rows) |limit| {
-            if (rows_inserted > limit)
-                fatal("input exceeds --max-rows limit ({d} rows)", stderr_writer, .usage, .{limit});
-        }
+        sqlite_mod.checkMaxRows(rows_inserted, parsed.max_rows, stderr_writer);
         insertRowTyped(stmt, record, types, @intCast(num_cols)) catch
             fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
         if (is_tty and rows_inserted % progress_interval == 0)
