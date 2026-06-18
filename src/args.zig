@@ -199,7 +199,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --tsv                        Alias for --delimiter '\t'
         \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml
         \\                               Overrides file extension auto-detection; stdin always uses this value
-        \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml
+        \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml, markdown (alias: md)
         \\  --json                       Alias for --output-format json
         \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
         \\  -H, --header                 Print column names as the first output row (CSV/TSV output only)

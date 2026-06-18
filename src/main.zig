@@ -4,6 +4,7 @@ const json = @import("json.zig");
 const xml = @import("xml.zig");
 const format = @import("format.zig");
 const table = @import("table.zig");
+const markdown = @import("markdown.zig");
 const build_options = @import("build_options");
 const args_mod = @import("args.zig");
 const sqlite_mod = @import("sqlite.zig");
@@ -66,6 +67,12 @@ fn execQuery(
     // Table mode: buffer all rows and print a formatted table
     if (use_table) {
         try table.writeTable(allocator, writer, stmt.?, col_count);
+        return;
+    }
+
+    // Markdown output: two-pass writer (not streaming)
+    if (output_format == .markdown) {
+        try markdown.writeMarkdown(allocator, writer, stmt.?, col_count);
         return;
     }
 
@@ -214,7 +221,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),
             error.InvalidMaxRows => fatal("--max-rows must be a positive integer", stderr_writer, .usage, .{}),
             error.InvalidInputFormat => fatal("unknown input format; supported: csv, tsv, json, ndjson, xml", stderr_writer, .usage, .{}),
-            error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml", stderr_writer, .usage, .{}),
+            error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml, markdown (md)", stderr_writer, .usage, .{}),
             error.ColumnsWithQuery => fatal("--columns cannot be combined with a query argument", stderr_writer, .usage, .{}),
             error.ValidateWithQuery => fatal("--validate cannot be combined with a query argument", stderr_writer, .usage, .{}),
             error.InvalidOutputPath => fatal("--output requires a non-empty file path", stderr_writer, .usage, .{}),
