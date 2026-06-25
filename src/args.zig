@@ -68,6 +68,7 @@ pub const SqlPipeError = error{
     SampleWithValidate,
     SampleWithOutput,
     InvalidSampleCount,
+    StatsWithFlags,
     DuplicateTableName,
     TableWithNonCsv,
     InvalidQueryFile,
@@ -166,6 +167,17 @@ pub const SampleArgs = struct {
     type_inference: bool,
 };
 
+pub const StatsArgs = struct {
+    /// Input files as positional arguments; empty when reading from stdin only.
+    files: []const FileInput = &.{},
+    /// CSV field delimiter — 1 to 8 bytes (default: ",").
+    delimiter: []const u8,
+    /// Input format (default: csv).
+    input_format: InputFormat,
+    /// Infer column types from buffered rows when true; show all TEXT when false.
+    type_inference: bool,
+};
+
 pub const ArgsResult = union(enum) {
     /// Normal execution: run the query.
     parsed: ParsedArgs,
@@ -179,6 +191,8 @@ pub const ArgsResult = union(enum) {
     validate: ValidateArgs,
     /// User requested --sample: print schema + first n rows and exit.
     sample: SampleArgs,
+    /// User requested --stats: compute per-column statistics.
+    stats: StatsArgs,
 };
 
 pub fn printUsage(writer: *std.Io.Writer) !void {
@@ -219,6 +233,8 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\                               Schema lists column names and inferred types, prefixed with #
         \\                               Implies --header. Compatible with --delimiter and --tsv.
         \\                               Incompatible with --json and with a query argument.
+        \\  --stats                      Compute per-column statistics (type, non-null, min, max, mean)
+        \\  --profile                    Alias for --stats
         \\  --output <file>              Write results to file instead of stdout
         \\  --xml-root <name>            Root element name for XML I/O (default: results)
         \\  --xml-row <name>             Row element name for XML I/O (default: row)
@@ -305,6 +321,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var json_path: ?[]const u8 = null;
     var sample_mode = false;
     var sample_n: usize = 10;
+    var stats_mode = false;
     var disk = false;
     var table_mode: TableMode = .auto;
     var seen_dashdash = false;
@@ -394,6 +411,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             if (n == 0) return error.InvalidSampleCount;
             sample_n = n;
             sample_mode = true;
+        } else if (std.mem.eql(u8, arg, "--stats") or std.mem.eql(u8, arg, "--profile")) {
+            stats_mode = true;
         } else if (std.mem.eql(u8, arg, "--output")) {
             i += 1;
             if (i >= args.len) return error.InvalidOutputPath;
@@ -456,7 +475,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
 
     // ─── Convert positional args to files + query ──────────────────────────
     const pos = positional_args.items;
-    const is_special_mode = list_columns or validate or sample_mode;
+    const is_special_mode = list_columns or validate or sample_mode or stats_mode;
 
     // Build file list from positional args
     var files: std.ArrayList(FileInput) = .empty;
@@ -549,6 +568,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (sample_mode and validate)
         return error.SampleWithValidate;
 
+    // --stats is mutually exclusive with --columns, --validate, --sample, query, and --output
+    if (stats_mode and (list_columns or validate or sample_mode or query != null or query_file != null or output != null))
+        return error.StatsWithFlags;
+
     // --silent and --verbose are mutually exclusive
     if (silent and verbose)
         return error.SilentVerboseConflict;
@@ -598,6 +621,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             .delimiter = delimiter,
             .input_format = effective_input_format,
             .n = sample_n,
+            .type_inference = type_inference,
+        } };
+
+    // --stats mode: compute per-column statistics and exit
+    if (stats_mode)
+        return .{ .stats = StatsArgs{
+            .files = files.items,
+            .delimiter = delimiter,
+            .input_format = effective_input_format,
             .type_inference = type_inference,
         } };
 

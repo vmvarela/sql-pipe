@@ -10,6 +10,7 @@ SYNOPSIS
 	*sql-pipe* -f <file> [OPTIONS]
 	*sql-pipe* --columns [OPTIONS] [<file>]
 	*sql-pipe* --sample [<n>] [OPTIONS] [<file>]
+	*sql-pipe* --stats [OPTIONS] [<file>]
 
 DESCRIPTION
 	sql-pipe reads CSV, JSON, NDJSON, or XML data from standard input and/or
@@ -139,6 +140,15 @@ OPTIONS
 		Compatible with *--delimiter* and *--tsv*. Mutually exclusive with
 		*--json*, *--columns*, *--validate*, and a query argument. CSV and TSV
 		input only.
+
+	*--stats*
+		Load input and print per-column statistics (column name, type,
+		non-null count, min, max, mean) as a formatted table. Mean is blank
+		for non-numeric columns. Compatible with *--delimiter*, *--tsv*,
+		*--no-type-inference*, and *-I* / *--input-format* (csv, tsv, json,
+		ndjson, xml). Mutually exclusive with a query argument, *--columns*,
+		*--validate*, *--sample*, and *--output*.
+		Alias: *--profile*.
 
 	*--output* <file>
 		Write results to <file> instead of standard output. Creates or

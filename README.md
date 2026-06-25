@@ -316,6 +316,8 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `--validate` | Parse the entire input and print a summary (`OK: <n> rows, <m> columns (col TYPE, ...)`) to stdout. Exit 0 on success, exit 2 on parse error. No query required. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format` (csv, tsv, json, ndjson, xml). JSON/NDJSON/XML columns are reported as TEXT. |
 | `--columns` | Read the input header, print each column name on its own line, and exit 0. Supports CSV, TSV, JSON, NDJSON, and XML input. With `-v`/`--verbose`, also shows the inferred type per column (`name INTEGER`). Respects `--delimiter` and `--tsv`. Mutually exclusive with a query argument. |
 | `--sample [<n>]` | Print a schema comment block to stderr and the first `<n>` data rows to stdout as CSV (default: `n=10`). The schema block lists each column name and its inferred type, prefixed with `#`. Implies `--header`. Compatible with `--delimiter` and `--tsv`. Mutually exclusive with `--json` and a query argument. No query required. |
+| `--stats` | Load input and print per-column statistics (column name, type, non-null count, min, max, mean) as a formatted table. Mean is blank for non-numeric columns. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, and `--output`. |
+| `--profile` | Alias for `--stats` |
 | `--xml-root <name>` | Root element name for XML I/O (default: `results`) |
 | `--xml-row <name>` | Row element name for XML I/O (default: `row`) |
 | `--output <file>` | Write results to the given file instead of stdout. Creates or overwrites the file. Exits 1 if the file cannot be created. |
@@ -420,6 +422,20 @@ $ cat products.csv | sql-pipe 'SELECT name, price, ROUND(price * 0.9, 2) as disc
 ```sh
 $ cat orders.csv | sql-pipe 'SELECT region, SUM(CASE WHEN status="paid" THEN amount ELSE 0 END) as paid, SUM(CASE WHEN status="refunded" THEN amount ELSE 0 END) as refunded FROM t GROUP BY region'
 ```
+
+**Quick data profiling with --stats:**
+
+```sh
+$ printf 'name,age\nAlice,30\nBob,25\nCarol,35\n' | sql-pipe --stats
+┌────────┬─────────┬──────────┬─────┬─────┬──────┐
+│ column │ type    │ non-null │ min │ max │ mean │
+├────────┼─────────┼──────────┼─────┼─────┼──────┤
+│ age    │ INTEGER │        3 │ 25  │ 35  │ 30.0 │
+│ name   │ TEXT    │        3 │ Alice│Carol│      │
+└────────┴─────────┴──────────┴─────┴─────┴──────┘
+```
+
+Same as running `SELECT MIN(col), MAX(col), AVG(col), COUNT(*)` per column — but in one command.
 
 ## Real-world examples
 

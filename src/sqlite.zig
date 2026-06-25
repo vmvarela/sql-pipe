@@ -63,13 +63,24 @@ pub const ColumnType = enum {
 
 /// Append a double-quoted SQL identifier to an ArrayList, escaping embedded double quotes.
 /// Exits with csv_error on OOM.
-fn appendQuotedId(allocator: std.mem.Allocator, writer: *std.Io.Writer, sql: *std.ArrayList(u8), name: []const u8) void {
+pub fn appendQuotedId(allocator: std.mem.Allocator, writer: *std.Io.Writer, sql: *std.ArrayList(u8), name: []const u8) void {
     sql.append(allocator, '"') catch fatal("out of memory", writer, .csv_error, .{});
     for (name) |ch| {
         if (ch == '"') sql.append(allocator, '"') catch fatal("out of memory", writer, .csv_error, .{});
         sql.append(allocator, ch) catch fatal("out of memory", writer, .csv_error, .{});
     }
     sql.append(allocator, '"') catch fatal("out of memory", writer, .csv_error, .{});
+}
+
+/// Append a single-quoted SQL string literal to an ArrayList, escaping embedded single quotes.
+/// Exits with csv_error on OOM.
+pub fn appendStringLiteral(allocator: std.mem.Allocator, writer: *std.Io.Writer, sql: *std.ArrayList(u8), value: []const u8) void {
+    sql.append(allocator, '\'') catch fatal("out of memory", writer, .csv_error, .{});
+    for (value) |ch| {
+        if (ch == '\'') sql.append(allocator, '\'') catch fatal("out of memory", writer, .csv_error, .{});
+        sql.append(allocator, ch) catch fatal("out of memory", writer, .csv_error, .{});
+    }
+    sql.append(allocator, '\'') catch fatal("out of memory", writer, .csv_error, .{});
 }
 
 /// fatal(fmt, writer, code, args) → noreturn
@@ -314,6 +325,46 @@ pub fn getTableColumns(allocator: std.mem.Allocator, db: *c.sqlite3, table_name:
     }
 
     return cols.toOwnedSlice(allocator) catch fatal("out of memory", writer, .csv_error, .{});
+}
+
+/// Column name and declared type from PRAGMA table_info.
+pub const ColumnInfo = struct {
+    names: [][]const u8,
+    types: [][]const u8,
+};
+
+/// Return column names and declared SQL types of `table_name` via PRAGMA table_info.
+/// Caller owns the returned slices; free each element and the slices with allocator.
+/// Returns empty slices on PRAGMA failure.
+pub fn getTableColumnsWithTypes(allocator: std.mem.Allocator, db: *c.sqlite3, table_name: []const u8, writer: *std.Io.Writer) ColumnInfo {
+    var sql: std.ArrayList(u8) = .empty;
+    defer sql.deinit(allocator);
+    sql.appendSlice(allocator, "PRAGMA table_info(") catch fatal("out of memory", writer, .csv_error, .{});
+    appendQuotedId(allocator, writer, &sql, table_name);
+    sql.append(allocator, ')') catch fatal("out of memory", writer, .csv_error, .{});
+    sql.append(allocator, 0) catch fatal("out of memory", writer, .csv_error, .{});
+
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, sql.items.ptr, -1, &stmt, null) != c.SQLITE_OK)
+        return .{ .names = &.{}, .types = &.{} };
+    defer _ = c.sqlite3_finalize(stmt);
+
+    var names = std.ArrayList([]const u8).empty;
+    var types = std.ArrayList([]const u8).empty;
+
+    while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+        const name = columnText(stmt.?, 1) orelse continue;
+        const col_type = columnText(stmt.?, 2) orelse "TEXT";
+        names.append(allocator, allocator.dupe(u8, name) catch fatal("out of memory", writer, .csv_error, .{}))
+        catch fatal("out of memory", writer, .csv_error, .{});
+        types.append(allocator, allocator.dupe(u8, col_type) catch fatal("out of memory", writer, .csv_error, .{}))
+        catch fatal("out of memory", writer, .csv_error, .{});
+    }
+
+    return .{
+        .names = names.toOwnedSlice(allocator) catch fatal("out of memory", writer, .csv_error, .{}),
+        .types = types.toOwnedSlice(allocator) catch fatal("out of memory", writer, .csv_error, .{}),
+    };
 }
 
 /// Print column context to writer after a SQL error.
