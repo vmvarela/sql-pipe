@@ -2365,4 +2365,114 @@ pub fn build(b: *std.Build) void {
     }
     const run_loader_unit_tests = b.addRunArtifact(loader_unit_tests);
     unit_test_step.dependOn(&run_loader_unit_tests.step);
+
+    // ─── --stats / --profile integration tests ──────────────────────────
+
+    // Integration test: --stats on basic CSV with mixed types
+    const test_stats_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,amount,region\n1,100,east\n2,200,west\n3,300,north\n' | ./zig-out/bin/sql-pipe --stats 2>/dev/null)
+        \\echo "$result" | grep -q 'id' && echo "$result" | grep -q 'INTEGER' && echo "$result" | grep -q 'region.*TEXT'
+    });
+    test_stats_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_basic.step);
+
+    // Integration test: --profile alias works
+    const test_stats_alias = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,95.5\nBob,87.3\n' | ./zig-out/bin/sql-pipe --profile 2>/dev/null)
+        \\echo "$result" | grep -q 'Alice' && echo "$result" | grep -q '91.4'
+    });
+    test_stats_alias.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_alias.step);
+
+    // Integration test: --stats cannot be combined with --columns, --validate, --sample, query, --output
+    const test_stats_with_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats --columns 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_stats_with_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_with_columns.step);
+
+    // Integration test: --stats cannot be combined with --validate
+    const test_stats_with_validate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats --validate 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_stats_with_validate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_with_validate.step);
+
+    // Integration test: --stats cannot be combined with --sample
+    const test_stats_with_sample = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats --sample 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_stats_with_sample.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_with_sample.step);
+
+    // Integration test: --stats cannot be combined with query argument (-f)
+    const test_stats_with_query = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats -f /dev/null 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_stats_with_query.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_with_query.step);
+
+    // Integration test: --stats cannot be combined with --output
+    const test_stats_with_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats --output /tmp/sp_test_out.csv 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_stats_with_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_with_output.step);
+
+    // Integration test: --stats on TSV input
+    const test_stats_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\tage\nAlice\t30\nBob\t25\n' | ./zig-out/bin/sql-pipe -I tsv --stats 2>/dev/null)
+        \\echo "$result" | grep -q 'Alice' && echo "$result" | grep -q '25'
+    });
+    test_stats_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_tsv.step);
+
+    // Integration test: --stats on JSON input (all TEXT columns)
+    const test_stats_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '[{"id":1,"val":10},{"id":2,"val":20}]' | ./zig-out/bin/sql-pipe -I json --stats 2>/dev/null)
+        \\echo "$result" | grep -q 'TEXT' && echo "$result" | grep -q '10'
+    });
+    test_stats_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_json.step);
+
+    // Integration test: --stats with REAL columns
+    const test_stats_real = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'item,price\nA,9.99\nB,3.00\nC,12.50\n' | ./zig-out/bin/sql-pipe --stats 2>/dev/null)
+        \\echo "$result" | grep -q 'REAL' && echo "$result" | grep -q '8.49666'
+    });
+    test_stats_real.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_real.step);
+
+    // Integration test: --stats with no-type-inference (all TEXT)
+    const test_stats_no_infer = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,val\n1,10\n2,20\n' | ./zig-out/bin/sql-pipe --stats --no-type-inference 2>/dev/null)
+        \\echo "$result" | grep -q 'TEXT' && echo "$result" | grep -qv 'INTEGER'
+    });
+    test_stats_no_infer.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_no_infer.step);
+
+    // Integration test: --stats with custom delimiter
+    const test_stats_delimiter = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a|b\n1|2\n3|4\n' | ./zig-out/bin/sql-pipe --stats -d '|' 2>/dev/null)
+        \\echo "$result" | grep -q 'INTEGER' && echo "$result" | grep -q '2.0'
+    });
+    test_stats_delimiter.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_delimiter.step);
 }

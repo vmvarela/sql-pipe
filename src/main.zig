@@ -13,6 +13,7 @@ const loader = @import("loader.zig");
 const columns_mode = @import("modes/columns.zig");
 const validate_mode = @import("modes/validate.zig");
 const sample_mode = @import("modes/sample.zig");
+const stats_mode = @import("modes/stats.zig");
 
 const VERSION: []const u8 = build_options.version;
 
@@ -234,6 +235,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.SampleWithValidate => fatal("--sample cannot be combined with --validate", stderr_writer, .usage, .{}),
             error.SampleWithOutput => fatal("--sample cannot be combined with --output", stderr_writer, .usage, .{}),
             error.InvalidSampleCount => fatal("--sample requires a positive integer value", stderr_writer, .usage, .{}),
+            error.StatsWithFlags => fatal("--stats is incompatible with --columns, --validate, --sample, --output, and query arguments", stderr_writer, .usage, .{}),
             error.MissingQuery => {
                 stderr_writer.writeAll("error: no SQL query provided\n") catch |werr| std.log.err("failed to write error: {}", .{werr});
                 // Fall through to printUsage + exit below
@@ -288,6 +290,15 @@ pub fn main(init: std.process.Init.Minimal) void {
         },
         .sample => |sample_args| {
             sample_mode.runSample(allocator, io.io(), sample_args, stderr_writer, stdout_writer);
+            stdout_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stdout: {}", .{err});
+            };
+            stderr_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stderr: {}", .{err});
+            };
+        },
+        .stats => |stats_args| {
+            stats_mode.runStats(allocator, io.io(), stats_args, stderr_writer, stdout_writer);
             stdout_file_writer.flush() catch |err| {
                 std.log.err("failed to flush stdout: {}", .{err});
             };
