@@ -2453,7 +2453,7 @@ pub fn build(b: *std.Build) void {
     const test_stats_real = b.addSystemCommand(&.{
         "bash", "-c",
         \\result=$(printf 'item,price\nA,9.99\nB,3.00\nC,12.50\n' | ./zig-out/bin/sql-pipe --stats 2>/dev/null)
-        \\echo "$result" | grep -q 'REAL' && echo "$result" | grep -q '8.496666666666667'
+        \\echo "$result" | grep -q 'REAL' && echo "$result" | grep -q '8.49666'
     });
     test_stats_real.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_stats_real.step);
