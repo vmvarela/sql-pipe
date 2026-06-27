@@ -12,6 +12,7 @@ const inference_buffer_size = loader.inference_buffer_size;
 const ExitCode = args_mod.ExitCode;
 const fatal = @import("../sqlite.zig").fatal;
 const readAllInput = @import("../sqlite.zig").readAllInput;
+const source = @import("source.zig");
 
 pub fn runColumns(
     allocator: std.mem.Allocator,
@@ -30,13 +31,9 @@ pub fn runColumns(
         .csv, .tsv => {
             const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
             var read_buf: [4096]u8 = undefined;
-            const source_file = switch (input_source) {
-                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
-                .stdin => std.Io.File.stdin(),
-            };
-            defer if (input_source == .file) std.Io.File.close(source_file, io);
-            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
+            const opened = source.openInput(input_source, io, stderr_writer);
+            defer opened.deinit(io);
+            var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
             var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &source_reader.interface, col_delim);
 
             const header_record = csv_reader.nextRecord() catch |err| switch (err) {
@@ -98,13 +95,9 @@ pub fn runColumns(
         },
         .json => {
             var read_buf: [4096]u8 = undefined;
-            const source_file = switch (input_source) {
-                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
-                .stdin => std.Io.File.stdin(),
-            };
-            defer if (input_source == .file) std.Io.File.close(source_file, io);
-            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
+            const opened = source.openInput(input_source, io, stderr_writer);
+            defer opened.deinit(io);
+            var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
 
             const input = readAllInput(&source_reader.interface, allocator, stderr_writer, "JSON input");
             defer allocator.free(input);
@@ -132,13 +125,9 @@ pub fn runColumns(
         },
         .ndjson => {
             var read_buf: [4096]u8 = undefined;
-            const source_file = switch (input_source) {
-                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
-                .stdin => std.Io.File.stdin(),
-            };
-            defer if (input_source == .file) std.Io.File.close(source_file, io);
-            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
+            const opened = source.openInput(input_source, io, stderr_writer);
+            defer opened.deinit(io);
+            var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
 
             // Read until we find a non-empty line
             var line_num: usize = 0;
@@ -182,13 +171,9 @@ pub fn runColumns(
         },
         .xml => {
             var read_buf: [4096]u8 = undefined;
-            const source_file = switch (input_source) {
-                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
-                .stdin => std.Io.File.stdin(),
-            };
-            defer if (input_source == .file) std.Io.File.close(source_file, io);
-            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
+            const opened = source.openInput(input_source, io, stderr_writer);
+            defer opened.deinit(io);
+            var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
 
             const names = xml_mod.getXmlColumnNames(allocator, &source_reader.interface, args.xml_root_input, args.xml_row_input, stderr_writer);
             defer {

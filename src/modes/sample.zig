@@ -12,6 +12,7 @@ const inference_buffer_size = loader.inference_buffer_size;
 
 const ExitCode = args_mod.ExitCode;
 const fatal = @import("../sqlite.zig").fatal;
+const source = @import("source.zig");
 
 pub fn runSample(
     allocator: std.mem.Allocator,
@@ -36,13 +37,9 @@ pub fn runSample(
         .csv, .tsv => {
             const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
             var read_buf: [4096]u8 = undefined;
-            const source_file = switch (input_source) {
-                .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
-                    fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
-                .stdin => std.Io.File.stdin(),
-            };
-            defer if (input_source == .file) std.Io.File.close(source_file, io);
-            var source_reader = std.Io.File.reader(source_file, io, &read_buf);
+            const opened = source.openInput(input_source, io, stderr_writer);
+            defer opened.deinit(io);
+            var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
             var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &source_reader.interface, col_delim);
 
             const header_record = csv_reader.nextRecord() catch |err| switch (err) {
