@@ -509,20 +509,14 @@ fn normalizeDateTimeToIso(col_type: ColumnType, val: []const u8, buf: *[19]u8) [
     return buf[0..19];
 }
 
-/// fmtThousands(buf, n) → []const u8
-/// Pre:  buf.len >= 26 (accommodates any usize value with thousands separators)
-/// Post: n is formatted as a decimal string with ',' separating each group of
-///       three digits from the right (e.g. 42317 → "42,317", 1000 → "1,000")
+/// Format n with thousands separators (e.g. 42317 → "42,317").
+/// buf must hold at least 26 bytes.
 pub fn fmtThousands(buf: []u8, n: usize) []const u8 {
-    var tmp: [32]u8 = undefined; // 20 digits max (u64) + safety margin
+    var tmp: [32]u8 = undefined;
     const digits = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable;
-    const len = digits.len;
-    const first_group = len % 3; // digits in the leading group (0 means groups of 3 from start)
     var out_len: usize = 0;
     for (digits, 0..) |ch, i| {
-        if ((i > 0 and i == first_group) or
-            (i > first_group and (i - first_group) % 3 == 0))
-        {
+        if (i > 0 and (digits.len - i) % 3 == 0) {
             buf[out_len] = ',';
             out_len += 1;
         }
