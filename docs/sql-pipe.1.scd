@@ -11,6 +11,7 @@ SYNOPSIS
 	*sql-pipe* --columns [OPTIONS] [<file>]
 	*sql-pipe* --sample [<n>] [OPTIONS] [<file>]
 	*sql-pipe* --stats [OPTIONS] [<file>]
+	*sql-pipe* --schema [OPTIONS] [<file>...]
 	*sql-pipe* --explain [OPTIONS] [<file>] <query>
 
 DESCRIPTION
@@ -151,6 +152,15 @@ OPTIONS
 		*--validate*, *--sample*, and *--output*.
 		Alias: *--profile*.
 
+	*--schema*
+		Load input and print the inferred CREATE TABLE DDL to standard
+		output. Each input file generates one DDL block; stdin uses table
+		name *t*. No query is required. Compatible with *--delimiter*,
+		*--tsv*, *--no-type-inference*, and *-I* / *--input-format* (csv,
+		tsv, json, ndjson, xml). Mutually exclusive with a query argument,
+		*--columns*, *--validate*, *--sample*, *--stats*, *--explain*,
+		and *--output*.
+
 	*--output* <file>
 		Write results to <file> instead of standard output. Creates or
 		overwrites the file. Compatible with all output modes (*--json*,
@@ -162,7 +172,7 @@ OPTIONS
 		the execution plan to standard error. Each line is prefixed with
 		*QUERY PLAN:* so stdout remains clean for piping. The actual query
 		still executes normally and results go to stdout. Mutually exclusive
-		with *--columns*, *--validate*, *--sample*, *--stats*, and *--output*.
+		with *--columns*, *--validate*, *--sample*, *--stats*, *--schema*, and *--output*.
 
 	*--null-value* <string>
 		Custom representation for SQL NULL values in CSV, TSV, and table
@@ -332,6 +342,11 @@ EXAMPLES
 		QUERY PLAN: SCAN t
 		East,100
 		West,200
+
+	Print inferred CREATE TABLE DDL without running a query:
+
+		$ printf 'name,age\nAlice,30\nBob,25\n' | sql-pipe --schema
+		CREATE TABLE "t" ("name" TEXT, "age" INTEGER);
 
 EXIT CODES
 	*0*

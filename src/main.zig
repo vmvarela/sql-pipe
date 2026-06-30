@@ -14,6 +14,7 @@ const columns_mode = @import("modes/columns.zig");
 const validate_mode = @import("modes/validate.zig");
 const sample_mode = @import("modes/sample.zig");
 const stats_mode = @import("modes/stats.zig");
+const schema_mode = @import("modes/schema.zig");
 
 const VERSION: []const u8 = build_options.version;
 
@@ -282,6 +283,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.SampleWithOutput => fatal("--sample cannot be combined with --output", stderr_writer, .usage, .{}),
             error.InvalidSampleCount => fatal("--sample requires a positive integer value", stderr_writer, .usage, .{}),
             error.StatsWithFlags => fatal("--stats is incompatible with --columns, --validate, --sample, --output, and query arguments", stderr_writer, .usage, .{}),
+            error.SchemaWithFlags => fatal("--schema is incompatible with --columns, --validate, --sample, --stats, --explain, --output, and query arguments", stderr_writer, .usage, .{}),
             error.MissingQuery => {
                 stderr_writer.writeAll("error: no SQL query provided\n") catch |werr| std.log.err("failed to write error: {}", .{werr});
                 // Fall through to printUsage + exit below
@@ -294,7 +296,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
             error.DuplicateTableName => fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{}),
             error.TableWithNonCsv => fatal("--table requires CSV or TSV output format (not compatible with --json, -O json, etc.)", stderr_writer, .usage, .{}),
-            error.ExplainWithFlags => fatal("--explain cannot be combined with --columns, --validate, --sample, --stats, or --output", stderr_writer, .usage, .{}),
+            error.ExplainWithFlags => fatal("--explain cannot be combined with --columns, --validate, --sample, --stats, --schema, or --output", stderr_writer, .usage, .{}),
             error.MissingNullValue => fatal("--null-value requires a value", stderr_writer, .usage, .{}),
             else => {},
         }
@@ -347,6 +349,15 @@ pub fn main(init: std.process.Init.Minimal) void {
         },
         .stats => |stats_args| {
             stats_mode.runStats(allocator, io.io(), stats_args, stderr_writer, stdout_writer);
+            stdout_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stdout: {}", .{err});
+            };
+            stderr_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stderr: {}", .{err});
+            };
+        },
+        .schema => |schema_args| {
+            schema_mode.runSchema(allocator, io.io(), schema_args, stderr_writer, stdout_writer);
             stdout_file_writer.flush() catch |err| {
                 std.log.err("failed to flush stdout: {}", .{err});
             };

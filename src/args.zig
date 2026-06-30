@@ -69,6 +69,7 @@ pub const SqlPipeError = error{
     SampleWithOutput,
     InvalidSampleCount,
     StatsWithFlags,
+    SchemaWithFlags,
     DuplicateTableName,
     TableWithNonCsv,
     InvalidQueryFile,
@@ -184,6 +185,17 @@ pub const StatsArgs = struct {
     type_inference: bool,
 };
 
+pub const SchemaArgs = struct {
+    /// Input files as positional arguments; empty when reading from stdin only.
+    files: []const FileInput = &.{},
+    /// CSV field delimiter — 1 to 8 bytes (default: ",").
+    delimiter: []const u8,
+    /// Input format (default: csv).
+    input_format: InputFormat,
+    /// Infer column types from buffered rows when true; show all TEXT when false.
+    type_inference: bool,
+};
+
 pub const ArgsResult = union(enum) {
     /// Normal execution: run the query.
     parsed: ParsedArgs,
@@ -199,6 +211,8 @@ pub const ArgsResult = union(enum) {
     sample: SampleArgs,
     /// User requested --stats: compute per-column statistics.
     stats: StatsArgs,
+    /// User requested --schema: print inferred CREATE TABLE DDL.
+    schema: SchemaArgs,
 };
 
 pub fn printUsage(writer: *std.Io.Writer) !void {
@@ -241,6 +255,10 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\                               Incompatible with --json and with a query argument.
         \\  --stats                      Compute per-column statistics (type, non-null, min, max, mean)
         \\  --profile                    Alias for --stats
+        \\  --schema                     Print inferred CREATE TABLE DDL to stdout and exit
+        \\                               No query required. One DDL block per input file; stdin uses table `t`.
+        \\                               Compatible with --delimiter, --tsv, --no-type-inference, -I.
+        \\                               Mutually exclusive with --explain and query arguments.
         \\  --output <file>              Write results to file instead of stdout
         \\  --xml-root <name>            Root element name for XML I/O (default: results)
         \\  --xml-row <name>             Row element name for XML I/O (default: row)
@@ -331,6 +349,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var sample_mode = false;
     var sample_n: usize = 10;
     var stats_mode = false;
+    var schema_mode = false;
     var disk = false;
     var explain = false;
     var table_mode: TableMode = .auto;
@@ -423,6 +442,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             sample_mode = true;
         } else if (std.mem.eql(u8, arg, "--stats") or std.mem.eql(u8, arg, "--profile")) {
             stats_mode = true;
+        } else if (std.mem.eql(u8, arg, "--schema")) {
+            schema_mode = true;
         } else if (std.mem.eql(u8, arg, "--output")) {
             i += 1;
             if (i >= args.len) return error.InvalidOutputPath;
@@ -493,7 +514,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
 
     // ─── Convert positional args to files + query ──────────────────────────
     const pos = positional_args.items;
-    const is_special_mode = list_columns or validate or sample_mode or stats_mode;
+    const is_special_mode = list_columns or validate or sample_mode or stats_mode or schema_mode;
 
     // Build file list from positional args
     var files: std.ArrayList(FileInput) = .empty;
@@ -591,8 +612,12 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         return error.StatsWithFlags;
 
     // --explain is mutually exclusive with mode flags and --output
-    if (explain and (list_columns or validate or sample_mode or stats_mode or output != null))
+    if (explain and (list_columns or validate or sample_mode or stats_mode or schema_mode or output != null))
         return error.ExplainWithFlags;
+
+    // --schema is mutually exclusive with mode flags, query, output, and --explain
+    if (schema_mode and (explain or list_columns or validate or sample_mode or stats_mode or query != null or query_file != null or output != null))
+        return error.SchemaWithFlags;
 
     // --silent and --verbose are mutually exclusive
     if (silent and verbose)
@@ -649,6 +674,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     // --stats mode: compute per-column statistics and exit
     if (stats_mode)
         return .{ .stats = StatsArgs{
+            .files = files.items,
+            .delimiter = delimiter,
+            .input_format = effective_input_format,
+            .type_inference = type_inference,
+        } };
+
+    // --schema mode: print inferred CREATE TABLE DDL and exit
+    if (schema_mode)
+        return .{ .schema = SchemaArgs{
             .files = files.items,
             .delimiter = delimiter,
             .input_format = effective_input_format,
