@@ -53,6 +53,7 @@ fn execQuery(
     output_format: OutputFormat,
     xml_root: []const u8,
     xml_row: []const u8,
+    null_value: ?[]const u8,
     use_table: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || error{WriteFailed, StepFailed})!void {
     const query_z = try allocator.dupeZ(u8, query);
@@ -67,13 +68,13 @@ fn execQuery(
 
     // Table mode: buffer all rows and print a formatted table
     if (use_table) {
-        try table.writeTable(allocator, writer, stmt.?, col_count);
+        try table.writeTable(allocator, writer, stmt.?, col_count, null_value);
         return;
     }
 
     // Markdown output: two-pass writer (not streaming)
     if (output_format == .markdown) {
-        try markdown.writeMarkdown(allocator, writer, stmt.?, col_count);
+        try markdown.writeMarkdown(allocator, writer, stmt.?, col_count, null_value);
         return;
     }
 
@@ -81,6 +82,7 @@ fn execQuery(
         .header = header,
         .xml_root = xml_root,
         .xml_row = xml_row,
+        .null_value = null_value,
     });
     defer out_writer.deinit(allocator);
 
@@ -184,7 +186,7 @@ fn run(
     // Determine which table to show column context for on error
     const main_table: []const u8 = if (parsed.files.len > 0) parsed.files[0].table_name else "t";
 
-    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, use_table) catch {
+    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.null_value, use_table) catch {
         stdout_writer.flush() catch |err| std.log.err("failed to flush output before fatal: {}", .{err});
         sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
     };
@@ -248,6 +250,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
             error.DuplicateTableName => fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{}),
             error.TableWithNonCsv => fatal("--table requires CSV or TSV output format (not compatible with --json, -O json, etc.)", stderr_writer, .usage, .{}),
+            error.MissingNullValue => fatal("--null-value requires a value", stderr_writer, .usage, .{}),
             else => {},
         }
         printUsage(stderr_writer) catch |werr| std.log.err("failed to write usage: {}", .{werr});
