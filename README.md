@@ -318,6 +318,7 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `--sample [<n>]` | Print a schema comment block to stderr and the first `<n>` data rows to stdout as CSV (default: `n=10`). The schema block lists each column name and its inferred type, prefixed with `#`. Implies `--header`. Compatible with `--delimiter` and `--tsv`. Mutually exclusive with `--json` and a query argument. No query required. |
 | `--stats` | Load input and print per-column statistics (column name, type, non-null count, min, max, mean) as a formatted table. Mean is blank for non-numeric columns. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, and `--output`. |
 | `--profile` | Alias for `--stats` |
+| `--explain` | Print the SQLite query plan to stderr before executing the query. Each line is prefixed with `QUERY PLAN: `. The actual query still runs and results go to stdout. Mutually exclusive with `--columns`, `--validate`, `--sample`, `--stats`, and `--output`. |
 | `--xml-root <name>` | Root element name for XML I/O (default: `results`) |
 | `--xml-row <name>` | Row element name for XML I/O (default: `row`) |
 | `--output <file>` | Write results to the given file instead of stdout. Creates or overwrites the file. Exits 1 if the file cannot be created. |
@@ -436,6 +437,28 @@ $ printf 'name,age\nAlice,30\nBob,25\nCarol,35\n' | sql-pipe --stats
 ```
 
 Same as running `SELECT MIN(col), MAX(col), AVG(col), COUNT(*)` per column — but in one command.
+
+### Debug query performance with --explain
+
+```sh
+$ printf 'region,amount\nEast,100\nWest,200\nNorth,300\n' | sql-pipe --explain 'SELECT region, SUM(amount) FROM t GROUP BY region'
+```
+
+Prints the SQLite execution plan to stderr (prefixed with `QUERY PLAN:`) before running the query:
+
+```
+QUERY PLAN: SCAN t
+```
+
+The actual query results still go to stdout:
+
+```
+East,100
+North,300
+West,200
+```
+
+Useful for understanding how SQLite handles complex JOINs, aggregations, and subqueries — plan goes to stderr so stdout stays machine-parseable.
 
 ## Real-world examples
 

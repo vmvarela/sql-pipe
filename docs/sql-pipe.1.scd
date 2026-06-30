@@ -11,6 +11,7 @@ SYNOPSIS
 	*sql-pipe* --columns [OPTIONS] [<file>]
 	*sql-pipe* --sample [<n>] [OPTIONS] [<file>]
 	*sql-pipe* --stats [OPTIONS] [<file>]
+	*sql-pipe* --explain [OPTIONS] [<file>] <query>
 
 DESCRIPTION
 	sql-pipe reads CSV, JSON, NDJSON, or XML data from standard input and/or
@@ -156,6 +157,13 @@ OPTIONS
 		*--header*, CSV). Exits with code 1 and an error message if the file
 		cannot be created (bad path or insufficient permissions).
 
+	*--explain*
+		Before executing the SQL query, run *EXPLAIN QUERY PLAN* and print
+		the execution plan to standard error. Each line is prefixed with
+		*QUERY PLAN:* so stdout remains clean for piping. The actual query
+		still executes normally and results go to stdout. Mutually exclusive
+		with *--columns*, *--validate*, *--sample*, *--stats*, and *--output*.
+
 	*-f, --file* <file>
 		Read the SQL query from <file> instead of the command line. When
 		this flag is used, all positional arguments are treated as data
@@ -300,6 +308,14 @@ EXAMPLES
 	1,North,1250.00++
 	2,South,875.50++
 	3,East,2100.75
+
+	Inspect query execution plan before running (plan goes to stderr,
+	results to stdout):
+
+		$ printf 'region,amount\nEast,100\nWest,200\n' | sql-pipe --explain 'SELECT region, SUM(amount) FROM t GROUP BY region'
+		QUERY PLAN: SCAN t
+		East,100
+		West,200
 
 EXIT CODES
 	*0*

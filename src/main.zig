@@ -117,6 +117,45 @@ fn loadInput(
     };
 }
 
+/// printQueryPlan(allocator, db, query, main_table, stderr_writer) → void
+/// Pre:  db is open with tables populated; query is a valid SQL string
+/// Post: EXPLAIN QUERY PLAN has been written to stderr, one line per plan row,
+///       prefixed with "QUERY PLAN: ". Stderr is flushed after writing.
+///       On SQL error, exits with sql_error via fatalSqlWithContext.
+fn printQueryPlan(
+    allocator: std.mem.Allocator,
+    db: *c.sqlite3,
+    query: []const u8,
+    main_table: []const u8,
+    stderr_writer: *std.Io.Writer,
+) void {
+    // Build null-terminated "EXPLAIN QUERY PLAN <query>" using ArrayList (no allocPrintZ in 0.16).
+    var eqp_buf: std.ArrayList(u8) = .empty;
+    defer eqp_buf.deinit(allocator);
+    eqp_buf.appendSlice(allocator, "EXPLAIN QUERY PLAN ") catch
+        sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
+    eqp_buf.appendSlice(allocator, query) catch
+        sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
+    eqp_buf.append(allocator, 0) catch
+        sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
+    const eqp_query: [*:0]const u8 = @ptrCast(eqp_buf.items.ptr);
+
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(db, eqp_query, -1, &stmt, null) != c.SQLITE_OK) {
+        sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+    }
+    defer _ = c.sqlite3_finalize(stmt);
+
+    while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+        // EXPLAIN QUERY PLAN columns: id(0), parent(1), notused(2), detail(3)
+        const detail = std.mem.span(c.sqlite3_column_text(stmt, 3));
+        stderr_writer.print("QUERY PLAN: {s}\n", .{detail}) catch |err| {
+            std.log.err("failed to write query plan: {}", .{err});
+        };
+    }
+    stderr_writer.flush() catch |err| std.log.err("failed to flush stderr after query plan: {}", .{err});
+}
+
 /// run(allocator, io, parsed, stderr_writer, stdout_writer, use_table) → void
 /// Pre:  parsed contains a valid query; allocator and writers are valid
 ///       use_table is true when output should be formatted as a pretty table
@@ -184,6 +223,11 @@ fn run(
     // Determine which table to show column context for on error
     const main_table: []const u8 = if (parsed.files.len > 0) parsed.files[0].table_name else "t";
 
+    // Print query plan to stderr when --explain is set
+    if (parsed.explain) {
+        printQueryPlan(allocator, db, query, main_table, stderr_writer);
+    }
+
     execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, use_table) catch {
         stdout_writer.flush() catch |err| std.log.err("failed to flush output before fatal: {}", .{err});
         sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
@@ -248,6 +292,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
             error.DuplicateTableName => fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{}),
             error.TableWithNonCsv => fatal("--table requires CSV or TSV output format (not compatible with --json, -O json, etc.)", stderr_writer, .usage, .{}),
+            error.ExplainWithFlags => fatal("--explain cannot be combined with --columns, --validate, --sample, --stats, or --output", stderr_writer, .usage, .{}),
             else => {},
         }
         printUsage(stderr_writer) catch |werr| std.log.err("failed to write usage: {}", .{werr});
