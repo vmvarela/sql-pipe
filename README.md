@@ -308,7 +308,8 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `-d`, `--delimiter <char>` | Input field delimiter (single character, default `,`) |
 | `--tsv` | Alias for `--delimiter '\t'` |
 | `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson`, `xml`. Overrides file extension auto-detection. |
-| `-O`, `--output-format <fmt>` | Output format: `csv` (default), `tsv`, `json`, `ndjson`, `xml`, `markdown` (alias: `md`) |
+| `-O`, `--output-format <fmt>` | Output format: `csv` (default), `tsv`, `json`, `ndjson`, `xml`, `markdown` (alias: `md`), `sql` |
+| `--sql-table <name>` | Target table name for `-O sql` INSERT output (default: `t`) |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
 | `-H`, `--header` | Print column names as the first output row |
 | `--json` | Alias for `--output-format json` (mutually exclusive with `-H`) |

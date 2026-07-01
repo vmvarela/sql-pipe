@@ -49,6 +49,7 @@ pub const OutputFormat = enum {
     ndjson,
     xml,
     markdown,
+    sql,
 
     /// Parse a format name string.
     /// Returns error.InvalidOutputFormat when the value is unrecognised.
@@ -68,6 +69,8 @@ pub const WriteOpts = struct {
     xml_root: []const u8 = "results",
     /// Row element name for XML output.
     xml_row: []const u8 = "row",
+    /// Target table name for SQL INSERT output (default: "t").
+    sql_table: []const u8 = "t",
 };
 
 // ─── Output writer ──────────────────────────────────────
@@ -131,7 +134,7 @@ pub const OutputWriter = struct {
 
         // Collect column-name pointers for formats that need them per row.
         switch (self.format) {
-            .json, .ndjson, .xml => {
+            .json, .ndjson, .xml, .sql => {
                 const names = try allocator.alloc([*:0]const u8, @intCast(col_count));
                 var i: c_int = 0;
                 while (i < col_count) : (i += 1) {
@@ -177,6 +180,7 @@ pub const OutputWriter = struct {
                 writer,
                 self.opts.xml_row,
             ),
+            .sql => try self.writeSqlRow(stmt, writer),
             .markdown => unreachable, // handled before OutputWriter in execQuery
         }
     }
@@ -196,7 +200,68 @@ pub const OutputWriter = struct {
     fn csvDelimiter(self: OutputWriter) []const u8 {
         return if (self.format == .tsv) "\t" else ",";
     }
+
+    /// Write one SQL INSERT row from the current SQLITE_ROW.
+    fn writeSqlRow(self: *OutputWriter, stmt: *c.sqlite3_stmt, writer: *std.Io.Writer) !void {
+        // INSERT INTO "table" (col1, col2) VALUES (val1, val2);
+        try writer.writeAll("INSERT INTO ");
+        try writeSqlId(writer, self.opts.sql_table);
+        try writer.writeAll(" (");
+        const col_count: usize = @intCast(self.col_count);
+        for (0..col_count) |j| {
+            if (j > 0) try writer.writeAll(", ");
+            try writeSqlId(writer, std.mem.span(self.col_names[j]));
+        }
+        try writer.writeAll(") VALUES (");
+        for (0..col_count) |j| {
+            const i: c_int = @intCast(j);
+            if (j > 0) try writer.writeAll(", ");
+            switch (c.sqlite3_column_type(stmt, i)) {
+                c.SQLITE_NULL => try writer.writeAll("NULL"),
+                c.SQLITE_INTEGER => try writer.print("{d}", .{c.sqlite3_column_int64(stmt, i)}),
+                c.SQLITE_FLOAT => {
+                    const f = c.sqlite3_column_double(stmt, i);
+                    if (f == @trunc(f) and !std.math.isInf(f) and !std.math.isNan(f)) {
+                        try writer.print("{d}", .{@as(i64, @intFromFloat(f))});
+                    } else {
+                        try writer.print("{d}", .{f});
+                    }
+                },
+                else => {
+                    // ponytail: BLOB truncated at first NUL, same as CSV/JSON; X'...' hex if needed
+                    if (sqlite_mod.columnText(stmt, i)) |text| {
+                        try writeSqlStringLiteral(writer, text);
+                    } else {
+                        try writer.writeAll("NULL");
+                    }
+                },
+            }
+        }
+        try writer.writeAll(");\n");
+    }
 };
+
+// ── SQL output helpers ─────────────────────────────────────────────────────────
+
+/// Write a double-quoted SQL identifier, escaping embedded double quotes.
+fn writeSqlId(writer: *std.Io.Writer, name: []const u8) !void {
+    try writer.writeByte('"');
+    for (name) |ch| {
+        if (ch == '"') try writer.writeByte('"');
+        try writer.writeByte(ch);
+    }
+    try writer.writeByte('"');
+}
+
+/// Write a single-quoted SQL string literal, escaping embedded single quotes.
+fn writeSqlStringLiteral(writer: *std.Io.Writer, value: []const u8) !void {
+    try writer.writeByte('\'');
+    for (value) |ch| {
+        if (ch == '\'') try writer.writeByte('\'');
+        try writer.writeByte(ch);
+    }
+    try writer.writeByte('\'');
+}
 
 // ── CSV output helpers ─────────────────────────────────────────────────────────
 

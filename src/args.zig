@@ -73,6 +73,7 @@ pub const SqlPipeError = error{
     TableWithNonCsv,
     InvalidQueryFile,
     MultipleQueryFiles,
+    MissingSqlTableValue,
 };
 
 pub const ParsedArgs = struct {
@@ -118,6 +119,8 @@ pub const ParsedArgs = struct {
     disk: bool,
     /// Pretty-printed table output mode (default: auto — TTY detection).
     table_mode: TableMode = .auto,
+    /// Target table name for SQL INSERT output (default: "t").
+    sql_table: []const u8 = "t",
 };
 
 pub const ColumnsArgs = struct {
@@ -213,9 +216,10 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --tsv                        Alias for --delimiter '\t'
         \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml
         \\                               Overrides file extension auto-detection; stdin always uses this value
-        \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml, markdown (alias: md)
-        \\  --json                       Alias for --output-format json
-        \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
+        \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml, markdown (alias: md), sql
+  \\  --json                       Alias for --output-format json
+  \\  --sql-table <name>           Target table name for -O sql INSERT output (default: t)
+  \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
         \\  -H, --header                 Print column names as the first output row (CSV/TSV output only)
         \\  --max-rows <n>               Stop if more than <n> data rows are read (exit 1)
         \\  -v, --verbose                Force row count to stderr (shown automatically on TTY)
@@ -324,6 +328,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var stats_mode = false;
     var disk = false;
     var table_mode: TableMode = .auto;
+    var sql_table: []const u8 = "t";
     var seen_dashdash = false;
     var positional_args: std.ArrayList([]const u8) = .empty;
     defer positional_args.deinit(allocator);
@@ -374,6 +379,12 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             output_format = OutputFormat.parse(arg["--output-format=".len..]) catch return error.InvalidOutputFormat;
         } else if (std.mem.startsWith(u8, arg, "-O=")) {
             output_format = OutputFormat.parse(arg["-O=".len..]) catch return error.InvalidOutputFormat;
+        } else if (std.mem.eql(u8, arg, "--sql-table")) {
+            i += 1;
+            if (i >= args.len) return error.MissingSqlTableValue;
+            sql_table = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--sql-table=")) {
+            sql_table = arg["--sql-table=".len..];
         } else if (std.mem.eql(u8, arg, "--max-rows")) {
             i += 1;
             if (i >= args.len) return error.InvalidMaxRows;
@@ -653,6 +664,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .json_path = json_path,
         .disk = disk,
         .table_mode = table_mode,
+        .sql_table = sql_table,
     } };
 }
 

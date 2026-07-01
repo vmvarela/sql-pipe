@@ -53,6 +53,7 @@ fn execQuery(
     output_format: OutputFormat,
     xml_root: []const u8,
     xml_row: []const u8,
+    sql_table: []const u8,
     use_table: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || error{WriteFailed, StepFailed})!void {
     const query_z = try allocator.dupeZ(u8, query);
@@ -81,6 +82,7 @@ fn execQuery(
         .header = header,
         .xml_root = xml_root,
         .xml_row = xml_row,
+        .sql_table = sql_table,
     });
     defer out_writer.deinit(allocator);
 
@@ -184,7 +186,7 @@ fn run(
     // Determine which table to show column context for on error
     const main_table: []const u8 = if (parsed.files.len > 0) parsed.files[0].table_name else "t";
 
-    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, use_table) catch {
+    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.sql_table, use_table) catch {
         stdout_writer.flush() catch |err| std.log.err("failed to flush output before fatal: {}", .{err});
         sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
     };
@@ -222,7 +224,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),
             error.InvalidMaxRows => fatal("--max-rows must be a positive integer", stderr_writer, .usage, .{}),
             error.InvalidInputFormat => fatal("unknown input format; supported: csv, tsv, json, ndjson, xml", stderr_writer, .usage, .{}),
-            error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml, markdown (md)", stderr_writer, .usage, .{}),
+            error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml, markdown (md), sql", stderr_writer, .usage, .{}),
             error.ColumnsWithQuery => fatal("--columns cannot be combined with a query argument", stderr_writer, .usage, .{}),
             error.ValidateWithQuery => fatal("--validate cannot be combined with a query argument", stderr_writer, .usage, .{}),
             error.InvalidOutputPath => fatal("--output requires a non-empty file path", stderr_writer, .usage, .{}),
@@ -242,6 +244,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             },
             error.InvalidQueryFile => fatal("-f/--file requires a non-empty file path", stderr_writer, .usage, .{}),
             error.MultipleQueryFiles => fatal("only one -f/--file flag is allowed", stderr_writer, .usage, .{}),
+            error.MissingSqlTableValue => fatal("--sql-table requires a value", stderr_writer, .usage, .{}),
             error.MissingXmlFlagValue => fatal("--xml-root and --xml-row require a value", stderr_writer, .usage, .{}),
             error.MissingJsonFlagValue => fatal("--json-path requires a value", stderr_writer, .usage, .{}),
             error.JsonPathRequiresJson => fatal("--json-path requires -I json", stderr_writer, .usage, .{}),

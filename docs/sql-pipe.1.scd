@@ -65,7 +65,10 @@ OPTIONS
 
 	*-O, --output-format* <fmt>
 		Set the output format: *csv* (default), *tsv*, *json*, *ndjson*,
-		*xml*, or *markdown* (alias: *md*).
+		*xml*, *markdown* (alias: *md*), or *sql*.
+
+	*--sql-table* <name>
+		Target table name for *-O sql* INSERT output (default: *t*).
 
 	*--no-type-inference*
 		Treat all columns as TEXT. Skips automatic type detection and uses plain

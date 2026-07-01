@@ -2084,6 +2084,91 @@ pub fn build(b: *std.Build) void {
     test_markdown_empty.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_markdown_empty.step);
 
+    // ─── SQL INSERT output integration tests (issue #174) ─────────────────────
+
+    // Integration test 174a: Basic SQL INSERT output
+    const test_sql_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe -O sql 'SELECT * FROM t ORDER BY name')
+        \\echo "$result" | grep -Fq 'INSERT INTO "t" ("name", "age") VALUES ('"'"'Alice'"'"', 30);' && \
+        \\echo "$result" | grep -Fq 'INSERT INTO "t" ("name", "age") VALUES ('"'"'Bob'"'"', 25);'
+    });
+    test_sql_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_basic.step);
+
+    // Integration test 174b: --sql-table flag with custom table name
+    const test_sql_custom_table = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\nAlice\n' | ./zig-out/bin/sql-pipe -O sql --sql-table users 'SELECT * FROM t')
+        \\echo "$result" | grep -Fq 'INSERT INTO "users"'
+    });
+    test_sql_custom_table.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_custom_table.step);
+
+    // Integration test 174c: String escaping (single quotes doubled)
+    const test_sql_escaping = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\nO'"'"'Brien\nIt'"'"'s great\n' | ./zig-out/bin/sql-pipe -O sql 'SELECT * FROM t')
+        \\echo "$result" | grep -Fq "VALUES ('O''Brien');" && \
+        \\echo "$result" | grep -Fq "VALUES ('It''s great');"
+    });
+    test_sql_escaping.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_escaping.step);
+
+    // Integration test 174d: NULL values rendered as NULL (unquoted)
+    const test_sql_null = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,\n' | ./zig-out/bin/sql-pipe -O sql 'SELECT * FROM t ORDER BY name')
+        \\echo "$result" | grep -Fq 'NULL' && echo "$result" | grep -vq "'NULL'"
+    });
+    test_sql_null.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_null.step);
+
+    // Integration test 174e: Numeric values unquoted
+    const test_sql_numeric = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'n\n42\n-7\n' | ./zig-out/bin/sql-pipe -O sql 'SELECT * FROM t')
+        \\echo "$result" | grep -Fq "(42);" && echo "$result" | grep -Fq "(-7);"
+    });
+    test_sql_numeric.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_numeric.step);
+
+    // Integration test 174f: Float value (non-trunc → with decimal, trunc → integer)
+    const test_sql_float = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,3.14\nBob,30.0\n' | ./zig-out/bin/sql-pipe -O sql 'SELECT * FROM t ORDER BY name')
+        \\echo "$result" | grep -Fq "3.14)" && echo "$result" | grep -Fq " 30);" && echo "$result" | grep -vq "30.0"
+    });
+    test_sql_float.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_float.step);
+
+    // Integration test 174g: Empty result set
+    const test_sql_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe -O sql 'SELECT * FROM t WHERE age > 100')
+        \\test -z "$result"
+    });
+    test_sql_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_empty.step);
+
+    // Integration test 174h: Column name with special characters (quoted identifier)
+    const test_sql_quoted_col = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe -O sql 'SELECT 1 AS "my col", 2 AS "order"')
+        \\echo "$result" | grep -Fq '"my col"' && echo "$result" | grep -Fq '"order"'
+    });
+    test_sql_quoted_col.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_quoted_col.step);
+
+    // Integration test 174i: Table name with spaces (output should quote it)
+    const test_sql_quoted_table = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\nAlice\n' | ./zig-out/bin/sql-pipe -O sql --sql-table 'my table' 'SELECT * FROM t')
+        \\echo "$result" | grep -Fq '"my table"'
+    });
+    test_sql_quoted_table.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_quoted_table.step);
+
     // ─── Fixture-based integration tests ─────────────────────────────────────
     // These tests use sample files committed in tests/fixtures/ to exercise
     // the binary end-to-end with realistic data across all supported formats.
