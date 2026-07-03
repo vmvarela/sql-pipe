@@ -3027,4 +3027,96 @@ pub fn build(b: *std.Build) void {
     });
     test_explain_empty_stdin.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_explain_empty_stdin.step);
+
+    // ─── --completions integration tests (issue #175) ────────────────────────────
+
+    // Integration test 175a: --completions bash generates valid output (contains compete)
+    const test_completions_bash = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --completions bash | grep -q 'complete -F _sql-pipe sql-pipe'
+    });
+    test_completions_bash.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_bash.step);
+
+    // Integration test 175b: --completions zsh generates valid output (contains #compdef)
+    const test_completions_zsh = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --completions zsh | grep -q '#compdef sql-pipe'
+    });
+    test_completions_zsh.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_zsh.step);
+
+    // Integration test 175c: --completions fish generates valid output (contains complete -c)
+    const test_completions_fish = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --completions fish | grep -q 'complete -c sql-pipe'
+    });
+    test_completions_fish.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_fish.step);
+
+    // Integration test 175d: --completions with unknown shell exits 1
+    const test_completions_invalid = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(./zig-out/bin/sql-pipe --completions invalid 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'unknown shell' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_completions_invalid.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_invalid.step);
+
+    // Integration test 175e: --completions without value exits 1
+    const test_completions_missing = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --completions 2>&1 >/dev/null; test $? -eq 1
+    });
+    test_completions_missing.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_missing.step);
+
+    // Integration test 175f: --completions=zsh (equals syntax) works
+    const test_completions_equals = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --completions=zsh | grep -q '_sql-pipe'
+    });
+    test_completions_equals.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_equals.step);
+
+    // Integration test 175g: --help contains --completions
+    const test_completions_help = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --help 2>&1 >/dev/null | grep -q -- '--completions'
+    });
+    test_completions_help.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_help.step);
+
+    // Integration test 175h: Bash completion script has valid syntax
+    const test_completions_bash_syntax = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\script=$(./zig-out/bin/sql-pipe --completions bash)
+        \\# Define _init_completion stub and check syntax with bash -n
+        \\stub='_init_completion() { :; }; complete -F _sql-pipe sql-pipe; '"$script"';'
+        \\echo "$stub" | bash -n 2>&1 || exit 1
+    });
+    test_completions_bash_syntax.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_bash_syntax.step);
+
+    // Integration test 175i: Zsh completion script has valid syntax (skip if zsh not available)
+    const test_completions_zsh_syntax = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\script=$(./zig-out/bin/sql-pipe --completions zsh)
+        \\if command -v zsh >/dev/null 2>&1; then
+        \\  echo "$script" | zsh -n 2>&1 || exit 1
+        \\fi
+    });
+    test_completions_zsh_syntax.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_zsh_syntax.step);
+
+    // Integration test 175j: Fish completion script has valid syntax (skip if fish not available)
+    const test_completions_fish_syntax = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\script=$(./zig-out/bin/sql-pipe --completions fish)
+        \\if command -v fish >/dev/null 2>&1; then
+        \\  echo "$script" | fish --no-execute 2>&1 || exit 1
+        \\fi
+    });
+    test_completions_fish_syntax.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_completions_fish_syntax.step);
 }
