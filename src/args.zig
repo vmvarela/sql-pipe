@@ -73,6 +73,7 @@ pub const SqlPipeError = error{
     TableWithNonCsv,
     InvalidQueryFile,
     MultipleQueryFiles,
+    MissingNullValue,
 };
 
 pub const ParsedArgs = struct {
@@ -118,6 +119,8 @@ pub const ParsedArgs = struct {
     disk: bool,
     /// Pretty-printed table output mode (default: auto — TTY detection).
     table_mode: TableMode = .auto,
+    /// Custom string for NULL values in output (null = format default: "NULL" for CSV/TSV/table, "" for markdown).
+    null_value: ?[]const u8 = null,
 };
 
 pub const ColumnsArgs = struct {
@@ -244,6 +247,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\                               Also sets PRAGMA temp_store = FILE for transient structures
         \\  --table                      Force pretty-printed table output (auto-detected on TTY)
         \\  --no-table                   Force CSV output even when stdout is a TTY
+        \\  --null-value <string>        Custom NULL representation in output (default: "NULL" for CSV/TSV/table)
         \\  -f, --file <file>            Read SQL query from file instead of command line
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
@@ -318,6 +322,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var xml_row: []const u8 = "row";
     var xml_root_input: ?[]const u8 = null;
     var xml_row_input: ?[]const u8 = null;
+    var null_value: ?[]const u8 = null;
     var json_path: ?[]const u8 = null;
     var sample_mode = false;
     var sample_n: usize = 10;
@@ -449,6 +454,12 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             disk = true;
         } else if (std.mem.eql(u8, arg, "--table")) {
             table_mode = .always;
+        } else if (std.mem.eql(u8, arg, "--null-value")) {
+            i += 1;
+            if (i >= args.len) return error.MissingNullValue;
+            null_value = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--null-value=")) {
+            null_value = arg["--null-value=".len..];
         } else if (std.mem.eql(u8, arg, "--no-table")) {
             table_mode = .never;
         } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--file")) {
@@ -653,6 +664,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .json_path = json_path,
         .disk = disk,
         .table_mode = table_mode,
+        .null_value = null_value,
     } };
 }
 

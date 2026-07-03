@@ -156,6 +156,12 @@ OPTIONS
 		*--header*, CSV). Exits with code 1 and an error message if the file
 		cannot be created (bad path or insufficient permissions).
 
+	*--null-value* <string>
+		Custom representation for SQL NULL values in CSV, TSV, and table
+		output. By default, NULL values are printed as the string *NULL*.
+		Pass an empty string (*--null-value ''*), *N/A*, or any other label.
+		Has no effect on JSON output (JSON always outputs native *null*).
+
 	*-f, --file* <file>
 		Read the SQL query from <file> instead of the command line. When
 		this flag is used, all positional arguments are treated as data
@@ -285,6 +291,16 @@ EXAMPLES
 	| Alice |  30 |++
 	| Bob   |  25 |++
 	| Carol |  35 |
+
+	Custom NULL representation (replace NULL with empty string):
+
+		$ printf 'name,email\nAlice,a@b.com\nBob,\nCarol,c@d.com' \
+		    | sql-pipe --null-value '' 'SELECT * FROM t'
+
+	Output:++
+	Alice,a@b.com++
+	Bob,++
+	Carol,c@d.com
 
 	Preview schema and first 3 rows of a CSV file:
 

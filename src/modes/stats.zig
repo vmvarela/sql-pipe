@@ -149,7 +149,7 @@ fn printTableStats(
     const col_count = c.sqlite3_column_count(stmt);
     if (col_count == 0) return;
 
-    table.writeTable(allocator, stdout_writer, stmt.?, col_count) catch |err| {
+    table.writeTable(allocator, stdout_writer, stmt.?, col_count, null) catch |err| {
         std.log.err("failed to write stats table: {}", .{err});
         std.process.exit(@intFromEnum(ExitCode.usage));
     };
