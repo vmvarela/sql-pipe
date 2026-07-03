@@ -155,6 +155,7 @@ pub fn writeXmlRow(
     col_names: []const [*:0]const u8,
     writer: *std.Io.Writer,
     row_name: []const u8,
+    null_value: ?[]const u8,
 ) !void {
     try writer.writeByte('<');
     try writer.writeAll(row_name);
@@ -166,7 +167,10 @@ pub fn writeXmlRow(
         try writer.writeAll(name);
         try writer.writeByte('>');
         switch (c.sqlite3_column_type(stmt, i)) {
-            c.SQLITE_NULL => {},
+            c.SQLITE_NULL => {
+                const text = null_value orelse "";
+                try writeXmlEscaped(writer, text);
+            },
             c.SQLITE_INTEGER => try writer.print("{d}", .{c.sqlite3_column_int64(stmt, i)}),
             c.SQLITE_FLOAT => {
                 const f = c.sqlite3_column_double(stmt, i);

@@ -69,11 +69,14 @@ pub const SqlPipeError = error{
     SampleWithOutput,
     InvalidSampleCount,
     StatsWithFlags,
+    SchemaWithFlags,
     DuplicateTableName,
     TableWithNonCsv,
     InvalidQueryFile,
     MultipleQueryFiles,
     MissingSqlTableValue,
+    ExplainWithFlags,
+    MissingNullValue,
 };
 
 pub const ParsedArgs = struct {
@@ -117,10 +120,14 @@ pub const ParsedArgs = struct {
     /// Use a file-backed temporary SQLite database instead of :memory: when true.
     /// Enables processing datasets larger than available RAM; also sets PRAGMA temp_store = FILE.
     disk: bool,
+    /// Print EXPLAIN QUERY PLAN to stderr before executing the query.
+    explain: bool = false,
     /// Pretty-printed table output mode (default: auto — TTY detection).
     table_mode: TableMode = .auto,
     /// Target table name for SQL INSERT output (default: "t").
     sql_table: []const u8 = "t",
+    /// Custom string for NULL values in output (null = format default: "NULL" for CSV/TSV/table, "" for markdown).
+    null_value: ?[]const u8 = null,
 };
 
 pub const ColumnsArgs = struct {
@@ -181,6 +188,17 @@ pub const StatsArgs = struct {
     type_inference: bool,
 };
 
+pub const SchemaArgs = struct {
+    /// Input files as positional arguments; empty when reading from stdin only.
+    files: []const FileInput = &.{},
+    /// CSV field delimiter — 1 to 8 bytes (default: ",").
+    delimiter: []const u8,
+    /// Input format (default: csv).
+    input_format: InputFormat,
+    /// Infer column types from buffered rows when true; show all TEXT when false.
+    type_inference: bool,
+};
+
 pub const ArgsResult = union(enum) {
     /// Normal execution: run the query.
     parsed: ParsedArgs,
@@ -196,6 +214,8 @@ pub const ArgsResult = union(enum) {
     sample: SampleArgs,
     /// User requested --stats: compute per-column statistics.
     stats: StatsArgs,
+    /// User requested --schema: print inferred CREATE TABLE DDL.
+    schema: SchemaArgs,
 };
 
 pub fn printUsage(writer: *std.Io.Writer) !void {
@@ -239,6 +259,10 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\                               Incompatible with --json and with a query argument.
         \\  --stats                      Compute per-column statistics (type, non-null, min, max, mean)
         \\  --profile                    Alias for --stats
+        \\  --schema                     Print inferred CREATE TABLE DDL to stdout and exit
+        \\                               No query required. One DDL block per input file; stdin uses table `t`.
+        \\                               Compatible with --delimiter, --tsv, --no-type-inference, -I.
+        \\                               Mutually exclusive with --explain and query arguments.
         \\  --output <file>              Write results to file instead of stdout
         \\  --xml-root <name>            Root element name for XML I/O (default: results)
         \\  --xml-row <name>             Row element name for XML I/O (default: row)
@@ -246,8 +270,10 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --disk                       Use a file-backed temp database instead of :memory:
         \\                               Enables processing datasets larger than available RAM
         \\                               Also sets PRAGMA temp_store = FILE for transient structures
+        \\  --explain                    Print SQLite query plan to stderr before executing
         \\  --table                      Force pretty-printed table output (auto-detected on TTY)
         \\  --no-table                   Force CSV output even when stdout is a TTY
+        \\  --null-value <string>        Custom NULL representation in output (default: "NULL" for CSV/TSV/table)
         \\  -f, --file <file>            Read SQL query from file instead of command line
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
@@ -322,11 +348,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var xml_row: []const u8 = "row";
     var xml_root_input: ?[]const u8 = null;
     var xml_row_input: ?[]const u8 = null;
+    var null_value: ?[]const u8 = null;
     var json_path: ?[]const u8 = null;
     var sample_mode = false;
     var sample_n: usize = 10;
     var stats_mode = false;
+    var schema_mode = false;
     var disk = false;
+    var explain = false;
     var table_mode: TableMode = .auto;
     var sql_table: []const u8 = "t";
     var seen_dashdash = false;
@@ -424,6 +453,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             sample_mode = true;
         } else if (std.mem.eql(u8, arg, "--stats") or std.mem.eql(u8, arg, "--profile")) {
             stats_mode = true;
+        } else if (std.mem.eql(u8, arg, "--schema")) {
+            schema_mode = true;
         } else if (std.mem.eql(u8, arg, "--output")) {
             i += 1;
             if (i >= args.len) return error.InvalidOutputPath;
@@ -458,8 +489,16 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             json_path = arg["--json-path=".len..];
         } else if (std.mem.eql(u8, arg, "--disk")) {
             disk = true;
+        } else if (std.mem.eql(u8, arg, "--explain")) {
+            explain = true;
         } else if (std.mem.eql(u8, arg, "--table")) {
             table_mode = .always;
+        } else if (std.mem.eql(u8, arg, "--null-value")) {
+            i += 1;
+            if (i >= args.len) return error.MissingNullValue;
+            null_value = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--null-value=")) {
+            null_value = arg["--null-value=".len..];
         } else if (std.mem.eql(u8, arg, "--no-table")) {
             table_mode = .never;
         } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--file")) {
@@ -486,7 +525,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
 
     // ─── Convert positional args to files + query ──────────────────────────
     const pos = positional_args.items;
-    const is_special_mode = list_columns or validate or sample_mode or stats_mode;
+    const is_special_mode = list_columns or validate or sample_mode or stats_mode or schema_mode;
 
     // Build file list from positional args
     var files: std.ArrayList(FileInput) = .empty;
@@ -583,6 +622,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (stats_mode and (list_columns or validate or sample_mode or query != null or query_file != null or output != null))
         return error.StatsWithFlags;
 
+    // --explain is mutually exclusive with mode flags and --output
+    if (explain and (list_columns or validate or sample_mode or stats_mode or schema_mode or output != null))
+        return error.ExplainWithFlags;
+
+    // --schema is mutually exclusive with mode flags, query, output, and --explain
+    if (schema_mode and (explain or list_columns or validate or sample_mode or stats_mode or query != null or query_file != null or output != null))
+        return error.SchemaWithFlags;
+
     // --silent and --verbose are mutually exclusive
     if (silent and verbose)
         return error.SilentVerboseConflict;
@@ -644,6 +691,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             .type_inference = type_inference,
         } };
 
+    // --schema mode: print inferred CREATE TABLE DDL and exit
+    if (schema_mode)
+        return .{ .schema = SchemaArgs{
+            .files = files.items,
+            .delimiter = delimiter,
+            .input_format = effective_input_format,
+            .type_inference = type_inference,
+        } };
+
     return .{ .parsed = ParsedArgs{
         .query = query orelse (if (query_file != null) "" else return error.MissingQuery),
         .query_file = query_file,
@@ -663,8 +719,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .xml_row_input = xml_row_input,
         .json_path = json_path,
         .disk = disk,
+        .explain = explain,
         .table_mode = table_mode,
         .sql_table = sql_table,
+        .null_value = null_value,
     } };
 }
 

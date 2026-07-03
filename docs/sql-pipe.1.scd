@@ -11,6 +11,8 @@ SYNOPSIS
 	*sql-pipe* --columns [OPTIONS] [<file>]
 	*sql-pipe* --sample [<n>] [OPTIONS] [<file>]
 	*sql-pipe* --stats [OPTIONS] [<file>]
+	*sql-pipe* --schema [OPTIONS] [<file>...]
+	*sql-pipe* --explain [OPTIONS] [<file>] <query>
 
 DESCRIPTION
 	sql-pipe reads CSV, JSON, NDJSON, or XML data from standard input and/or
@@ -153,11 +155,33 @@ OPTIONS
 		*--validate*, *--sample*, and *--output*.
 		Alias: *--profile*.
 
+	*--schema*
+		Load input and print the inferred CREATE TABLE DDL to standard
+		output. Each input file generates one DDL block; stdin uses table
+		name *t*. No query is required. Compatible with *--delimiter*,
+		*--tsv*, *--no-type-inference*, and *-I* / *--input-format* (csv,
+		tsv, json, ndjson, xml). Mutually exclusive with a query argument,
+		*--columns*, *--validate*, *--sample*, *--stats*, *--explain*,
+		and *--output*.
+
 	*--output* <file>
 		Write results to <file> instead of standard output. Creates or
 		overwrites the file. Compatible with all output modes (*--json*,
 		*--header*, CSV). Exits with code 1 and an error message if the file
 		cannot be created (bad path or insufficient permissions).
+
+	*--explain*
+		Before executing the SQL query, run *EXPLAIN QUERY PLAN* and print
+		the execution plan to standard error. Each line is prefixed with
+		*QUERY PLAN:* so stdout remains clean for piping. The actual query
+		still executes normally and results go to stdout. Mutually exclusive
+		with *--columns*, *--validate*, *--sample*, *--stats*, *--schema*, and *--output*.
+
+	*--null-value* <string>
+		Custom representation for SQL NULL values in CSV, TSV, and table
+		output. By default, NULL values are printed as the string *NULL*.
+		Pass an empty string (*--null-value ''*), *N/A*, or any other label.
+		Has no effect on JSON output (JSON always outputs native *null*).
 
 	*-f, --file* <file>
 		Read the SQL query from <file> instead of the command line. When
@@ -289,6 +313,16 @@ EXAMPLES
 	| Bob   |  25 |++
 	| Carol |  35 |
 
+	Custom NULL representation (replace NULL with empty string):
+
+		$ printf 'name,email\nAlice,a@b.com\nBob,\nCarol,c@d.com' \
+		    | sql-pipe --null-value '' 'SELECT * FROM t'
+
+	Output:++
+	Alice,a@b.com++
+	Bob,++
+	Carol,c@d.com
+
 	Preview schema and first 3 rows of a CSV file:
 
 		$ cat sales.csv | sql-pipe --sample 3
@@ -303,6 +337,19 @@ EXAMPLES
 	1,North,1250.00++
 	2,South,875.50++
 	3,East,2100.75
+
+	Inspect query execution plan before running (plan goes to stderr,
+	results to stdout):
+
+		$ printf 'region,amount\nEast,100\nWest,200\n' | sql-pipe --explain 'SELECT region, SUM(amount) FROM t GROUP BY region'
+		QUERY PLAN: SCAN t
+		East,100
+		West,200
+
+	Print inferred CREATE TABLE DDL without running a query:
+
+		$ printf 'name,age\nAlice,30\nBob,25\n' | sql-pipe --schema
+		CREATE TABLE "t" ("name" TEXT, "age" INTEGER);
 
 EXIT CODES
 	*0*

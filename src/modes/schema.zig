@@ -6,16 +6,15 @@ const sqlite_mod = @import("../sqlite.zig");
 const loader = @import("../loader.zig");
 const format = @import("../format.zig");
 const args_mod = @import("../args.zig");
-const table = @import("../table.zig");
 
 const ExitCode = args_mod.ExitCode;
 const fatal = @import("../sqlite.zig").fatal;
 const loadCsvInput = loader.loadCsvInput;
 
-pub fn runStats(
+pub fn runSchema(
     allocator: std.mem.Allocator,
     io: std.Io,
-    args: args_mod.StatsArgs,
+    args: args_mod.SchemaArgs,
     stderr_writer: *std.Io.Writer,
     stdout_writer: *std.Io.Writer,
 ) void {
@@ -54,13 +53,13 @@ pub fn runStats(
             defer std.Io.File.close(file, io);
             var file_reader = std.Io.File.reader(file, io, &file_buf);
             loadTable(allocator, io, db, file_input.table_name, file_input.format, &file_reader.interface, parsed, stderr_writer);
-            printTableStats(allocator, db, file_input.table_name, stdout_writer, stderr_writer);
+            printTableSchema(allocator, db, file_input.table_name, stdout_writer, stderr_writer);
         }
     } else {
         var stdin_buf: [4096]u8 = undefined;
         var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
         loadTable(allocator, io, db, "t", args.input_format, &stdin_reader.interface, parsed, stderr_writer);
-        printTableStats(allocator, db, "t", stdout_writer, stderr_writer);
+        printTableSchema(allocator, db, "t", stdout_writer, stderr_writer);
     }
 
     stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
@@ -91,66 +90,38 @@ fn loadTable(
     if (rows == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 }
 
-fn printTableStats(
+fn printTableSchema(
     allocator: std.mem.Allocator,
     db: *c.sqlite3,
     table_name: []const u8,
     stdout_writer: *std.Io.Writer,
     stderr_writer: *std.Io.Writer,
 ) void {
-    const info = sqlite_mod.getTableColumnsWithTypes(allocator, db, table_name, stderr_writer);
-    defer {
-        for (info.names) |n| allocator.free(n);
-        allocator.free(info.names);
-        for (info.types) |t| allocator.free(t);
-        allocator.free(info.types);
-    }
-
-    if (info.names.len == 0) return;
-
     var sql: std.ArrayList(u8) = .empty;
     defer sql.deinit(allocator);
-    sql.appendSlice(allocator, "SELECT \"column\", \"type\", \"non-null\", \"min\", \"max\", \"mean\" FROM (") catch
+    sql.appendSlice(allocator, "SELECT sql FROM sqlite_master WHERE type='table' AND name=") catch
         fatal("out of memory", stderr_writer, .csv_error, .{});
-
-    for (info.names, info.types, 0..) |col_name, col_type, i| {
-        sql.appendSlice(allocator, if (i > 0) " UNION ALL SELECT " else "SELECT ") catch
-            fatal("out of memory", stderr_writer, .csv_error, .{});
-
-        sqlite_mod.appendStringLiteral(allocator, stderr_writer, &sql, col_name);
-        sql.appendSlice(allocator, " AS \"column\", '") catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sql.appendSlice(allocator, col_type) catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sql.appendSlice(allocator, "' AS \"type\", COUNT(") catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sqlite_mod.appendQuotedId(allocator, stderr_writer, &sql, col_name);
-        sql.appendSlice(allocator, ") AS \"non-null\", MIN(") catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sqlite_mod.appendQuotedId(allocator, stderr_writer, &sql, col_name);
-        sql.appendSlice(allocator, ") AS \"min\", MAX(") catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sqlite_mod.appendQuotedId(allocator, stderr_writer, &sql, col_name);
-        sql.appendSlice(allocator, ") AS \"max\", CASE WHEN '") catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sql.appendSlice(allocator, col_type) catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sql.appendSlice(allocator, "' IN ('INTEGER','REAL') THEN CAST(AVG(") catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sqlite_mod.appendQuotedId(allocator, stderr_writer, &sql, col_name);
-        sql.appendSlice(allocator, ") AS TEXT) ELSE '' END AS \"mean\", ") catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        var cid_buf: [16]u8 = undefined;
-        const cid_str = std.fmt.bufPrint(&cid_buf, "{d}", .{i}) catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sql.appendSlice(allocator, cid_str) catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sql.appendSlice(allocator, " AS \"cid\" FROM ") catch fatal("out of memory", stderr_writer, .csv_error, .{});
-        sqlite_mod.appendQuotedId(allocator, stderr_writer, &sql, table_name);
-    }
-
-    sql.appendSlice(allocator, ") ORDER BY \"cid\"") catch fatal("out of memory", stderr_writer, .csv_error, .{});
-    sql.append(allocator, 0) catch fatal("out of memory", stderr_writer, .csv_error, .{});
+    sqlite_mod.appendQuotedId(allocator, stderr_writer, &sql, table_name);
+    sql.append(allocator, 0) catch
+        fatal("out of memory", stderr_writer, .csv_error, .{});
 
     var stmt: ?*c.sqlite3_stmt = null;
     if (c.sqlite3_prepare_v2(db, sql.items.ptr, -1, &stmt, null) != c.SQLITE_OK)
-        fatal("failed to prepare stats query", stderr_writer, .sql_error, .{});
-
+        fatal("failed to prepare schema query", stderr_writer, .sql_error, .{});
     defer _ = c.sqlite3_finalize(stmt);
-    const col_count = c.sqlite3_column_count(stmt);
-    if (col_count == 0) return;
 
-    table.writeTable(allocator, stdout_writer, stmt.?, col_count, null) catch |err| {
-        std.log.err("failed to write stats table: {}", .{err});
+    if (c.sqlite3_step(stmt) != c.SQLITE_ROW)
+        fatal("schema not found in sqlite_master", stderr_writer, .sql_error, .{});
+
+    const ddl = sqlite_mod.columnText(stmt.?, 0) orelse
+        fatal("sqlite_master.sql is NULL", stderr_writer, .sql_error, .{});
+
+    stdout_writer.writeAll(ddl) catch |err| {
+        std.log.err("failed to write schema: {}", .{err});
+        std.process.exit(@intFromEnum(ExitCode.usage));
+    };
+    stdout_writer.writeAll(";\n") catch |err| {
+        std.log.err("failed to write schema: {}", .{err});
         std.process.exit(@intFromEnum(ExitCode.usage));
     };
 }

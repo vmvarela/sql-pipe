@@ -71,6 +71,8 @@ pub const WriteOpts = struct {
     xml_row: []const u8 = "row",
     /// Target table name for SQL INSERT output (default: "t").
     sql_table: []const u8 = "t",
+    /// Custom NULL representation (null = format default).
+    null_value: ?[]const u8 = null,
 };
 
 // ─── Output writer ──────────────────────────────────────
@@ -172,13 +174,14 @@ pub const OutputWriter = struct {
                 self.first_row = false;
             },
             .ndjson => try json_mod.printNdjsonRow(stmt, self.col_count, self.col_names, writer),
-            .csv, .tsv => try csvPrintRow(stmt, self.col_count, writer, self.csvDelimiter()),
+            .csv, .tsv => try csvPrintRow(stmt, self.col_count, writer, self.csvDelimiter(), self.opts.null_value),
             .xml => try xml_mod.writeXmlRow(
                 stmt,
                 self.col_count,
                 self.col_names,
                 writer,
                 self.opts.xml_row,
+                self.opts.null_value,
             ),
             .sql => try self.writeSqlRow(stmt, writer),
             .markdown => unreachable, // handled before OutputWriter in execQuery
@@ -291,12 +294,14 @@ fn csvPrintRow(
     col_count: c_int,
     writer: *std.Io.Writer,
     delimiter: []const u8,
+    null_value: ?[]const u8,
 ) !void {
     var i: c_int = 0;
     while (i < col_count) : (i += 1) {
         if (i > 0) try writer.writeAll(delimiter);
         if (c.sqlite3_column_type(stmt, i) == c.SQLITE_NULL) {
-            try writer.writeAll("NULL");
+            const text = null_value orelse "NULL";
+            try writeField(writer, text, delimiter);
         } else {
             if (sqlite_mod.columnText(stmt, i)) |text| {
                 try writeField(writer, text, delimiter);

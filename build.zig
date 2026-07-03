@@ -1863,6 +1863,163 @@ pub fn build(b: *std.Build) void {
     test_f_flag_multiple.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_f_flag_multiple.step);
 
+    // ─── --schema integration tests (issue #176) ──────────────────────────────
+
+    // Integration test 176a: --schema on CSV stdin prints CREATE TABLE DDL
+    const test_schema_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --schema)
+        \\echo "$result" | grep -q 'CREATE TABLE "t"'
+    });
+    test_schema_stdin.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_stdin.step);
+
+    // Integration test 176b: --schema shows inferred column types
+    const test_schema_types = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,name,amount,ts\n1,Alice,3.14,2024-01-15\n' | ./zig-out/bin/sql-pipe --schema)
+        \\echo "$result" | grep -q '"id" INTEGER' && echo "$result" | grep -q '"name" TEXT' && echo "$result" | grep -q '"amount" REAL' && echo "$result" | grep -q '"ts" TEXT'
+    });
+    test_schema_types.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_types.step);
+
+    // Integration test 176c: --schema outputs semicolon-terminated DDL
+    const test_schema_semicolon = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'x,y\n1,2\n' | ./zig-out/bin/sql-pipe --schema)
+        \\echo "$result" | grep -q ';$'
+    });
+    test_schema_semicolon.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_semicolon.step);
+
+    // Integration test 176d: --schema with single file argument
+    const test_schema_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'name,age\nAlice,30\n' > "$dir/data.csv"
+        \\result=$(./zig-out/bin/sql-pipe "$dir/data.csv" --schema)
+        \\rm -rf "$dir"
+        \\echo "$result" | grep -q 'CREATE TABLE "data"'
+    });
+    test_schema_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_file.step);
+
+    // Integration test 176e: --schema with multiple file arguments
+    const test_schema_multi_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'id,name\n1,Alice\n' > "$dir/a.csv"
+        \\printf 'id,val\n1,100\n' > "$dir/b.csv"
+        \\result=$(./zig-out/bin/sql-pipe "$dir/a.csv" "$dir/b.csv" --schema)
+        \\rm -rf "$dir"
+        \\echo "$result" | grep -q 'CREATE TABLE "a"' && echo "$result" | grep -q 'CREATE TABLE "b"'
+    });
+    test_schema_multi_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_multi_file.step);
+
+    // Integration test 176f: --schema with --no-type-inference shows all TEXT
+    const test_schema_no_type_inference = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,amount\n1,3.14\n' | ./zig-out/bin/sql-pipe --schema --no-type-inference)
+        \\echo "$result" | grep -q '"id" TEXT' && echo "$result" | grep -q '"amount" TEXT'
+    });
+    test_schema_no_type_inference.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_no_type_inference.step);
+
+    // Integration test 176f2: --schema on empty input exits non-zero
+    const test_schema_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --schema 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'empty input' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_schema_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_empty.step);
+
+    // Integration test 176g: --schema with --tsv input
+    const test_schema_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\tage\nAlice\t30\n' | ./zig-out/bin/sql-pipe --schema --tsv)
+        \\echo "$result" | grep -q 'CREATE TABLE "t"' && echo "$result" | grep -q '"age" INTEGER'
+    });
+    test_schema_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_tsv.step);
+
+    // Integration test 176h: --schema with JSON input (-I json)
+    const test_schema_json = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf '[{"name":"Alice","age":30}]' | ./zig-out/bin/sql-pipe --schema -I json)
+        \\echo "$result" | grep -q 'CREATE TABLE "t"' && echo "$result" | grep -q '"name" TEXT' && echo "$result" | grep -q '"age" TEXT'
+    });
+    test_schema_json.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_json.step);
+
+    // Integration test 176i: --schema is mutually exclusive with --columns
+    const test_schema_excl_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema --columns 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_schema_excl_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_excl_columns.step);
+
+    // Integration test 176j: --schema is mutually exclusive with --validate
+    const test_schema_excl_validate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema --validate 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_schema_excl_validate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_excl_validate.step);
+
+    // Integration test 176k: --schema is mutually exclusive with --sample
+    const test_schema_excl_sample = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema --sample 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_schema_excl_sample.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_excl_sample.step);
+
+    // Integration test 176l: --schema is mutually exclusive with --stats
+    const test_schema_excl_stats = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema --stats 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_schema_excl_stats.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_excl_stats.step);
+
+    // Integration test 176m: --schema with a non-file positional arg exits 2 (tried as file)
+    const test_schema_excl_query = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: cannot open file' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    test_schema_excl_query.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_excl_query.step);
+
+    // Integration test 176n: --schema is mutually exclusive with --output
+    const test_schema_excl_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema --output /tmp/x 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_schema_excl_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_excl_output.step);
+
+    // Integration test 176o: --schema is mutually exclusive with -f/--file
+    const test_schema_excl_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\dir=$(mktemp -d)
+        \\printf 'SELECT 1' > "$dir/q.sql"
+        \\printf 'a,b\n1,2\n' > "$dir/d.csv"
+        \\msg=$(./zig-out/bin/sql-pipe --schema -f "$dir/q.sql" "$dir/d.csv" 2>&1 >/dev/null; echo "EXIT:$?")
+        \\rm -rf "$dir"
+        \\echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_schema_excl_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_excl_file.step);
+
     // ─── Table output tests (--table / --no-table) ────────────────────────────
 
     // Integration test 156a: --table produces formatted table output
@@ -2560,4 +2717,241 @@ pub fn build(b: *std.Build) void {
     });
     test_stats_delimiter.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_stats_delimiter.step);
+
+    // ─── --null-value integration tests (issue #170) ─────────────────────────
+
+    // Integration test 170a: CSV output respects --null-value 'N/A'
+    const test_null_value_csv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\nCarol,35\n' \
+        \\    | ./zig-out/bin/sql-pipe --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf 'Alice,30\nBob,N/A\nCarol,35')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_csv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_csv.step);
+
+    // Integration test 170b: CSV output respects --null-value '' (explicit empty string)
+    const test_null_value_csv_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe --null-value '' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf 'Alice,30\nBob,')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_csv_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_csv_empty.step);
+
+    // Integration test 170c: CSV default unchanged when no flag (still "NULL")
+    const test_null_value_csv_default = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf 'Alice,30\nBob,NULL')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_csv_default.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_csv_default.step);
+
+    // Integration test 170d: TSV output respects --null-value '-'
+    const test_null_value_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe -O tsv --null-value '-' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf 'Alice\t30\nBob\t-')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_tsv.step);
+
+    // Integration test 170e: JSON ignores --null-value (still outputs JSON null)
+    const test_null_value_json_ignored = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe --json --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf '[{"name":"Alice","score":30},{"name":"Bob","score":null}]')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_json_ignored.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_json_ignored.step);
+
+    // Integration test 170f: NDJSON ignores --null-value (still outputs JSON null)
+    const test_null_value_ndjson_ignored = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe -O ndjson --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf '{"name":"Alice","score":30}\n{"name":"Bob","score":null}')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_ndjson_ignored.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_ndjson_ignored.step);
+
+    // Integration test 170g: XML output respects --null-value 'N/A'
+    const test_null_value_xml = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe -O xml --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\echo "$result" | grep -q '<score>N/A</score>'
+    });
+    test_null_value_xml.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_xml.step);
+
+    // Integration test 170h: XML default null renders empty element
+    const test_null_value_xml_default = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe -O xml 'SELECT name, score FROM t ORDER BY name')
+        \\echo "$result" | grep -q '<score></score>'
+    });
+    test_null_value_xml_default.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_xml_default.step);
+
+    // Integration test 170i: --null-value with --help includes flag in output
+    const test_null_value_help = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --help 2>&1 >/dev/null | grep -q -e '--null-value'
+    });
+    test_null_value_help.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_help.step);
+
+    // Integration test 170j: --null-value without value exits 1
+    const test_null_value_missing = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --null-value 2>&1 >/dev/null; test $? -eq 1
+    });
+    test_null_value_missing.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_missing.step);
+
+    // Integration test 170k: table output respects --null-value
+    const test_null_value_table = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' | ./zig-out/bin/sql-pipe --table --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\echo "$result" | grep -q 'N/A'
+    });
+    test_null_value_table.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_table.step);
+
+    // Integration test 170l: markdown output respects --null-value (non-numeric column)
+    const test_null_value_markdown = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,note\nAlice,good\nBob,\n' | ./zig-out/bin/sql-pipe -O markdown --null-value 'MISSING' 'SELECT name, note FROM t ORDER BY name')
+        \\echo "$result" | grep -q 'MISSING'
+    });
+    test_null_value_markdown.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_markdown.step);
+
+    // ─── --explain integration tests ─────────────────────────────────────
+
+    // Integration test: --explain basic — prints plan to stderr, results to stdout, exit 0
+    const test_explain_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\data='a,b\n1,2\n3,4\n'
+        \\stderr=$(printf "$data" | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM t' 2>&1 >/dev/null)
+        \\echo "$stderr" | grep -q 'QUERY PLAN:' || exit 1
+        \\stdout=$(printf "$data" | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM t' 2>/dev/null)
+        \\[ "$stdout" = "$(printf '1,2\n3,4')" ] || exit 1
+    });
+    test_explain_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_basic.step);
+
+    // Integration test: --explain stdout not contaminated with "QUERY PLAN:"
+    const test_explain_stdout_clean = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM t' 2>/dev/null | grep -c 'QUERY' || true)
+        \\[ "$result" = "0" ]
+    });
+    test_explain_stdout_clean.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_stdout_clean.step);
+
+    // Integration test: --explain exit code 0 on success
+    const test_explain_exit_0 = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM t' >/dev/null 2>&1
+        \\[ $? -eq 0 ]
+    });
+    test_explain_exit_0.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_exit_0.step);
+
+    // Integration test: --explain + --columns → error exit 1
+    const test_explain_with_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --columns 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_columns.step);
+
+    // Integration test: --explain + --validate → error exit 1
+    const test_explain_with_validate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --validate 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_validate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_validate.step);
+
+    // Integration test: --explain + --sample → error exit 1
+    const test_explain_with_sample = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --sample 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_sample.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_sample.step);
+
+    // Integration test: --explain + --stats → error exit 1
+    const test_explain_with_stats = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --stats 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_stats.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_stats.step);
+
+    // Integration test: --explain + --output → error exit 1
+    const test_explain_with_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --output /tmp/sp_test_out.csv 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_output.step);
+
+    // Integration test: --help contains --explain
+    const test_explain_help = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --help 2>&1 >/dev/null | grep -q -- '--explain'
+    });
+    test_explain_help.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_help.step);
+
+    // Integration test: --explain with nonexistent table → exit 3
+    const test_explain_nonexistent = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM nonexistent' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: no such table' && echo "$msg" | grep -q 'EXIT:3'
+    });
+    test_explain_nonexistent.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_nonexistent.step);
+
+    // Integration test: --explain with -f/--file query
+    const test_explain_query_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'SELECT * FROM t' > "$tmp"
+        \\result=$(printf 'x\n1\n2\n' | ./zig-out/bin/sql-pipe -f "$tmp" --explain 2>/dev/null)
+        \\rm -f "$tmp"
+        \\[ "$result" = "$(printf '1\n2')" ]
+    });
+    test_explain_query_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_query_file.step);
+
+    // Integration test: --explain with empty stdin (< /dev/null) — no crash
+    const test_explain_empty_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --explain 'SELECT 1' < /dev/null >/dev/null 2>&1
+        \\[ $? -eq 0 ]
+    });
+    test_explain_empty_stdin.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_empty_stdin.step);
 }
