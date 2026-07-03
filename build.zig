@@ -2597,4 +2597,119 @@ pub fn build(b: *std.Build) void {
     });
     test_null_value_markdown.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_null_value_markdown.step);
+
+    // ─── --explain integration tests ─────────────────────────────────────
+
+    // Integration test: --explain basic — prints plan to stderr, results to stdout, exit 0
+    const test_explain_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\data='a,b\n1,2\n3,4\n'
+        \\stderr=$(printf "$data" | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM t' 2>&1 >/dev/null)
+        \\echo "$stderr" | grep -q 'QUERY PLAN:' || exit 1
+        \\stdout=$(printf "$data" | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM t' 2>/dev/null)
+        \\[ "$stdout" = "$(printf '1,2\n3,4')" ] || exit 1
+    });
+    test_explain_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_basic.step);
+
+    // Integration test: --explain stdout not contaminated with "QUERY PLAN:"
+    const test_explain_stdout_clean = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM t' 2>/dev/null | grep -c 'QUERY' || true)
+        \\[ "$result" = "0" ]
+    });
+    test_explain_stdout_clean.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_stdout_clean.step);
+
+    // Integration test: --explain exit code 0 on success
+    const test_explain_exit_0 = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM t' >/dev/null 2>&1
+        \\[ $? -eq 0 ]
+    });
+    test_explain_exit_0.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_exit_0.step);
+
+    // Integration test: --explain + --columns → error exit 1
+    const test_explain_with_columns = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --columns 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_columns.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_columns.step);
+
+    // Integration test: --explain + --validate → error exit 1
+    const test_explain_with_validate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --validate 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_validate.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_validate.step);
+
+    // Integration test: --explain + --sample → error exit 1
+    const test_explain_with_sample = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --sample 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_sample.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_sample.step);
+
+    // Integration test: --explain + --stats → error exit 1
+    const test_explain_with_stats = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --stats 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_stats.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_stats.step);
+
+    // Integration test: --explain + --output → error exit 1
+    const test_explain_with_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --output /tmp/sp_test_out.csv 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+    });
+    test_explain_with_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_with_output.step);
+
+    // Integration test: --help contains --explain
+    const test_explain_help = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --help 2>&1 >/dev/null | grep -q -- '--explain'
+    });
+    test_explain_help.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_help.step);
+
+    // Integration test: --explain with nonexistent table → exit 3
+    const test_explain_nonexistent = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain 'SELECT * FROM nonexistent' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'error: no such table' && echo "$msg" | grep -q 'EXIT:3'
+    });
+    test_explain_nonexistent.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_nonexistent.step);
+
+    // Integration test: --explain with -f/--file query
+    const test_explain_query_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'SELECT * FROM t' > "$tmp"
+        \\result=$(printf 'x\n1\n2\n' | ./zig-out/bin/sql-pipe -f "$tmp" --explain 2>/dev/null)
+        \\rm -f "$tmp"
+        \\[ "$result" = "$(printf '1\n2')" ]
+    });
+    test_explain_query_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_query_file.step);
+
+    // Integration test: --explain with empty stdin (< /dev/null) — no crash
+    const test_explain_empty_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --explain 'SELECT 1' < /dev/null >/dev/null 2>&1
+        \\[ $? -eq 0 ]
+    });
+    test_explain_empty_stdin.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_explain_empty_stdin.step);
 }

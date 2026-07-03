@@ -73,6 +73,7 @@ pub const SqlPipeError = error{
     TableWithNonCsv,
     InvalidQueryFile,
     MultipleQueryFiles,
+    ExplainWithFlags,
     MissingNullValue,
 };
 
@@ -117,6 +118,8 @@ pub const ParsedArgs = struct {
     /// Use a file-backed temporary SQLite database instead of :memory: when true.
     /// Enables processing datasets larger than available RAM; also sets PRAGMA temp_store = FILE.
     disk: bool,
+    /// Print EXPLAIN QUERY PLAN to stderr before executing the query.
+    explain: bool = false,
     /// Pretty-printed table output mode (default: auto — TTY detection).
     table_mode: TableMode = .auto,
     /// Custom string for NULL values in output (null = format default: "NULL" for CSV/TSV/table, "" for markdown).
@@ -245,6 +248,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --disk                       Use a file-backed temp database instead of :memory:
         \\                               Enables processing datasets larger than available RAM
         \\                               Also sets PRAGMA temp_store = FILE for transient structures
+        \\  --explain                    Print SQLite query plan to stderr before executing
         \\  --table                      Force pretty-printed table output (auto-detected on TTY)
         \\  --no-table                   Force CSV output even when stdout is a TTY
         \\  --null-value <string>        Custom NULL representation in output (default: "NULL" for CSV/TSV/table)
@@ -328,6 +332,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var sample_n: usize = 10;
     var stats_mode = false;
     var disk = false;
+    var explain = false;
     var table_mode: TableMode = .auto;
     var seen_dashdash = false;
     var positional_args: std.ArrayList([]const u8) = .empty;
@@ -452,6 +457,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             json_path = arg["--json-path=".len..];
         } else if (std.mem.eql(u8, arg, "--disk")) {
             disk = true;
+        } else if (std.mem.eql(u8, arg, "--explain")) {
+            explain = true;
         } else if (std.mem.eql(u8, arg, "--table")) {
             table_mode = .always;
         } else if (std.mem.eql(u8, arg, "--null-value")) {
@@ -583,6 +590,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (stats_mode and (list_columns or validate or sample_mode or query != null or query_file != null or output != null))
         return error.StatsWithFlags;
 
+    // --explain is mutually exclusive with mode flags and --output
+    if (explain and (list_columns or validate or sample_mode or stats_mode or output != null))
+        return error.ExplainWithFlags;
+
     // --silent and --verbose are mutually exclusive
     if (silent and verbose)
         return error.SilentVerboseConflict;
@@ -663,6 +674,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .xml_row_input = xml_row_input,
         .json_path = json_path,
         .disk = disk,
+        .explain = explain,
         .table_mode = table_mode,
         .null_value = null_value,
     } };
