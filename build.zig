@@ -2475,4 +2475,126 @@ pub fn build(b: *std.Build) void {
     });
     test_stats_delimiter.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_stats_delimiter.step);
+
+    // ─── --null-value integration tests (issue #170) ─────────────────────────
+
+    // Integration test 170a: CSV output respects --null-value 'N/A'
+    const test_null_value_csv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\nCarol,35\n' \
+        \\    | ./zig-out/bin/sql-pipe --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf 'Alice,30\nBob,N/A\nCarol,35')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_csv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_csv.step);
+
+    // Integration test 170b: CSV output respects --null-value '' (explicit empty string)
+    const test_null_value_csv_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe --null-value '' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf 'Alice,30\nBob,')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_csv_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_csv_empty.step);
+
+    // Integration test 170c: CSV default unchanged when no flag (still "NULL")
+    const test_null_value_csv_default = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf 'Alice,30\nBob,NULL')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_csv_default.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_csv_default.step);
+
+    // Integration test 170d: TSV output respects --null-value '-'
+    const test_null_value_tsv = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe -O tsv --null-value '-' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf 'Alice\t30\nBob\t-')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_tsv.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_tsv.step);
+
+    // Integration test 170e: JSON ignores --null-value (still outputs JSON null)
+    const test_null_value_json_ignored = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe --json --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf '[{"name":"Alice","score":30},{"name":"Bob","score":null}]')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_json_ignored.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_json_ignored.step);
+
+    // Integration test 170f: NDJSON ignores --null-value (still outputs JSON null)
+    const test_null_value_ndjson_ignored = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe -O ndjson --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\expected=$(printf '{"name":"Alice","score":30}\n{"name":"Bob","score":null}')
+        \\[ "$result" = "$expected" ]
+    });
+    test_null_value_ndjson_ignored.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_ndjson_ignored.step);
+
+    // Integration test 170g: XML output respects --null-value 'N/A'
+    const test_null_value_xml = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe -O xml --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\echo "$result" | grep -q '<score>N/A</score>'
+    });
+    test_null_value_xml.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_xml.step);
+
+    // Integration test 170h: XML default null renders empty element
+    const test_null_value_xml_default = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' \
+        \\    | ./zig-out/bin/sql-pipe -O xml 'SELECT name, score FROM t ORDER BY name')
+        \\echo "$result" | grep -q '<score></score>'
+    });
+    test_null_value_xml_default.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_xml_default.step);
+
+    // Integration test 170i: --null-value with --help includes flag in output
+    const test_null_value_help = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --help 2>&1 >/dev/null | grep -q -e '--null-value'
+    });
+    test_null_value_help.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_help.step);
+
+    // Integration test 170j: --null-value without value exits 1
+    const test_null_value_missing = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe --null-value 2>&1 >/dev/null; test $? -eq 1
+    });
+    test_null_value_missing.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_missing.step);
+
+    // Integration test 170k: table output respects --null-value
+    const test_null_value_table = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,score\nAlice,30\nBob,\n' | ./zig-out/bin/sql-pipe --table --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name')
+        \\echo "$result" | grep -q 'N/A'
+    });
+    test_null_value_table.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_table.step);
+
+    // Integration test 170l: markdown output respects --null-value (non-numeric column)
+    const test_null_value_markdown = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,note\nAlice,good\nBob,\n' | ./zig-out/bin/sql-pipe -O markdown --null-value 'MISSING' 'SELECT name, note FROM t ORDER BY name')
+        \\echo "$result" | grep -q 'MISSING'
+    });
+    test_null_value_markdown.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_null_value_markdown.step);
 }

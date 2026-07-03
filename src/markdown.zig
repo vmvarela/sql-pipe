@@ -24,10 +24,14 @@ pub fn writeMarkdown(
     writer: *std.Io.Writer,
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
+    null_value: ?[]const u8,
 ) (std.mem.Allocator.Error || error{WriteFailed, StepFailed})!void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
+
+    const default_null_text = null_value orelse "";
+    const default_null_width = visual.visualWidth(default_null_text);
 
     const ncols: usize = @intCast(col_count);
     if (ncols == 0) return;
@@ -54,9 +58,7 @@ pub fn writeMarkdown(
             const idx: c_int = @intCast(i);
             const col_type = c.sqlite3_column_type(stmt, idx);
             if (col_type == c.SQLITE_NULL) {
-                // NULL renders as empty cell (width 0), but ensure minimum width of 3
-                // for the column to show header + dashes properly.
-                if (3 > widths[i]) widths[i] = 3;
+                if (default_null_width > widths[i]) widths[i] = default_null_width;
             } else {
                 has_value[i] = true;
                 if (col_type != c.SQLITE_INTEGER and col_type != c.SQLITE_FLOAT) {
@@ -91,7 +93,7 @@ pub fn writeMarkdown(
     // Data rows: | val1 | val2 |
     rc = c.sqlite3_step(stmt);
     while (rc == c.SQLITE_ROW) {
-        try writeDataRow(writer, stmt, widths, numeric);
+        try writeDataRow(writer, stmt, widths, numeric, null_value);
         rc = c.sqlite3_step(stmt);
     }
     if (rc != c.SQLITE_DONE) return error.StepFailed;
@@ -148,6 +150,7 @@ fn writeDataRow(
     stmt: *c.sqlite3_stmt,
     widths: []const usize,
     numeric: []const bool,
+    null_value: ?[]const u8,
 ) error{WriteFailed}!void {
     try writer.writeByte('|');
     for (0..widths.len) |i| {
@@ -156,11 +159,14 @@ fn writeDataRow(
         const w = widths[i];
 
         if (c.sqlite3_column_type(stmt, idx) == c.SQLITE_NULL) {
-            // NULL renders as empty cell
+            const null_text = null_value orelse "";
+            const nw = visual.visualWidth(null_text);
             if (numeric[i]) {
-                try visual.writeSpaces(writer, w);
+                try visual.writeSpaces(writer, w - nw);
+                try writer.writeAll(null_text);
             } else {
-                try visual.writeSpaces(writer, w);
+                try writer.writeAll(null_text);
+                try visual.writeSpaces(writer, w - nw);
             }
         } else {
             if (sqlite_mod.columnText(stmt, idx)) |val| {

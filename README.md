@@ -174,6 +174,20 @@ $ printf 'name,age\nAlice,30\nBob,25\nCarol,35' | sql-pipe 'SELECT * FROM t'
 
 Numeric columns are right-aligned, text columns left-aligned. Pipe the output and it stays CSV — no behavior change for scripts. Use `--table` to force table output or `--no-table` to force CSV.
 
+### Custom NULL representation
+
+SQL NULL values show as the literal string `NULL` in CSV, TSV, and table output by default. Use `--null-value` to pick your own:
+
+```sh
+$ printf 'name,email\nAlice,alice@example.com\nBob,\nCarol,carol@example.com' \
+  | sql-pipe --null-value '' 'SELECT * FROM t'
+Alice,alice@example.com
+Bob,
+Carol,carol@example.com
+```
+
+Pass `--null-value ''` for an empty string, `--null-value 'N/A'`, or any other label that better fits your downstream tool. Has no effect on JSON output (JSON always uses native `null`).
+
 For JSON and NDJSON input, pass `-I json` (reads an array of objects) or `-I ndjson` (one object per line). Column names are taken from the keys of the first object:
 
 ```sh
@@ -323,6 +337,7 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `--output <file>` | Write results to the given file instead of stdout. Creates or overwrites the file. Exits 1 if the file cannot be created. |
 | `--table` | Force pretty-printed table output (auto-detected when stdout is a TTY). Requires CSV/TSV output format. |
 | `--no-table` | Force CSV output even when stdout is a TTY |
+| `--null-value <string>` | Custom NULL representation in CSV/TSV/table output (default: `NULL`). JSON always uses native `null`. |
 | `-f`, `--file <file>` | Read SQL query from file instead of command line |
 | `-v`, `--verbose` | Print `Loaded <n> rows in <t>s` to stderr after loading (always on TTY; forced with flag) |
 | `-s`, `--silent` | Suppress `Loaded <n> rows in <t>s` and the progress counter from stderr unconditionally. Cannot be combined with `-v`/`--verbose` |
