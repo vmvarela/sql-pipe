@@ -67,7 +67,7 @@ OPTIONS
 
 	*-O, --output-format* <fmt>
 		Set the output format: *csv* (default), *tsv*, *json*, *ndjson*,
-		*xml*, *markdown* (alias: *md*), or *sql*.
+		*xml*, *markdown* (alias: *md*), *html*, or *sql*.
 
 	*--sql-table* <name>
 		Target table name for *-O sql* INSERT output (default: *t*).
@@ -81,7 +81,9 @@ OPTIONS
 		Print a header row with column names as the first line of output. Column
 		names are taken from the SQL column alias or original name. The output
 		remains valid CSV that can be piped back into sql-pipe. Header output is
-		off by default. Cannot be combined with *--json*.
+		off by default. Cannot be combined with *--json*. Works with CSV, TSV,
+		and HTML output formats. For *-O html*, controls whether a *<thead>*
+		section is emitted.
 
 	*--json*
 		Output results as a JSON array of objects instead of CSV. Each row
@@ -178,10 +180,17 @@ OPTIONS
 		with *--columns*, *--validate*, *--sample*, *--stats*, *--schema*, and *--output*.
 
 	*--null-value* <string>
-		Custom representation for SQL NULL values in CSV, TSV, and table
-		output. By default, NULL values are printed as the string *NULL*.
-		Pass an empty string (*--null-value ''*), *N/A*, or any other label.
-		Has no effect on JSON output (JSON always outputs native *null*).
+		Custom representation for SQL NULL values in CSV, TSV, table, and
+		HTML output. By default, NULL values are printed as the string *NULL*
+		in CSV/TSV/table, or as an empty cell in HTML/markdown. Pass an empty
+		string (*--null-value ''*), *N/A*, or any other label. Has no effect on
+		JSON output (JSON always outputs native *null*).
+
+	*--html-class* <class>
+		When using *-O html*, set a CSS class attribute on the *<table>*
+		element. The value is escaped for safe insertion into the HTML
+		attribute. Example: *--html-class 'data-table sortable'* produces
+		*<table class="data-table sortable">*.
 
 	*-f, --file* <file>
 		Read the SQL query from <file> instead of the command line. When
@@ -312,6 +321,33 @@ EXAMPLES
 	| Alice |  30 |++
 	| Bob   |  25 |++
 	| Carol |  35 |
+
+	Output results as an HTML table:
+
+		$ printf 'name,age\nAlice,30\nBob,25' \
+		    | sql-pipe -O html 'SELECT * FROM t'
+
+	Output:++
+	<table>++
+	<tbody>++
+	<tr><td>Alice</td><td>30</td></tr>++
+	<tr><td>Bob</td><td>25</td></tr>++
+	</tbody>++
+	</table>
+
+	Output with column headers and a CSS class:
+
+		$ printf 'name,age\nAlice,30\nBob,25' \
+		    | sql-pipe -O html --header --html-class 'results' 'SELECT * FROM t'
+
+	Output:++
+	<table class="results">++
+	<thead><tr><th>name</th><th>age</th></tr></thead>++
+	<tbody>++
+	<tr><td>Alice</td><td>30</td></tr>++
+	<tr><td>Bob</td><td>25</td></tr>++
+	</tbody>++
+	</table>
 
 	Custom NULL representation (replace NULL with empty string):
 

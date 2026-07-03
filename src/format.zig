@@ -49,6 +49,7 @@ pub const OutputFormat = enum {
     ndjson,
     xml,
     markdown,
+    html,
     sql,
 
     /// Parse a format name string.
@@ -71,6 +72,8 @@ pub const WriteOpts = struct {
     xml_row: []const u8 = "row",
     /// Target table name for SQL INSERT output (default: "t").
     sql_table: []const u8 = "t",
+    /// CSS class name for the HTML <table> element (default: "" = no class).
+    html_class: []const u8 = "",
     /// Custom NULL representation (null = format default).
     null_value: ?[]const u8 = null,
 };
@@ -136,7 +139,7 @@ pub const OutputWriter = struct {
 
         // Collect column-name pointers for formats that need them per row.
         switch (self.format) {
-            .json, .ndjson, .xml, .sql => {
+            .json, .ndjson, .xml, .html, .sql => {
                 const names = try allocator.alloc([*:0]const u8, @intCast(col_count));
                 var i: c_int = 0;
                 while (i < col_count) : (i += 1) {
@@ -156,6 +159,26 @@ pub const OutputWriter = struct {
         switch (self.format) {
             .json => try writer.writeByte('['),
             .xml => try xml_mod.writeXmlHeader(writer, self.opts.xml_root),
+            .html => {
+                try writer.writeAll("<table");
+                if (self.opts.html_class.len > 0) {
+                    try writer.writeAll(" class=\"");
+                    try xml_mod.writeXmlEscaped(writer, self.opts.html_class);
+                    try writer.writeByte('"');
+                }
+                try writer.writeAll(">\n");
+                if (self.opts.header) {
+                    try writer.writeAll("<thead><tr>");
+                    var i: c_int = 0;
+                    while (i < col_count) : (i += 1) {
+                        try writer.writeAll("<th>");
+                        try xml_mod.writeXmlEscaped(writer, std.mem.span(self.col_names[@intCast(i)]));
+                        try writer.writeAll("</th>");
+                    }
+                    try writer.writeAll("</tr></thead>\n");
+                }
+                try writer.writeAll("<tbody>\n");
+            },
             else => {},
         }
     }
@@ -184,6 +207,7 @@ pub const OutputWriter = struct {
                 self.opts.null_value,
             ),
             .sql => try self.writeSqlRow(stmt, writer),
+            .html => try writeHtmlRow(stmt, self.col_count, writer, self.opts.null_value),
             .markdown => unreachable, // handled before OutputWriter in execQuery
         }
     }
@@ -196,6 +220,7 @@ pub const OutputWriter = struct {
         switch (self.format) {
             .json => try writer.writeAll("]\n"),
             .xml => try xml_mod.writeXmlFooter(writer, self.opts.xml_root),
+            .html => try writer.writeAll("</tbody>\n</table>\n"),
             else => {},
         }
     }
@@ -328,4 +353,30 @@ fn csvPrintHeaderRow(
         }
     }
     try writer.writeByte('\n');
+}
+
+// ── HTML output helpers ─────────────────────────────────────────────────────
+
+/// Write one HTML table data row from the current SQLITE_ROW.
+fn writeHtmlRow(
+    stmt: *c.sqlite3_stmt,
+    col_count: c_int,
+    writer: *std.Io.Writer,
+    null_value: ?[]const u8,
+) !void {
+    try writer.writeAll("<tr>");
+    var i: c_int = 0;
+    while (i < col_count) : (i += 1) {
+        try writer.writeAll("<td>");
+        if (c.sqlite3_column_type(stmt, i) == c.SQLITE_NULL) {
+            const text = null_value orelse "";
+            try xml_mod.writeXmlEscaped(writer, text);
+        } else {
+            if (sqlite_mod.columnText(stmt, i)) |text| {
+                try xml_mod.writeXmlEscaped(writer, text);
+            }
+        }
+        try writer.writeAll("</td>");
+    }
+    try writer.writeAll("</tr>\n");
 }

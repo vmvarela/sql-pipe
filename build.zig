@@ -2241,6 +2241,79 @@ pub fn build(b: *std.Build) void {
     test_markdown_empty.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_markdown_empty.step);
 
+    // ─── HTML output integration tests (issue #173) ──────────────────────────────
+
+    // Integration test 173a: Basic HTML output
+    const test_html_basic = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe -O html 'SELECT * FROM t ORDER BY name')
+        \\echo "$result" | grep -Fq '<table>' && echo "$result" | grep -Fq '<tbody>' && echo "$result" | grep -Fq '<tr><td>Alice</td><td>30</td></tr>' && echo "$result" | grep -Fq '</table>'
+    });
+    test_html_basic.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_html_basic.step);
+
+    // Integration test 173b: HTML output with --header produces <thead>
+    const test_html_header = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe -O html --header 'SELECT * FROM t')
+        \\echo "$result" | grep -Fq '<thead><tr><th>name</th><th>age</th></tr></thead>'
+    });
+    test_html_header.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_html_header.step);
+
+    // Integration test 173c: HTML output with --html-class
+    const test_html_class = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe -O html --html-class 'my-table' 'SELECT * FROM t')
+        \\echo "$result" | grep -Fq '<table class="my-table">'
+    });
+    test_html_class.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_html_class.step);
+
+    // Integration test 173d: NULL renders as empty cell in HTML
+    const test_html_null = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,\n' | ./zig-out/bin/sql-pipe -O html 'SELECT * FROM t ORDER BY name')
+        \\echo "$result" | grep -Fq '<td></td>'
+    });
+    test_html_null.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_html_null.step);
+
+    // Integration test 173e: HTML escaping of special characters
+    const test_html_escape = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,data\nAlice,"<script>x</script>"\n' | ./zig-out/bin/sql-pipe -O html 'SELECT * FROM t')
+        \\echo "$result" | grep -Fq '&lt;script&gt;'
+    });
+    test_html_escape.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_html_escape.step);
+
+    // Integration test 173f: --null-value works with HTML
+    const test_html_null_value = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\nBob,\n' | ./zig-out/bin/sql-pipe -O html --null-value 'N/A' 'SELECT * FROM t ORDER BY name')
+        \\echo "$result" | grep -Fq '<td>N/A</td>'
+    });
+    test_html_null_value.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_html_null_value.step);
+
+    // Integration test 173g: --html-class missing value exits with error
+    const test_html_class_missing = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\./zig-out/bin/sql-pipe -O html --html-class 2>&1 | grep -q 'html-class requires a value'
+    });
+    test_html_class_missing.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_html_class_missing.step);
+
+    // Integration test 173h: --html-class attribute escaping
+    const test_html_class_escape = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\nAlice\n' | ./zig-out/bin/sql-pipe -O html --html-class 'a"class' 'SELECT * FROM t')
+        \\echo "$result" | grep -Fq 'class="a&quot;class"'
+    });
+    test_html_class_escape.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_html_class_escape.step);
+
     // ─── SQL INSERT output integration tests (issue #174) ─────────────────────
 
     // Integration test 174a: Basic SQL INSERT output

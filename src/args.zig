@@ -77,6 +77,7 @@ pub const SqlPipeError = error{
     MissingSqlTableValue,
     ExplainWithFlags,
     MissingNullValue,
+    MissingHtmlClassValue,
 };
 
 pub const ParsedArgs = struct {
@@ -126,7 +127,9 @@ pub const ParsedArgs = struct {
     table_mode: TableMode = .auto,
     /// Target table name for SQL INSERT output (default: "t").
     sql_table: []const u8 = "t",
-    /// Custom string for NULL values in output (null = format default: "NULL" for CSV/TSV/table, "" for markdown).
+    /// CSS class name for the HTML <table> element (default: "" = no class).
+    html_class: []const u8 = "",
+    /// Custom string for NULL values in output (default: "NULL" for CSV/TSV/table, "" for markdown).
     null_value: ?[]const u8 = null,
 };
 
@@ -236,11 +239,11 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --tsv                        Alias for --delimiter '\t'
         \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml
         \\                               Overrides file extension auto-detection; stdin always uses this value
-        \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml, markdown (alias: md), sql
+        \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml, markdown (alias: md), html, sql
   \\  --json                       Alias for --output-format json
   \\  --sql-table <name>           Target table name for -O sql INSERT output (default: t)
   \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
-        \\  -H, --header                 Print column names as the first output row (CSV/TSV output only)
+        \\  -H, --header                 Print column names as the first output row (CSV/TSV/HTML)
         \\  --max-rows <n>               Stop if more than <n> data rows are read (exit 1)
         \\  -v, --verbose                Force row count to stderr (shown automatically on TTY)
         \\                               With --columns: show inferred type per column
@@ -274,6 +277,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --table                      Force pretty-printed table output (auto-detected on TTY)
         \\  --no-table                   Force CSV output even when stdout is a TTY
         \\  --null-value <string>        Custom NULL representation in output (default: "NULL" for CSV/TSV/table)
+        \\  --html-class <class>         CSS class name for the HTML <table> element (-O html only)
         \\  -f, --file <file>            Read SQL query from file instead of command line
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
@@ -358,6 +362,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var explain = false;
     var table_mode: TableMode = .auto;
     var sql_table: []const u8 = "t";
+    var html_class: []const u8 = "";
     var seen_dashdash = false;
     var positional_args: std.ArrayList([]const u8) = .empty;
     defer positional_args.deinit(allocator);
@@ -499,6 +504,12 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             null_value = args[i];
         } else if (std.mem.startsWith(u8, arg, "--null-value=")) {
             null_value = arg["--null-value=".len..];
+        } else if (std.mem.eql(u8, arg, "--html-class")) {
+            i += 1;
+            if (i >= args.len) return error.MissingHtmlClassValue;
+            html_class = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--html-class=")) {
+            html_class = arg["--html-class=".len..];
         } else if (std.mem.eql(u8, arg, "--no-table")) {
             table_mode = .never;
         } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--file")) {
@@ -574,8 +585,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         }
     }
 
-    // Non-CSV/TSV output format is mutually exclusive with --header
-    if (output_format != .csv and output_format != .tsv and header)
+    // Non-CSV/TSV/HTML output format is mutually exclusive with --header
+    if (output_format != .csv and output_format != .tsv and output_format != .html and header)
         return error.IncompatibleFlags;
 
     // --output is mutually exclusive with --columns (--columns always writes to stdout)
@@ -722,6 +733,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .explain = explain,
         .table_mode = table_mode,
         .sql_table = sql_table,
+        .html_class = html_class,
         .null_value = null_value,
     } };
 }

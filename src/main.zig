@@ -55,6 +55,7 @@ fn execQuery(
     xml_root: []const u8,
     xml_row: []const u8,
     sql_table: []const u8,
+    html_class: []const u8,
     null_value: ?[]const u8,
     use_table: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || error{WriteFailed, StepFailed})!void {
@@ -85,6 +86,7 @@ fn execQuery(
         .xml_root = xml_root,
         .xml_row = xml_row,
         .sql_table = sql_table,
+        .html_class = html_class,
         .null_value = null_value,
     });
     defer out_writer.deinit(allocator);
@@ -233,7 +235,7 @@ fn run(
         printQueryPlan(allocator, db, query, main_table, stderr_writer);
     }
 
-    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.sql_table, parsed.null_value, use_table) catch {
+    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.sql_table, parsed.html_class, parsed.null_value, use_table) catch {
         stdout_writer.flush() catch |err| std.log.err("failed to flush output before fatal: {}", .{err});
         sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
     };
@@ -267,11 +269,11 @@ pub fn main(init: std.process.Init.Minimal) void {
 
     const args_result = parseArgs(args_arena.allocator(), args) catch |err| {
         switch (err) {
-            error.IncompatibleFlags => fatal("--header cannot be combined with non-CSV/TSV output format", stderr_writer, .usage, .{}),
+            error.IncompatibleFlags => fatal("--header cannot be combined with non-CSV/TSV/HTML output format", stderr_writer, .usage, .{}),
             error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),
             error.InvalidMaxRows => fatal("--max-rows must be a positive integer", stderr_writer, .usage, .{}),
             error.InvalidInputFormat => fatal("unknown input format; supported: csv, tsv, json, ndjson, xml", stderr_writer, .usage, .{}),
-            error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml, markdown (md), sql", stderr_writer, .usage, .{}),
+            error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml, markdown (md), html, sql", stderr_writer, .usage, .{}),
             error.ColumnsWithQuery => fatal("--columns cannot be combined with a query argument", stderr_writer, .usage, .{}),
             error.ValidateWithQuery => fatal("--validate cannot be combined with a query argument", stderr_writer, .usage, .{}),
             error.InvalidOutputPath => fatal("--output requires a non-empty file path", stderr_writer, .usage, .{}),
@@ -301,6 +303,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.TableWithNonCsv => fatal("--table requires CSV or TSV output format (not compatible with --json, -O json, etc.)", stderr_writer, .usage, .{}),
             error.ExplainWithFlags => fatal("--explain cannot be combined with --columns, --validate, --sample, --stats, --schema, or --output", stderr_writer, .usage, .{}),
             error.MissingNullValue => fatal("--null-value requires a value", stderr_writer, .usage, .{}),
+            error.MissingHtmlClassValue => fatal("--html-class requires a value", stderr_writer, .usage, .{}),
             else => {},
         }
         printUsage(stderr_writer) catch |werr| std.log.err("failed to write usage: {}", .{werr});
