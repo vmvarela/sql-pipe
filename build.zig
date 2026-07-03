@@ -2399,6 +2399,24 @@ pub fn build(b: *std.Build) void {
     test_sql_quoted_table.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_sql_quoted_table.step);
 
+    // Integration test 174j: BLOB values rendered as X'...' hex
+    const test_sql_blob = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\nignored\n' | ./zig-out/bin/sql-pipe -O sql 'SELECT x'"'"'0001FF'"'"' AS data FROM t')
+        \\echo "$result" | grep -Fq "VALUES (X'0001FF');"
+    });
+    test_sql_blob.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_blob.step);
+
+    // Integration test 174k: empty BLOB renders as X''
+    const test_sql_blob_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name\nignored\n' | ./zig-out/bin/sql-pipe -O sql 'SELECT x'"'"''"'"' AS data FROM t')
+        \\echo "$result" | grep -Fq "VALUES (X'');"
+    });
+    test_sql_blob_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_sql_blob_empty.step);
+
     // ─── Fixture-based integration tests ─────────────────────────────────────
     // These tests use sample files committed in tests/fixtures/ to exercise
     // the binary end-to-end with realistic data across all supported formats.

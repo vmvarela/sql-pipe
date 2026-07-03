@@ -255,8 +255,24 @@ pub const OutputWriter = struct {
                         try writer.print("{d}", .{f});
                     }
                 },
+                c.SQLITE_BLOB => {
+                    const len = c.sqlite3_column_bytes(stmt, i);
+                    if (len == 0) {
+                        try writer.writeAll("X''");
+                    } else {
+                        const blob = c.sqlite3_column_blob(stmt, i) orelse unreachable;
+                        const data = @as([*]const u8, @ptrCast(blob))[0..@intCast(len)];
+                        const hex = "0123456789ABCDEF";
+                        try writer.writeAll("X'");
+                        for (data) |byte| {
+                            try writer.writeByte(hex[byte >> 4]);
+                            try writer.writeByte(hex[byte & 0x0F]);
+                        }
+                        try writer.writeByte('\'');
+                    }
+                },
                 else => {
-                    // ponytail: BLOB truncated at first NUL, same as CSV/JSON; X'...' hex if needed
+                    // ponytail: BLOBs handled above for SQL via X'...'; CSV/JSON still truncate at NUL
                     if (sqlite_mod.columnText(stmt, i)) |text| {
                         try writeSqlStringLiteral(writer, text);
                     } else {
