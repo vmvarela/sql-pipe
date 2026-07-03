@@ -34,7 +34,7 @@ pub fn runValidate(
         .csv, .tsv => {
             const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
             var read_buf: [4096]u8 = undefined;
-            const opened = source.openInput(input_source, io, stderr_writer);
+            const opened = source.openInput(io, input_source, stderr_writer);
             defer opened.deinit(io);
             var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
             var csv_reader = csv_mod.csvReaderWithDelimiter(allocator, &source_reader.interface, col_delim);
@@ -151,11 +151,11 @@ pub fn runValidate(
         },
         .json => {
             var read_buf: [4096]u8 = undefined;
-            const opened = source.openInput(input_source, io, stderr_writer);
+            const opened = source.openInput(io, input_source, stderr_writer);
             defer opened.deinit(io);
             var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
 
-            const input = readAllInput(&source_reader.interface, allocator, stderr_writer, "JSON input");
+            const input = readAllInput(allocator, &source_reader.interface, stderr_writer, "JSON input");
             defer allocator.free(input);
             if (input.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
@@ -197,7 +197,7 @@ pub fn runValidate(
         },
         .ndjson => {
             var read_buf: [4096]u8 = undefined;
-            const opened = source.openInput(input_source, io, stderr_writer);
+            const opened = source.openInput(io, input_source, stderr_writer);
             defer opened.deinit(io);
             var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
 
@@ -279,7 +279,7 @@ pub fn runValidate(
         },
         .xml => {
             var read_buf: [4096]u8 = undefined;
-            const opened = source.openInput(input_source, io, stderr_writer);
+            const opened = source.openInput(io, input_source, stderr_writer);
             defer opened.deinit(io);
             var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
 

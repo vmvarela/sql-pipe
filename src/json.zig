@@ -240,7 +240,7 @@ pub fn loadJsonArray(
     stderr_writer: *std.Io.Writer,
 ) usize {
     // Read all input into a buffer using block reads instead of byte-by-byte takeByte()
-    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "JSON input");
+    const buf = sqlite_helpers.readAllInput(allocator, reader, stderr_writer, "JSON input");
     defer allocator.free(buf);
 
     if (buf.len == 0) return 0; // Empty input - return 0 rows gracefully

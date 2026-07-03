@@ -94,7 +94,7 @@ pub fn fatal(comptime fmt: []const u8, writer: *std.Io.Writer, code: ExitCode, a
 
 /// Read all remaining input from a reader into an allocated buffer. Fatal on error.
 /// `context` is included in error messages (e.g. "JSON input", "XML input").
-pub fn readAllInput(reader: *std.Io.Reader, allocator: std.mem.Allocator, stderr_writer: *std.Io.Writer, context: []const u8) []u8 {
+pub fn readAllInput(allocator: std.mem.Allocator, reader: *std.Io.Reader, stderr_writer: *std.Io.Writer, context: []const u8) []u8 {
     return reader.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
         error.OutOfMemory => fatal("out of memory reading {s}", stderr_writer, .csv_error, .{context}),
         error.ReadFailed => fatal("failed to read {s}", stderr_writer, .csv_error, .{context}),

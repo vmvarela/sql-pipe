@@ -698,7 +698,7 @@ pub fn getXmlColumnNames(
     xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) [][]const u8 {
-    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "XML input");
+    const buf = sqlite_helpers.readAllInput(allocator, reader, stderr_writer, "XML input");
     defer allocator.free(buf);
     if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
@@ -750,7 +750,7 @@ pub fn summarizeXml(
     xml_row: ?[]const u8,
     stderr_writer: *std.Io.Writer,
 ) XmlSummary {
-    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "XML input");
+    const buf = sqlite_helpers.readAllInput(allocator, reader, stderr_writer, "XML input");
     defer allocator.free(buf);
     if (buf.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
@@ -811,7 +811,7 @@ pub fn loadXmlInput(
     max_rows: ?usize,
     stderr_writer: *std.Io.Writer,
 ) usize {
-    const buf = sqlite_helpers.readAllInput(reader, allocator, stderr_writer, "XML input");
+    const buf = sqlite_helpers.readAllInput(allocator, reader, stderr_writer, "XML input");
     defer allocator.free(buf);
     if (buf.len == 0) return 0; // Empty input - return 0 rows gracefully
 

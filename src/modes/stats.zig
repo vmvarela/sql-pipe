@@ -22,7 +22,7 @@ pub fn runStats(
     const db = sqlite_mod.openDb(false, stderr_writer);
     defer _ = c.sqlite3_close(db);
 
-    const parsed = args_mod.ParsedArgs{
+    const parsed: args_mod.ParsedArgs = .{
         .query = "",
         .files = args.files,
         .type_inference = args.type_inference,

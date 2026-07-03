@@ -20,7 +20,7 @@ pub const SourceFile = struct {
 /// Open a file or stdin, handling errors uniformly.
 ///
 /// `input_source` must be a tagged union with `.file: []const u8` and `.stdin` variants.
-pub fn openInput(input_source: anytype, io: std.Io, stderr_writer: *std.Io.Writer) SourceFile {
+pub fn openInput(io: std.Io, input_source: anytype, stderr_writer: *std.Io.Writer) SourceFile {
     const source_file = switch (input_source) {
         .file => |path| std.Io.Dir.openFile(std.Io.Dir.cwd(), io, path, .{}) catch |err|
             fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ path, @errorName(err) }),
