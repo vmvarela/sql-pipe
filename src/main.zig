@@ -15,6 +15,7 @@ const validate_mode = @import("modes/validate.zig");
 const sample_mode = @import("modes/sample.zig");
 const stats_mode = @import("modes/stats.zig");
 const schema_mode = @import("modes/schema.zig");
+const completions_mod = @import("completions.zig");
 
 const VERSION: []const u8 = build_options.version;
 
@@ -304,6 +305,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.ExplainWithFlags => fatal("--explain cannot be combined with --columns, --validate, --sample, --stats, --schema, or --output", stderr_writer, .usage, .{}),
             error.MissingNullValue => fatal("--null-value requires a value", stderr_writer, .usage, .{}),
             error.MissingHtmlClassValue => fatal("--html-class requires a value", stderr_writer, .usage, .{}),
+            error.InvalidCompletionsShell => fatal("unknown shell; supported: bash, zsh, fish", stderr_writer, .usage, .{}),
             else => {},
         }
         printUsage(stderr_writer) catch |werr| std.log.err("failed to write usage: {}", .{werr});
@@ -364,6 +366,17 @@ pub fn main(init: std.process.Init.Minimal) void {
         },
         .schema => |schema_args| {
             schema_mode.runSchema(allocator, io.io(), schema_args, stderr_writer, stdout_writer);
+            stdout_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stdout: {}", .{err});
+            };
+            stderr_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stderr: {}", .{err});
+            };
+        },
+        .completions => |comp_args| {
+            completions_mod.generateCompletions(comp_args.shell, stdout_writer) catch |err| {
+                std.log.err("failed to write completions: {}", .{err});
+            };
             stdout_file_writer.flush() catch |err| {
                 std.log.err("failed to flush stdout: {}", .{err});
             };

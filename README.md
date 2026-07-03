@@ -345,6 +345,7 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `-f`, `--file <file>` | Read SQL query from file instead of command line |
 | `-v`, `--verbose` | Print `Loaded <n> rows in <t>s` to stderr after loading (always on TTY; forced with flag) |
 | `-s`, `--silent` | Suppress `Loaded <n> rows in <t>s` and the progress counter from stderr unconditionally. Cannot be combined with `-v`/`--verbose` |
+| `--completions <shell>` | Generate shell completion script for `bash`, `zsh`, or `fish` to stdout |
 | `-h`, `--help` | Show usage help and exit |
 | `-V`, `--version` | Print version and exit |
 | `--` | End of options — treat all remaining arguments as files or query |

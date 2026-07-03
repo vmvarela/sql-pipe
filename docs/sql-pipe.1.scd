@@ -13,6 +13,7 @@ SYNOPSIS
 	*sql-pipe* --stats [OPTIONS] [<file>]
 	*sql-pipe* --schema [OPTIONS] [<file>...]
 	*sql-pipe* --explain [OPTIONS] [<file>] <query>
+	*sql-pipe* --completions <shell>
 
 DESCRIPTION
 	sql-pipe reads CSV, JSON, NDJSON, or XML data from standard input and/or
@@ -191,6 +192,15 @@ OPTIONS
 		element. The value is escaped for safe insertion into the HTML
 		attribute. Example: *--html-class 'data-table sortable'* produces
 		*<table class="data-table sortable">*.
+
+	*--completions* <shell>
+		Generate a shell completion script and print it to standard
+		output. Supported shells: *bash*, *zsh*, *fish*. The script
+		is self-contained with no external dependencies. Redirect to
+		the appropriate completions directory for your shell:
+		*--completions bash > /usr/share/bash-completion/completions/sql-pipe*,
+		*--completions zsh > /usr/share/zsh/site-functions/_sql-pipe*,
+		*--completions fish > ~/.config/fish/completions/sql-pipe.fish*.
 
 	*-f, --file* <file>
 		Read the SQL query from <file> instead of the command line. When

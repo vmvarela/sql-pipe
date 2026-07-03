@@ -78,6 +78,7 @@ pub const SqlPipeError = error{
     ExplainWithFlags,
     MissingNullValue,
     MissingHtmlClassValue,
+    InvalidCompletionsShell,
 };
 
 pub const ParsedArgs = struct {
@@ -202,6 +203,20 @@ pub const SchemaArgs = struct {
     type_inference: bool,
 };
 
+pub const CompletionsShell = enum {
+    bash,
+    zsh,
+    fish,
+
+    pub fn parse(s: []const u8) error{InvalidCompletionsShell}!CompletionsShell {
+        return std.meta.stringToEnum(CompletionsShell, s) orelse error.InvalidCompletionsShell;
+    }
+};
+
+pub const CompletionsArgs = struct {
+    shell: CompletionsShell,
+};
+
 pub const ArgsResult = union(enum) {
     /// Normal execution: run the query.
     parsed: ParsedArgs,
@@ -219,6 +234,8 @@ pub const ArgsResult = union(enum) {
     stats: StatsArgs,
     /// User requested --schema: print inferred CREATE TABLE DDL.
     schema: SchemaArgs,
+    /// User requested --completions: generate shell completion script.
+    completions: CompletionsArgs,
 };
 
 pub fn printUsage(writer: *std.Io.Writer) !void {
@@ -279,6 +296,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --null-value <string>        Custom NULL representation in output (default: "NULL" for CSV/TSV/table)
         \\  --html-class <class>         CSS class name for the HTML <table> element (-O html only)
         \\  -f, --file <file>            Read SQL query from file instead of command line
+        \\  --completions <shell>        Generate shell completion script (bash, zsh, fish)
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
         \\
@@ -512,6 +530,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             html_class = arg["--html-class=".len..];
         } else if (std.mem.eql(u8, arg, "--no-table")) {
             table_mode = .never;
+        } else if (std.mem.eql(u8, arg, "--completions")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidCompletionsShell;
+            const shell = CompletionsShell.parse(args[i]) catch return error.InvalidCompletionsShell;
+            return .{ .completions = CompletionsArgs{ .shell = shell } };
+        } else if (std.mem.startsWith(u8, arg, "--completions=")) {
+            const shell = CompletionsShell.parse(arg["--completions=".len..]) catch return error.InvalidCompletionsShell;
+            return .{ .completions = CompletionsArgs{ .shell = shell } };
         } else if (std.mem.eql(u8, arg, "-f") or std.mem.eql(u8, arg, "--file")) {
             i += 1;
             if (i >= args.len) return error.InvalidQueryFile;
