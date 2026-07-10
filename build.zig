@@ -44,6 +44,16 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("c", translate_c.createModule());
 
+    // Translate yaml.h to Zig declarations, exposed as @import("yaml").
+    // libyaml is always bundled (no --bundle-yaml option) — it's tiny and
+    // not always available as a system library.
+    const translate_yaml = b.addTranslateC(.{
+        .root_source_file = b.path("lib/yaml/yaml.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("yaml", translate_yaml.createModule());
+
     if (bundle_sqlite) {
         exe.root_module.addIncludePath(b.path("lib"));
         exe.root_module.addCSourceFile(.{
@@ -53,6 +63,22 @@ pub fn build(b: *std.Build) void {
     } else {
         exe.root_module.linkSystemLibrary("sqlite3", .{});
     }
+
+    // Bundle libyaml — only used for loading, so compile api.c, parser.c,
+    // scanner.c, reader.c, writer.c, loader.c. Skip dumper.c, emitter.c
+    // (we don't emit YAML).
+    exe.root_module.addIncludePath(b.path("lib/yaml"));
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"),    .flags = &.{
+        "-DYAML_VERSION_MAJOR=0",
+        "-DYAML_VERSION_MINOR=2",
+        "-DYAML_VERSION_PATCH=5",
+        "-DYAML_VERSION_STRING=\"0.2.5\"",
+    } });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/parser.c"),  .flags = &.{} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/scanner.c"), .flags = &.{} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"),  .flags = &.{} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"),  .flags = &.{} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"),  .flags = &.{} });
 
     b.installArtifact(exe);
 
@@ -2643,6 +2669,77 @@ pub fn build(b: *std.Build) void {
     });
     fixture_test_step.dependOn(&fixture_sample_file.step);
 
+    // Fixture test 168a: YAML file argument — auto-detected from .yaml extension
+    // Note: YAML preserves original number formatting (e.g., 25.00 stays 25.00)
+    const fixture_yaml_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/users.yaml 'SELECT name, price FROM users ORDER BY CAST(price AS REAL) DESC')
+        \\expected=$(printf 'Thingamajig,60.00\nDoohickey,50.00\nGadget,40.25\nWidget,25.00')
+        \\[ "$result" = "$expected" ]
+    });
+    fixture_test_step.dependOn(&fixture_yaml_file.step);
+
+    // Fixture test 168b: YAML file argument — .yml extension alias
+    const fixture_yaml_yml_alias = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/users.yml 'SELECT name FROM users WHERE category = "hardware" ORDER BY name')
+        \\expected=$(printf 'Doohickey\nWidget')
+        \\[ "$result" = "$expected" ]
+    });
+    fixture_test_step.dependOn(&fixture_yaml_yml_alias.step);
+
+    // Fixture test 168c: YAML file via stdin with -I yaml
+    const fixture_yaml_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(cat tests/fixtures/users.yaml | ./zig-out/bin/sql-pipe -I yaml 'SELECT name FROM t WHERE CAST(stock AS INTEGER) > 0 ORDER BY name')
+        \\expected=$(printf 'Doohickey\nGadget\nWidget')
+        \\[ "$result" = "$expected" ]
+    });
+    fixture_test_step.dependOn(&fixture_yaml_stdin.step);
+
+    // Fixture test 168d: YAML file — filter and aggregate
+    const fixture_yaml_aggregate = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/users.yaml 'SELECT category, COUNT(*) FROM users GROUP BY category ORDER BY category')
+        \\expected=$(printf 'electronics,2\nhardware,2')
+        \\[ "$result" = "$expected" ]
+    });
+    fixture_test_step.dependOn(&fixture_yaml_aggregate.step);
+
+    // Fixture test 168e: YAML comments are transparent
+    const fixture_yaml_comments = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf -- '# This is a comment\n# Another comment\n- name: Alice\n  age: 30\n# Mid comment\n- name: Bob\n  age: 25\n' \
+        \\    | ./zig-out/bin/sql-pipe -I yaml 'SELECT name FROM t ORDER BY name')
+        \\expected=$(printf 'Alice\nBob')
+        \\[ "$result" = "$expected" ]
+    });
+    fixture_test_step.dependOn(&fixture_yaml_comments.step);
+
+    // Fixture test 168f: Malformed YAML — error exit 2 with line number
+    const fixture_yaml_malformed = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf -- '- name: Alice\n\tbad: indent\n' | ./zig-out/bin/sql-pipe -I yaml 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'YAML parse error at line' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    fixture_test_step.dependOn(&fixture_yaml_malformed.step);
+
+    // Fixture test 168g: Empty YAML input — graceful (returns 0, no crash)
+    const fixture_yaml_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe -I yaml 'SELECT 1 AS one' < /dev/null 2>/dev/null)
+        \\[ "$result" = "1" ]
+    });
+    fixture_test_step.dependOn(&fixture_yaml_empty.step);
+
+    // Fixture test 168h: Multi-document YAML stream — error exit 2
+    const fixture_yaml_multidoc = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf -- '- name: Alice\n---\n- name: Bob\n' | ./zig-out/bin/sql-pipe -I yaml 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'multiple documents not supported' && echo "$msg" | grep -q 'EXIT:2'
+    });
+    fixture_test_step.dependOn(&fixture_yaml_multidoc.step);
+
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/csv.zig"),
@@ -2664,6 +2761,19 @@ pub fn build(b: *std.Build) void {
         }),
     });
     xml_unit_tests.root_module.addImport("c", translate_c.createModule());
+    xml_unit_tests.root_module.addImport("yaml", translate_yaml.createModule());
+    xml_unit_tests.root_module.addIncludePath(b.path("lib/yaml"));
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"),    .flags = &.{
+        "-DYAML_VERSION_MAJOR=0",
+        "-DYAML_VERSION_MINOR=2",
+        "-DYAML_VERSION_PATCH=5",
+        "-DYAML_VERSION_STRING=\"0.2.5\"",
+    } });
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/parser.c"),  .flags = &.{} });
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/scanner.c"), .flags = &.{} });
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"),  .flags = &.{} });
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"),  .flags = &.{} });
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"),  .flags = &.{} });
     if (bundle_sqlite) {
         xml_unit_tests.root_module.addIncludePath(b.path("lib"));
         xml_unit_tests.root_module.addCSourceFile(.{
@@ -2687,6 +2797,19 @@ pub fn build(b: *std.Build) void {
         }),
     });
     loader_unit_tests.root_module.addImport("c", translate_c.createModule());
+    loader_unit_tests.root_module.addImport("yaml", translate_yaml.createModule());
+    loader_unit_tests.root_module.addIncludePath(b.path("lib/yaml"));
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"),    .flags = &.{
+        "-DYAML_VERSION_MAJOR=0",
+        "-DYAML_VERSION_MINOR=2",
+        "-DYAML_VERSION_PATCH=5",
+        "-DYAML_VERSION_STRING=\"0.2.5\"",
+    } });
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/parser.c"),  .flags = &.{} });
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/scanner.c"), .flags = &.{} });
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"),  .flags = &.{} });
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"),  .flags = &.{} });
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"),  .flags = &.{} });
     if (bundle_sqlite) {
         loader_unit_tests.root_module.addIncludePath(b.path("lib"));
         loader_unit_tests.root_module.addCSourceFile(.{

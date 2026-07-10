@@ -1,7 +1,9 @@
 const std = @import("std");
+const c = @import("c");
 const csv_mod = @import("../csv.zig");
 const json_mod = @import("../json.zig");
 const xml_mod = @import("../xml.zig");
+const yaml_mod = @import("../yaml.zig");
 const sqlite_mod = @import("../sqlite.zig");
 const loader = @import("../loader.zig");
 const args_mod = @import("../args.zig");
@@ -258,6 +260,40 @@ pub fn runValidate(
             const cols = cols_owned.?;
             var count_buf: [32]u8 = undefined;
             const count_str = fmtThousands(&count_buf, row_count);
+            stdout_writer.print("OK: {s} rows, {d} columns (", .{ count_str, cols.len }) catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
+            for (cols, 0..) |col, i| {
+                if (i > 0) stdout_writer.writeAll(", ") catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+                stdout_writer.print("{s} TEXT", .{col}) catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+            }
+            stdout_writer.writeAll(")\n") catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
+        },
+        .yaml => {
+            var yaml_buf: [4096]u8 = undefined;
+            const opened = source.openInput(io, input_source, stderr_writer);
+            defer opened.deinit(io);
+            var yaml_reader = std.Io.File.reader(opened.file, io, &yaml_buf);
+            const yaml_db = sqlite_mod.openDb(false, stderr_writer);
+            defer _ = c.sqlite3_close(yaml_db);
+            const count = yaml_mod.loadYamlInput(allocator, &yaml_reader.interface, yaml_db, "t", null, stderr_writer);
+            const cols = sqlite_mod.getTableColumns(allocator, yaml_db, "t", stderr_writer);
+            defer {
+                for (cols) |col| allocator.free(col);
+                allocator.free(cols);
+            }
+            var count_buf: [32]u8 = undefined;
+            const count_str = fmtThousands(&count_buf, count);
             stdout_writer.print("OK: {s} rows, {d} columns (", .{ count_str, cols.len }) catch |err| {
                 std.log.err("failed to write output: {}", .{err});
                 std.process.exit(@intFromEnum(ExitCode.usage));

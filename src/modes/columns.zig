@@ -1,7 +1,10 @@
 const std = @import("std");
+const c = @import("c");
 const csv_mod = @import("../csv.zig");
 const json_mod = @import("../json.zig");
 const xml_mod = @import("../xml.zig");
+const yaml_mod = @import("../yaml.zig");
+const sqlite_mod = @import("../sqlite.zig");
 const loader = @import("../loader.zig");
 const args_mod = @import("../args.zig");
 
@@ -167,6 +170,31 @@ pub fn runColumns(
                     }
                 }
                 break;
+            }
+        },
+        .yaml => {
+            var yaml_buf: [4096]u8 = undefined;
+            const opened = source.openInput(io, input_source, stderr_writer);
+            defer opened.deinit(io);
+            var yaml_reader = std.Io.File.reader(opened.file, io, &yaml_buf);
+            const yaml_db = sqlite_mod.openDb(false, stderr_writer);
+            defer _ = c.sqlite3_close(yaml_db);
+            _ = yaml_mod.loadYamlInput(allocator, &yaml_reader.interface, yaml_db, "t", null, stderr_writer);
+            const cols = sqlite_mod.getTableColumns(allocator, yaml_db, "t", stderr_writer);
+            defer {
+                for (cols) |col| allocator.free(col);
+                allocator.free(cols);
+            }
+            for (cols) |col| {
+                if (args.verbose) {
+                    stdout_writer.print("{s} TEXT\n", .{col}) catch |err| {
+                        std.log.err("failed to write output: {}", .{err});
+                    };
+                } else {
+                    stdout_writer.print("{s}\n", .{col}) catch |err| {
+                        std.log.err("failed to write output: {}", .{err});
+                    };
+                }
             }
         },
         .xml => {

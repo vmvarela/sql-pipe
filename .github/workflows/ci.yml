@@ -54,6 +54,22 @@ jobs:
           print('SQLite amalgamation ready')
           "
 
+      - name: Download libyaml amalgamation
+        shell: bash
+        run: |
+          mkdir -p lib/yaml
+          curl -fsSL "https://github.com/yaml/libyaml/archive/refs/tags/0.2.5.tar.gz" -o /tmp/yaml-0.2.5.tar.gz
+          tar -xzf /tmp/yaml-0.2.5.tar.gz -C /tmp
+          cp /tmp/libyaml-0.2.5/include/yaml.h lib/yaml/yaml.h
+          cp /tmp/libyaml-0.2.5/src/yaml_private.h lib/yaml/yaml_private.h
+          cp /tmp/libyaml-0.2.5/src/api.c lib/yaml/api.c
+          cp /tmp/libyaml-0.2.5/src/parser.c lib/yaml/parser.c
+          cp /tmp/libyaml-0.2.5/src/scanner.c lib/yaml/scanner.c
+          cp /tmp/libyaml-0.2.5/src/reader.c lib/yaml/reader.c
+          cp /tmp/libyaml-0.2.5/src/writer.c lib/yaml/writer.c
+          cp /tmp/libyaml-0.2.5/src/loader.c lib/yaml/loader.c
+          echo "libyaml 0.2.5 ready"
+
       - name: Build
         run: zig build -Dbundle-sqlite=true -Doptimize=ReleaseSafe
 
