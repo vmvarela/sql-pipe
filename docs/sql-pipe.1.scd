@@ -1,7 +1,7 @@
 sql-pipe(1)
 
 NAME
-	sql-pipe - Execute SQL queries on CSV/JSON/XML data from stdin or files
+	sql-pipe - Execute SQL queries on CSV/JSON/NDJSON/YAML/XML data from stdin or files
 
 SYNOPSIS
 	*sql-pipe* [OPTIONS] [<file>...] <query>
@@ -16,10 +16,10 @@ SYNOPSIS
 	*sql-pipe* --completions <shell>
 
 DESCRIPTION
-	sql-pipe reads CSV, JSON, NDJSON, or XML data from standard input and/or
-	file arguments, loads it into an in-memory SQLite database, executes the
-	provided SQL query, and prints the results as CSV (or JSON/XML when
-	requested) to standard output.
+	sql-pipe reads CSV, JSON, NDJSON, YAML, or XML data from standard input
+	and/or file arguments, loads it into an in-memory SQLite database,
+	executes the provided SQL query, and prints the results as CSV (or
+	JSON/XML when requested) to standard output.
 
 	When reading from stdin, data is loaded into a table named *t*. When files
 	are passed as positional arguments, each file becomes a table named after
@@ -27,9 +27,9 @@ DESCRIPTION
 	Stdin and file arguments can be combined — stdin is always table *t*.
 
 	Input format for files is auto-detected from the file extension (*.csv*,
-	*.tsv*, *.json*, *.ndjson*, *.xml*). Unrecognized or missing extensions
-	default to CSV. Use *-I* to override auto-detection (e.g., when a
-	TSV file has a *.txt* extension).
+	*.tsv*, *.json*, *.ndjson*, *.yaml*, *.yml*, *.xml*). Unrecognized or
+	missing extensions default to CSV. Use *-I* to override auto-detection
+	(e.g., when a TSV file has a *.txt* extension).
 
 	This tool is useful for quick data transformations, filtering, grouping,
 	aggregations, and multi-file joins without manual SQL database setup.
@@ -61,10 +61,11 @@ OPTIONS
 
 	*-I, --input-format* <fmt>
 		Set the input format explicitly: *csv* (default), *tsv*, *json*,
-		*ndjson*, or *xml*. When set, overrides file extension auto-detection
-		for all file arguments. Stdin always uses this value (no filename
-		to inspect). Useful when a file has an ambiguous extension (*.txt*,
-		*.dat*) or no extension at all.
+		*ndjson*, *yaml*, or *xml*. When set, overrides file extension
+		auto-detection for all file arguments. Stdin always uses this value
+		(no filename to inspect). Useful when a file has an ambiguous
+		extension (*.txt*, *.dat*) or no extension at all. Both *.yaml* and
+		*.yml* extensions auto-detect to *yaml*.
 
 	*-O, --output-format* <fmt>
 		Set the output format: *csv* (default), *tsv*, *json*, *ndjson*,
@@ -124,14 +125,14 @@ OPTIONS
 		*OK: <n> rows, <m> columns (<col> <TYPE>, ...)* and exits 0.
 		On parse error, prints the error message and exits 2. Compatible
 		with *--delimiter*, *--tsv*, *--no-type-inference*, and
-		*-I* / *--input-format* (csv, tsv, json, ndjson, xml). JSON, NDJSON,
-		and XML columns are reported as TEXT. Mutually exclusive with a query
-		argument.
+		*-I* / *--input-format* (csv, tsv, json, ndjson, yaml, xml). JSON,
+		NDJSON, YAML, and XML columns are reported as TEXT. Mutually
+		exclusive with a query argument.
 
 	*--columns*
 		Read the input header, print each column name on its own line to
 		standard output, and exit with code 0. Supported for CSV, TSV,
-		JSON, NDJSON, and XML input. When combined with *-v* / *--verbose*,
+		JSON, NDJSON, YAML, and XML input. When combined with *-v* / *--verbose*,
 		also shows the inferred type (INTEGER, REAL, DATE, DATETIME, or TEXT) for each column
 		(CSV/TSV only; other formats always show TEXT), using the first 100
 		data rows for inference. Respects *--delimiter* and *--tsv*.
@@ -154,8 +155,8 @@ OPTIONS
 		non-null count, min, max, mean) as a formatted table. Mean is blank
 		for non-numeric columns. Compatible with *--delimiter*, *--tsv*,
 		*--no-type-inference*, and *-I* / *--input-format* (csv, tsv, json,
-		ndjson, xml). Mutually exclusive with a query argument, *--columns*,
-		*--validate*, *--sample*, and *--output*.
+		ndjson, yaml, xml). Mutually exclusive with a query argument,
+		*--columns*, *--validate*, *--sample*, and *--output*.
 		Alias: *--profile*.
 
 	*--schema*
@@ -163,7 +164,7 @@ OPTIONS
 		output. Each input file generates one DDL block; stdin uses table
 		name *t*. No query is required. Compatible with *--delimiter*,
 		*--tsv*, *--no-type-inference*, and *-I* / *--input-format* (csv,
-		tsv, json, ndjson, xml). Mutually exclusive with a query argument,
+		tsv, json, ndjson, yaml, xml). Mutually exclusive with a query argument,
 		*--columns*, *--validate*, *--sample*, *--stats*, *--explain*,
 		and *--output*.
 

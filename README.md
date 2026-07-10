@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/vmvarela/sql-pipe)](https://github.com/vmvarela/sql-pipe/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`sql-pipe` reads CSV, JSON, or NDJSON from stdin or file arguments, loads it into an in-memory SQLite database, runs a SQL query, and prints the results. No server, no schema files, no setup.
+`sql-pipe` reads CSV, JSON, NDJSON, YAML, or XML from stdin or file arguments, loads it into an in-memory SQLite database, runs a SQL query, and prints the results. No server, no schema files, no setup.
 
 It exists because `awk` is cryptic, spinning up a Python interpreter for a one-liner feels wrong, and `sqlite3 :memory:` takes four commands before you can query anything. If you know SQL and work with CSV in the terminal, this is the tool you've been reaching for.
 
@@ -196,6 +196,24 @@ $ printf '[{"name":"Alice","score":95},{"name":"Bob","score":72}]' \
 Alice,95
 ```
 
+For YAML input, pass `-I yaml` (reads a top-level sequence of mappings). Both `.yaml` and `.yml` extensions are auto-detected. All values are loaded as `TEXT`:
+
+```sh
+$ cat users.yaml
+- name: Alice
+  country: US
+- name: Bob
+  country: UK
+- name: Carol
+  country: DE
+
+$ cat users.yaml | sql-pipe -I yaml 'SELECT name FROM t WHERE country != "US" ORDER BY name'
+Bob
+Carol
+```
+
+YAML is auto-detected from the `.yaml` and `.yml` extensions, or use `-I yaml` explicitly. Comments (`#`), flow-style mappings (`[{name: Alice}]`), and standard scalar types (strings, numbers, booleans) work transparently. Multi-document streams and anchors/aliases are rejected with a clear error.
+
 Columns are auto-detected as `INTEGER`, `REAL`, `DATE`, `DATETIME`, or `TEXT` based on the first 100 rows. Date and datetime values are normalized to ISO 8601 on insert, so SQLite date functions (`date()`, `strftime()`, `julianday()`) work immediately. Use `--no-type-inference` to force all columns to `TEXT`:
 
 ```sh
@@ -258,7 +276,7 @@ $ cat events.xml | sql-pipe -I xml --xml-root events --xml-row event \
 
 ### File arguments
 
-Pass files as positional arguments instead of piping through stdin. Each file becomes a table named after its basename (without extension). The input format is auto-detected from the file extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.xml`):
+Pass files as positional arguments instead of piping through stdin. Each file becomes a table named after its basename (without extension). The input format is auto-detected from the file extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.yaml`, `.yml`, `.xml`):
 
 ```sh
 # Single file — no more cat
@@ -266,6 +284,9 @@ $ sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
 
 # JSON file — extension tells sql-pipe the format, no -I needed
 $ sql-pipe data.json 'SELECT * FROM data WHERE score > 80'
+
+# YAML file — .yaml and .yml both auto-detect
+$ sql-pipe users.yaml 'SELECT name FROM users WHERE country = "US"'
 
 # Multi-file join — the #1 reason people reach for DuckDB
 $ sql-pipe orders.csv customers.csv \
@@ -321,15 +342,15 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 |------|-------------|
 | `-d`, `--delimiter <char>` | Input field delimiter (single character, default `,`) |
 | `--tsv` | Alias for `--delimiter '\t'` |
-| `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson`, `xml`. Overrides file extension auto-detection. |
+| `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson`, `yaml`, `xml`. Overrides file extension auto-detection. Both `.yaml` and `.yml` file extensions auto-detect to `yaml`. |
 | `-O`, `--output-format <fmt>` | Output format: `csv` (default), `tsv`, `json`, `ndjson`, `xml`, `markdown` (alias: `md`), `html`, `sql` |
 | `--sql-table <name>` | Target table name for `-O sql` INSERT output (default: `t`) |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
 | `-H`, `--header` | Print column names as the first output row (CSV/TSV/HTML) |
 | `--json` | Alias for `--output-format json` (mutually exclusive with `-H`) |
 | `--max-rows <n>` | Stop if more than `n` data rows are read (exit 1) |
-| `--validate` | Parse the entire input and print a summary (`OK: <n> rows, <m> columns (col TYPE, ...)`) to stdout. Exit 0 on success, exit 2 on parse error. No query required. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format` (csv, tsv, json, ndjson, xml). JSON/NDJSON/XML columns are reported as TEXT. |
-| `--columns` | Read the input header, print each column name on its own line, and exit 0. Supports CSV, TSV, JSON, NDJSON, and XML input. With `-v`/`--verbose`, also shows the inferred type per column (`name INTEGER`). Respects `--delimiter` and `--tsv`. Mutually exclusive with a query argument. |
+| `--validate` | Parse the entire input and print a summary (`OK: <n> rows, <m> columns (col TYPE, ...)`) to stdout. Exit 0 on success, exit 2 on parse error. No query required. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format` (csv, tsv, json, ndjson, yaml, xml). JSON/NDJSON/YAML/XML columns are reported as TEXT. |
+| `--columns` | Read the input header, print each column name on its own line, and exit 0. Supports CSV, TSV, JSON, NDJSON, YAML, and XML input. With `-v`/`--verbose`, also shows the inferred type per column (`name INTEGER`). Respects `--delimiter` and `--tsv`. Mutually exclusive with a query argument. |
 | `--sample [<n>]` | Print a schema comment block to stderr and the first `<n>` data rows to stdout as CSV (default: `n=10`). The schema block lists each column name and its inferred type, prefixed with `#`. Implies `--header`. Compatible with `--delimiter` and `--tsv`. Mutually exclusive with `--json` and a query argument. No query required. |
 | `--stats` | Load input and print per-column statistics (column name, type, non-null count, min, max, mean) as a formatted table. Mean is blank for non-numeric columns. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, and `--output`. |
 | `--profile` | Alias for `--stats` |
@@ -643,10 +664,10 @@ The database never touches disk and vanishes when the process exits. No state, n
 
 ## Limitations
 
-- **File format auto-detection** is based on file extension. Files without a recognized extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.xml`) default to CSV. Use `-I` to override.
+- **File format auto-detection** is based on file extension. Files without a recognized extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.yaml`, `.yml`, `.xml`) default to CSV. Use `-I` to override.
 
 ## Related
 
 - **[q](https://harelba.github.io/q/)** — Python-based SQL on tabular data. Similar concept, but requires Python runtime. Better if you're already in a Python environment or need Python-specific integrations.
-- **[trdsql](https://github.com/noborus/trdsql)** — Go alternative with broader format support (LTSV, TBLN) and more output options. Better if you need formats beyond CSV/JSON/NDJSON/XML or want more output formatting choices.
+- **[trdsql](https://github.com/noborus/trdsql)** — Go alternative with broader format support (LTSV, TBLN) and more output options. Better if you need formats beyond CSV/JSON/NDJSON/YAML/XML or want more output formatting choices.
 - **[sqlite-utils](https://sqlite-utils.datasette.io/)** — better if you need persistent databases, schema management, or Python scripting. sql-pipe is designed for one-shot queries on ephemeral in-memory data.
