@@ -28,7 +28,7 @@ pub fn runSample(
         .stdin;
 
     switch (args.input_format) {
-        .json, .ndjson, .xml => fatal(
+        .json, .ndjson, .xml, .yaml => fatal(
             "--sample is only supported with CSV and TSV input",
             stderr_writer,
             .usage,

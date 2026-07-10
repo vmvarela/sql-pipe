@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("c");
 const json_mod = @import("../json.zig");
 const xml_mod = @import("../xml.zig");
+const yaml_mod = @import("../yaml.zig");
 const sqlite_mod = @import("../sqlite.zig");
 const loader = @import("../loader.zig");
 const format = @import("../format.zig");
@@ -86,6 +87,7 @@ fn loadTable(
         .json => json_mod.loadJsonArray(allocator, reader, db, table_name, parsed.max_rows, parsed.json_path, stderr_writer),
         .ndjson => json_mod.loadNdjsonInput(allocator, reader, db, table_name, parsed.max_rows, stderr_writer),
         .xml => xml_mod.loadXmlInput(allocator, reader, db, table_name, parsed.xml_root_input, parsed.xml_row_input, parsed.max_rows, stderr_writer),
+        .yaml => yaml_mod.loadYamlInput(allocator, reader, db, table_name, parsed.max_rows, stderr_writer),
     };
     if (rows == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 }

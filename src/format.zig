@@ -22,6 +22,7 @@ pub const InputFormat = enum {
     json,
     ndjson,
     xml,
+    yaml,
 
     /// Parse a format name string.
     /// Returns error.InvalidInputFormat when the value is unrecognised.
@@ -35,6 +36,7 @@ pub const InputFormat = enum {
         const ext = std.fs.path.extension(filename);
         if (ext.len == 0) return null;
         const ext_no_dot = ext[1..]; // skip the leading '.'
+        if (std.mem.eql(u8, ext_no_dot, "yml")) return .yaml;
         return std.meta.stringToEnum(InputFormat, ext_no_dot);
     }
 };

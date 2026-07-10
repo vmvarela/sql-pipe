@@ -254,7 +254,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\Options:
         \\  -d, --delimiter <string>     Input field delimiter for CSV: 1–8 chars (default: ,)
         \\  --tsv                        Alias for --delimiter '\t'
-        \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml
+        \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml, yaml
         \\                               Overrides file extension auto-detection; stdin always uses this value
         \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml, markdown (alias: md), html, sql
   \\  --json                       Alias for --output-format json
