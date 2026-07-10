@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
     // libyaml is always bundled (no --bundle-yaml option) — it's tiny and
     // not always available as a system library.
     const translate_yaml = b.addTranslateC(.{
-        .root_source_file = b.path("lib/yaml/yaml.h"),
+        .root_source_file = b.path("lib/yaml/yaml_translate.h"),
         .target = target,
         .optimize = optimize,
     });
