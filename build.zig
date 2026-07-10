@@ -80,7 +80,8 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"),  .flags = &.{} });
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"),  .flags = &.{} });
     // zig_compat.c is a Windows MSVC shim (see file header). The CI step
-    // copies 10 libyaml files from the tarball; zig_compat.c is local-only.
+    // copies 8 libyaml files from the tarball and materializes zig_compat.c
+    // via heredoc; the file is gitignored locally.
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/zig_compat.c"), .flags = &.{} });
 
     b.installArtifact(exe);
