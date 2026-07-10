@@ -68,46 +68,6 @@ jobs:
           cp /tmp/libyaml-0.2.5/src/reader.c lib/yaml/reader.c
           cp /tmp/libyaml-0.2.5/src/writer.c lib/yaml/writer.c
           cp /tmp/libyaml-0.2.5/src/loader.c lib/yaml/loader.c
-          cat > lib/yaml/zig_compat.c <<'ZIG_COMPAT_EOF'
-          /*
-           * Zig 0.16 + MSVC + libyaml compatibility shim.
-           *
-           * On Windows MSVC, the secure CRT functions wcscat_s/wcscpy_s are declared
-           * in <wchar.h>, which gets pulled in transitively via lib/yaml/yaml.h's
-           * <string.h> include. libyaml never calls them, so Zig 0.16's C-to-Zig
-           * wrapper marks them as unused local consts and fails to compile. The same
-           * functions do not exist in glibc/BSD libc, so Linux and macOS are
-           * unaffected.
-           *
-           * This file force-references wcscat_s/wcscpy_s in a constructor function
-           * that runs at program startup, so the Zig wrapper sees them as used.
-           * On non-MSVC the silencer is a no-op kept alive by __attribute__((used)).
-           * ponytail: zig-0.16 windows MSVC workaround
-           */
-          #include "yaml_private.h"
-
-          #if defined(_MSC_VER)
-          #  pragma comment(linker, "/include:_zig_yaml_compat_init")
-          #  pragma init_seg(".CRT$XCU")
-          static void _zig_yaml_compat_silencer(void) {
-              /* volatile forces the compiler to actually compute the function
-               * addresses; (void) cast alone can be optimized away. */
-              volatile void *p1 = (void *)wcscat_s;
-              volatile void *p2 = (void *)wcscpy_s;
-              (void)p1; (void)p2;
-          }
-          __declspec(noinline) static void _zig_yaml_compat_init(void) {
-              _zig_yaml_compat_silencer();
-          }
-          #elif defined(__GNUC__) || defined(__clang__)
-          __attribute__((used, constructor))
-          static void _zig_yaml_compat_silencer(void) {
-              /* No-op on non-MSVC platforms; the attributes keep this in the
-               * binary and let it run harmlessly at startup. */
-              (void)0;
-          }
-          #endif
-          ZIG_COMPAT_EOF
           echo "libyaml 0.2.5 ready"
 
       - name: Build
