@@ -52,6 +52,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // Hide MSVC secure CRT functions from translator to avoid "unused local constant" errors
+    translate_yaml.defineCMacroRaw("wcscat_s=");
+    translate_yaml.defineCMacroRaw("wcscpy_s=");
     exe.root_module.addImport("yaml", translate_yaml.createModule());
 
     if (bundle_sqlite) {
