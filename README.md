@@ -131,7 +131,7 @@ scoop bucket add vmvarela https://github.com/vmvarela/scoop-bucket
 scoop install sql-pipe
 ```
 
-To build from source (requires [Zig 0.15+](https://ziglang.org/download/)):
+To build from source (requires [Zig 0.16+](https://ziglang.org/download/)):
 
 ```sh
 git clone https://github.com/vmvarela/sql-pipe
