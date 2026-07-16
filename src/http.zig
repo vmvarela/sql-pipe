@@ -78,12 +78,11 @@ fn detectFormatFromContentType(content_type: ?[]const u8) ?InputFormat {
     const content = content_type orelse return null;
     const mime = std.mem.trim(u8, content[0 .. std.mem.indexOfScalar(u8, content, ';') orelse content.len], " \t");
     const mappings = [_]struct { []const u8, InputFormat }{
-        .{ "text/csv", .csv },                  .{ "application/csv", .csv },         .{ "text/comma-separated-values", .csv },
-        .{ "text/tab-separated-values", .tsv }, .{ "text/tsv", .tsv },                .{ "application/json", .json },
-        .{ "application/x-ndjson", .ndjson },   .{ "application/json-seq", .ndjson }, .{ "application/jsonl", .ndjson },
-        .{ "application/xml", .xml },           .{ "text/xml", .xml },                .{ "application/rss+xml", .xml },
-        .{ "application/atom+xml", .xml },      .{ "application/yaml", .yaml },       .{ "application/x-yaml", .yaml },
-        .{ "text/yaml", .yaml },
+        .{ "text/csv", .csv },                  .{ "application/csv", .csv },      .{ "text/comma-separated-values", .csv },
+        .{ "text/tab-separated-values", .tsv }, .{ "text/tsv", .tsv },             .{ "application/json", .json },
+        .{ "application/x-ndjson", .ndjson },   .{ "application/jsonl", .ndjson }, .{ "application/xml", .xml },
+        .{ "text/xml", .xml },                  .{ "application/rss+xml", .xml },  .{ "application/atom+xml", .xml },
+        .{ "application/yaml", .yaml },         .{ "application/x-yaml", .yaml },  .{ "text/yaml", .yaml },
     };
     for (mappings) |mapping| if (std.ascii.eqlIgnoreCase(mime, mapping[0])) return mapping[1];
     return null;
