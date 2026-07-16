@@ -547,73 +547,61 @@ $ sql-pipe --url https://raw.githubusercontent.com/jalapic/engsoccerdata/master/
 [{"Season":1929,"matches":90,"avg_goals":4.67},{"Season":1932,"matches":90,"avg_goals":4.44},...]
 ```
 
-**OWID: countries by solar electricity share (2023)**
+**Gapminder: countries with the highest life expectancy (2007)**
 
-[Our World in Data](https://github.com/owid/energy-data) publishes annual
-energy statistics for 200+ countries. Find who leads on solar:
+This stable 7 KB CSV has country, continent, population, life expectancy, and
+GDP-per-capita columns. Find countries with the highest life expectancy:
 
 ```sh
-$ sql-pipe --url https://raw.githubusercontent.com/owid/energy-data/refs/heads/master/owid-energy-data.csv \
-  'SELECT country, ROUND(solar_share_elec,1) AS solar_pct
-            FROM t WHERE year=2023 AND solar_share_elec IS NOT NULL
-              AND iso_code NOT LIKE "%OWID%"
-            ORDER BY solar_pct DESC LIMIT 8'
-Cook Islands,50.0
-Palestine,40.0
-Namibia,27.0
-Kiribati,25.0
-Lebanon,22.3
-Luxembourg,20.6
-Chile,20.1
-El Salvador,20.1
+$ sql-pipe --url https://raw.githubusercontent.com/plotly/datasets/master/gapminder2007.csv \
+  'SELECT country, ROUND(lifeExp,1) AS life_expectancy,
+          ROUND(gdpPercap) AS gdp_per_capita
+   FROM t ORDER BY life_expectancy DESC LIMIT 8'
+Japan,82.6,31656.0
+"Hong Kong, China",82.2,39725.0
+Iceland,81.8,36181.0
+Switzerland,81.7,37506.0
+Australia,81.2,34435.0
+Spain,80.9,28821.0
+Sweden,80.9,33860.0
+Canada,80.7,36319.0
 ```
 
-**OWID: wind + solar combined — two-pass query**
+**Gapminder: continental overview — two-pass query**
 
-Add wind and solar in a first pass, then filter above 30% in a second.
-`-H` passes column names through to the next stage. Spain sits at 40%:
+First pass aggregates each continent. `-H` sends headers to second pass, which
+sorts population numerically:
 
 ```sh
-$ ENERGY=https://raw.githubusercontent.com/owid/energy-data/refs/heads/master/owid-energy-data.csv
-$ sql-pipe --url "$ENERGY" -H 'SELECT country,
-                        ROUND(solar_share_elec,1) AS solar,
-                        ROUND(wind_share_elec,1)  AS wind,
-                        ROUND(solar_share_elec+wind_share_elec,1) AS total
-                 FROM t WHERE year=2023 AND iso_code NOT LIKE "%OWID%"
-                   AND solar_share_elec IS NOT NULL AND wind_share_elec IS NOT NULL' \
-  | sql-pipe 'SELECT country, solar, wind, total FROM t
-              WHERE CAST(total AS REAL) >= 30 ORDER BY total DESC LIMIT 10'
-Denmark,10.8,57.2,68.0
-Lithuania,13.0,47.9,60.9
-Luxembourg,20.6,35.5,56.0
-Cook Islands,50.0,0.0,50.0
-Netherlands,16.3,24.6,41.0
-Uruguay,3.8,37.1,41.0
-Greece,18.2,22.5,40.7
-Spain,17.4,23.0,40.4
-Germany,12.6,27.7,40.3
-Palestine,40.0,0.0,40.0
+$ DATA=https://raw.githubusercontent.com/plotly/datasets/master/gapminder2007.csv
+$ sql-pipe --url "$DATA" -H 'SELECT continent,
+                         COUNT(*) AS countries,
+                         ROUND(SUM(pop)/1000000.0,1) AS population_millions,
+                         ROUND(AVG(lifeExp),1) AS avg_life_expectancy
+                  FROM t GROUP BY continent' \
+  | sql-pipe 'SELECT continent, countries, population_millions, avg_life_expectancy
+              FROM t ORDER BY CAST(population_millions AS REAL) DESC'
+Asia,33,3812.0,70.7
+Africa,52,929.5,54.8
+Americas,25,898.9,73.6
+Europe,30,586.1,77.6
+Oceania,2,24.5,80.7
 ```
 
-**REST API: European population density**
+**JSON: fuel efficiency by origin**
 
-[restcountries.com](https://restcountries.com) returns a JSON array. Reshape
-raw response with `jq` into NDJSON (one object per line), then query with `-I ndjson`:
+[Vega datasets](https://github.com/vega/vega-datasets) provides this 100 KB
+JSON array, which `sql-pipe` consumes directly with `-I json`:
 
 ```sh
-$ curl -s https://restcountries.com/v3.1/region/europe \
-  | jq -c '.[] | {country: .name.common, pop: .population, area: .area}' \
-  | sql-pipe -I ndjson \
-    'SELECT country, pop, area, ROUND(CAST(pop AS REAL)/area,1) AS density
-     FROM t WHERE area > 0 ORDER BY density DESC LIMIT 8'
-Monaco,38423,2.02,19021.3
-Gibraltar,38000,6.0,6333.3
-Malta,574250,316.0,1817.2
-Vatican City,882,0.49,1800.0
-Jersey,103267,116.0,890.2
-Guernsey,64781,78.0,830.5
-San Marino,34132,61.0,559.5
-Netherlands,18100436,41865.0,432.4
+$ sql-pipe --url https://raw.githubusercontent.com/vega/vega-datasets/main/data/cars.json -I json \
+  'SELECT Origin, COUNT(*) AS cars,
+          ROUND(AVG("Miles_per_Gallon"),1) AS avg_mpg
+   FROM t WHERE "Miles_per_Gallon" IS NOT NULL
+   GROUP BY Origin ORDER BY avg_mpg DESC'
+Japan,79,30.5
+Europe,70,27.9
+USA,249,20.1
 ```
 
 **Live weather: 7-day Madrid forecast**
