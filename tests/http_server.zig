@@ -74,7 +74,7 @@ fn serve(io: std.Io, stream: std.Io.net.Stream, redirect_target_hits: *usize) !v
         const next = try std.fmt.bufPrint(&location, "/redirect-chain/{d}", .{n - 1});
         return redirect(&writer.interface, next);
     }
-    if (std.mem.eql(u8, path, "/empty")) return respond(&writer.interface, "200 OK", "text/csv", "");
+    if (std.mem.eql(u8, path, "/empty")) return respond(&writer.interface, "200 OK", "text/csv", "name\n");
     if (std.mem.eql(u8, path, "/large")) return respond(&writer.interface, "200 OK", "text/csv", "name\nabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz\n");
     return respond(&writer.interface, "404 Not Found", "text/plain", "missing\n");
 }

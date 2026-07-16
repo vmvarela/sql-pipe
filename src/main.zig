@@ -192,10 +192,14 @@ fn run(
 
     // Load from URL if provided
     if (parsed.url) |url| {
-        const fetch_result = http_mod.fetchUrl(allocator, io, url, parsed.http_headers, parsed.max_body_size) catch |err| switch (err) {
+        var http_status: ?u16 = null;
+        const fetch_result = http_mod.fetchUrl(allocator, io, url, parsed.http_headers, parsed.max_body_size, &http_status) catch |err| switch (err) {
             error.InvalidUrl => fatal("invalid URL: {s}", stderr_writer, .usage, .{url}),
             error.InvalidHttpHeader => fatal("invalid --http-header value", stderr_writer, .usage, .{}),
-            error.UrlFetchFailed => fatal("failed to fetch URL: {s}", stderr_writer, .usage, .{url}),
+            error.UrlFetchFailed => if (http_status) |status|
+                fatal("failed to fetch URL: {s} (HTTP {d})", stderr_writer, .usage, .{ url, status })
+            else
+                fatal("failed to fetch URL: {s}", stderr_writer, .usage, .{url}),
             else => fatal("URL fetch failed: {s}", stderr_writer, .usage, .{@errorName(err)}),
         };
         defer allocator.free(fetch_result.body);
@@ -207,7 +211,6 @@ fn run(
         const input_format = if (parsed.input_format_explicit) parsed.input_format else fetch_result.format;
 
         const rows = loadInput(allocator, io, db, "t", input_format, &body_reader, parsed, stderr_writer);
-        if (rows == 0) fatal("empty input from URL: {s}", stderr_writer, .csv_error, .{url});
         total_rows += rows;
     }
 

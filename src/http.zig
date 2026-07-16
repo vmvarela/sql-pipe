@@ -18,6 +18,7 @@ pub fn fetchUrl(
     url: []const u8,
     headers: []const []const u8,
     max_body_size: usize,
+    status_code: *?u16,
 ) SqlPipeError!FetchResult {
     const uri = std.Uri.parse(url) catch return error.InvalidUrl;
     if ((!std.ascii.eqlIgnoreCase(uri.scheme, "http") and !std.ascii.eqlIgnoreCase(uri.scheme, "https")) or uri.host == null)
@@ -47,7 +48,10 @@ pub fn fetchUrl(
 
     request.sendBodiless() catch return error.UrlFetchFailed;
     var response = request.receiveHead(&redirect_buffer) catch return error.UrlFetchFailed;
-    if (response.head.status.class() != .success) return error.UrlFetchFailed;
+    if (response.head.status.class() != .success) {
+        status_code.* = @intFromEnum(response.head.status);
+        return error.UrlFetchFailed;
+    }
 
     const detected_format = detectFormatFromContentType(response.head.content_type) orelse
         detectFormatFromUrl(url) orelse .csv;

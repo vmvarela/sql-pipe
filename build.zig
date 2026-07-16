@@ -174,9 +174,8 @@ pub fn build(b: *std.Build) void {
         \\! "$bin" --url "$base/redirect-chain/6" 'SELECT 1' >/dev/null 2>"$err_file"
         \\grep -q 'failed to fetch URL' "$err_file"
         \\! "$bin" --url "$base/missing" 'SELECT 1' >/dev/null 2>"$err_file"
-        \\grep -q 'failed to fetch URL' "$err_file"
-        \\! "$bin" --url "$base/empty" 'SELECT 1' >/dev/null 2>"$err_file"
-        \\grep -q 'empty input from URL' "$err_file"
+        \\grep -q "failed to fetch URL: $base/missing (HTTP 404)" "$err_file"
+        \\[ "$("$bin" --url "$base/empty" 'SELECT count(*) FROM t')" = 0 ]
         \\! "$bin" --url "$base/large" --max-body-size 8 'SELECT 1' >/dev/null 2>"$err_file"
         \\grep -q 'failed to fetch URL' "$err_file"
         \\join_query='SELECT t.name, customers.name FROM t JOIN customers ON t.id = customers.id'
