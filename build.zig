@@ -68,17 +68,17 @@ pub fn build(b: *std.Build) void {
     // scanner.c, reader.c, writer.c, loader.c. Skip dumper.c, emitter.c
     // (we don't emit YAML).
     exe.root_module.addIncludePath(b.path("lib/yaml"));
-    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"),    .flags = &.{
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"), .flags = &.{
         "-DYAML_VERSION_MAJOR=0",
         "-DYAML_VERSION_MINOR=2",
         "-DYAML_VERSION_PATCH=5",
         "-DYAML_VERSION_STRING=\"0.2.5\"",
     } });
-    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/parser.c"),  .flags = &.{} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/parser.c"), .flags = &.{} });
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/scanner.c"), .flags = &.{} });
-    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"),  .flags = &.{} });
-    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"),  .flags = &.{} });
-    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"),  .flags = &.{} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"), .flags = &.{} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"), .flags = &.{} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"), .flags = &.{} });
 
     b.installArtifact(exe);
 
@@ -136,6 +136,54 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_infer.step);
     test_step.dependOn(&test_no_infer.step);
     test_step.dependOn(&test_real.step);
+
+    // HTTP input integration test (issue #171): server is a build-only fixture.
+    const http_server = b.addExecutable(.{
+        .name = "http-server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/http_server.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    const test_http_input = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\set -euo pipefail
+        \\server="$0"
+        \\port_file=$(mktemp)
+        \\err_file=$(mktemp)
+        \\rm -f "$port_file"
+        \\"$server" "$port_file" & server_pid=$!
+        \\cleanup() { kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; rm -f "$port_file" "$err_file"; }
+        \\trap cleanup EXIT
+        \\for _ in $(seq 1 100); do [ -s "$port_file" ] && break; sleep 0.05; done
+        \\[ -s "$port_file" ]
+        \\base="http://127.0.0.1:$(cat "$port_file")"
+        \\bin=./zig-out/bin/sql-pipe
+        \\[ "$("$bin" --url "$base/csv" 'SELECT name FROM t')" = Ada ]
+        \\[ "$("$bin" --url "$base/json" 'SELECT name FROM t')" = Ada ]
+        \\[ "$("$bin" --url "$base/fallback.csv" 'SELECT name FROM t')" = Ada ]
+        \\[ "$("$bin" --url "$base/override" -I json 'SELECT name FROM t')" = Ada ]
+        \\[ "$("$bin" --url "$base/headers" --http-header 'X-Test: one' --http-header 'X-Other: two' 'SELECT name FROM t')" = Ada ]
+        \\[ "$("$bin" --url "$base/redirect" 'SELECT name FROM t')" = Ada ]
+        \\! "$bin" --url "$base/redirect-with-header" --http-header 'X-Test: one' 'SELECT 1' >/dev/null 2>"$err_file"
+        \\grep -q 'failed to fetch URL' "$err_file"
+        \\[ "$("$bin" --url "$base/hits" 'SELECT hits FROM t')" = 0 ]
+        \\[ "$("$bin" --url "$base/redirect-chain/5" 'SELECT name FROM t')" = Ada ]
+        \\! "$bin" --url "$base/redirect-chain/6" 'SELECT 1' >/dev/null 2>"$err_file"
+        \\grep -q 'failed to fetch URL' "$err_file"
+        \\! "$bin" --url "$base/missing" 'SELECT 1' >/dev/null 2>"$err_file"
+        \\grep -q "failed to fetch URL: $base/missing (HTTP 404)" "$err_file"
+        \\[ "$("$bin" --url "$base/empty" 'SELECT count(*) FROM t')" = 0 ]
+        \\! "$bin" --url "$base/large" --max-body-size 8 'SELECT 1' >/dev/null 2>"$err_file"
+        \\grep -q 'failed to fetch URL' "$err_file"
+        \\join_query='SELECT t.name, customers.name FROM t JOIN customers ON t.id = customers.id'
+        \\printf 'id,name\n99,Wrong\n' | "$bin" --url "$base/csv" tests/fixtures/customers.csv "$join_query" | diff - <(printf 'Ada,Alice\n')
+    });
+    test_http_input.addArtifactArg(http_server);
+    test_http_input.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_http_input.step);
 
     // Integration test 4: --help flag prints usage to stderr and exits 0
     const test_help = b.addSystemCommand(&.{
@@ -2763,17 +2811,17 @@ pub fn build(b: *std.Build) void {
     xml_unit_tests.root_module.addImport("c", translate_c.createModule());
     xml_unit_tests.root_module.addImport("yaml", translate_yaml.createModule());
     xml_unit_tests.root_module.addIncludePath(b.path("lib/yaml"));
-    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"),    .flags = &.{
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"), .flags = &.{
         "-DYAML_VERSION_MAJOR=0",
         "-DYAML_VERSION_MINOR=2",
         "-DYAML_VERSION_PATCH=5",
         "-DYAML_VERSION_STRING=\"0.2.5\"",
     } });
-    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/parser.c"),  .flags = &.{} });
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/parser.c"), .flags = &.{} });
     xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/scanner.c"), .flags = &.{} });
-    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"),  .flags = &.{} });
-    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"),  .flags = &.{} });
-    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"),  .flags = &.{} });
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"), .flags = &.{} });
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"), .flags = &.{} });
+    xml_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"), .flags = &.{} });
     if (bundle_sqlite) {
         xml_unit_tests.root_module.addIncludePath(b.path("lib"));
         xml_unit_tests.root_module.addCSourceFile(.{
@@ -2799,17 +2847,17 @@ pub fn build(b: *std.Build) void {
     loader_unit_tests.root_module.addImport("c", translate_c.createModule());
     loader_unit_tests.root_module.addImport("yaml", translate_yaml.createModule());
     loader_unit_tests.root_module.addIncludePath(b.path("lib/yaml"));
-    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"),    .flags = &.{
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"), .flags = &.{
         "-DYAML_VERSION_MAJOR=0",
         "-DYAML_VERSION_MINOR=2",
         "-DYAML_VERSION_PATCH=5",
         "-DYAML_VERSION_STRING=\"0.2.5\"",
     } });
-    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/parser.c"),  .flags = &.{} });
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/parser.c"), .flags = &.{} });
     loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/scanner.c"), .flags = &.{} });
-    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"),  .flags = &.{} });
-    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"),  .flags = &.{} });
-    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"),  .flags = &.{} });
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"), .flags = &.{} });
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"), .flags = &.{} });
+    loader_unit_tests.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"), .flags = &.{} });
     if (bundle_sqlite) {
         loader_unit_tests.root_module.addIncludePath(b.path("lib"));
         loader_unit_tests.root_module.addCSourceFile(.{

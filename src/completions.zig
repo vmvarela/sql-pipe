@@ -22,7 +22,7 @@ fn generateBash(writer: *std.Io.Writer) !void {
         \\      return
         \\      ;;
         \\    -I|--input-format)
-        \\      COMPREPLY=($(compgen -W "csv tsv json ndjson xml" -- "$cur"))
+        \\      COMPREPLY=($(compgen -W "csv tsv json ndjson yaml xml" -- "$cur"))
         \\      return
         \\      ;;
         \\    -O|--output-format)
@@ -33,7 +33,7 @@ fn generateBash(writer: *std.Io.Writer) !void {
         \\      COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
         \\      return
         \\      ;;
-        \\    --max-rows|--sql-table|--null-value|--html-class|--output|--xml-root|--xml-row|--json-path)
+        \\    -u|--url|--http-header|--max-body-size|--max-rows|--sql-table|--null-value|--html-class|--output|--xml-root|--xml-row|--json-path)
         \\      return
         \\      ;;
         \\    --sample)
@@ -57,6 +57,9 @@ fn generateBash(writer: *std.Io.Writer) !void {
         \\      --no-type-inference
         \\      --header -H
         \\      --max-rows
+        \\      --url -u
+        \\      --http-header
+        \\      --max-body-size
         \\      --verbose -v
         \\      --silent -s
         \\      --validate
@@ -96,13 +99,16 @@ fn generateZsh(writer: *std.Io.Writer) !void {
         \\  opts=(
         \\    '(-d --delimiter)'{-d+,--delimiter=}'[Input field delimiter]:delimiter:'
         \\    '--tsv[Tab-separated input alias]'
-        \\    '(-I --input-format)'{-I+,--input-format=}'[Input format]:format:(csv tsv json ndjson xml)'
+        \\    '(-I --input-format)'{-I+,--input-format=}'[Input format]:format:(csv tsv json ndjson yaml xml)'
         \\    '(-O --output-format)'{-O+,--output-format=}'[Output format]:format:(csv tsv json ndjson xml markdown html sql)'
         \\    '--json[Alias for --output-format json]'
         \\    '--sql-table=[SQL INSERT table name]:table name:'
         \\    '--no-type-inference[Treat all columns as TEXT]'
         \\    '(-H --header)'{-H,--header}'[Print column names as first output row]'
         \\    '--max-rows=[Row limit]:rows:'
+        \\    '(-u --url)'{-u+,--url=}'[Fetch HTTP/HTTPS input into table t]:URL:'
+        \\    '*--http-header=[HTTP request header for --url]:header:'
+        \\    '--max-body-size=[Maximum --url response body size]:bytes:'
         \\    '(-v --verbose)'{-v,--verbose}'[Force row count to stderr]'
         \\    '(-s --silent)'{-s,--silent}'[Suppress row count output]'
         \\    '--validate[Parse input and print summary]'
@@ -142,7 +148,7 @@ fn generateFish(writer: *std.Io.Writer) !void {
         \\# Input options
         \\complete -c sql-pipe -s d -l delimiter -r -d "Input field delimiter"
         \\complete -c sql-pipe -l tsv -d "Alias for --delimiter \\'\\\\t\\'"
-        \\complete -c sql-pipe -s I -l input-format -r -f -a "csv tsv json ndjson xml" -d "Input format"
+        \\complete -c sql-pipe -s I -l input-format -r -f -a "csv tsv json ndjson yaml xml" -d "Input format"
         \\complete -c sql-pipe -s O -l output-format -r -f -a "csv tsv json ndjson xml markdown html sql" -d "Output format"
         \\complete -c sql-pipe -l json -d "Alias for --output-format json"
         \\
@@ -151,6 +157,9 @@ fn generateFish(writer: *std.Io.Writer) !void {
         \\complete -c sql-pipe -l no-type-inference -d "Treat all columns as TEXT"
         \\complete -c sql-pipe -s H -l header -d "Print column names as first output row"
         \\complete -c sql-pipe -l max-rows -r -d "Stop if more than N data rows read"
+        \\complete -c sql-pipe -s u -l url -r -d "Fetch HTTP/HTTPS input into table t"
+        \\complete -c sql-pipe -l http-header -r -d "HTTP request header for --url"
+        \\complete -c sql-pipe -l max-body-size -r -d "Maximum --url response body size"
         \\complete -c sql-pipe -s v -l verbose -d "Force row count to stderr"
         \\complete -c sql-pipe -s s -l silent -d "Suppress row count output"
         \\complete -c sql-pipe -l validate -d "Parse input and print summary"

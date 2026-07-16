@@ -10,6 +10,7 @@ const args_mod = @import("args.zig");
 const sqlite_mod = @import("sqlite.zig");
 const loader = @import("loader.zig");
 const yaml_mod = @import("yaml.zig");
+const http_mod = @import("http.zig");
 
 const columns_mode = @import("modes/columns.zig");
 const validate_mode = @import("modes/validate.zig");
@@ -60,7 +61,7 @@ fn execQuery(
     html_class: []const u8,
     null_value: ?[]const u8,
     use_table: bool,
-) (SqlPipeError || std.mem.Allocator.Error || error{WriteFailed, StepFailed})!void {
+) (SqlPipeError || std.mem.Allocator.Error || error{ WriteFailed, StepFailed })!void {
     const query_z = try allocator.dupeZ(u8, query);
     defer allocator.free(query_z);
 
@@ -169,7 +170,7 @@ fn printQueryPlan(
 /// run(allocator, io, parsed, stderr_writer, stdout_writer, use_table) → void
 /// Pre:  parsed contains a valid query; allocator and writers are valid
 ///       use_table is true when output should be formatted as a pretty table
-/// Post: input from stdin has been loaded (dispatched on parsed.input_format),
+/// Post: input from stdin/URL has been loaded (dispatched on parsed.input_format),
 ///       query executed, results written to stdout in parsed.output_format
 ///       On error, an "error: ..." message is written to stderr and process
 ///       exits with the appropriate ExitCode (1, 2, or 3)
@@ -189,6 +190,30 @@ fn run(
     const start_ts = std.Io.Timestamp.now(io, .awake);
     var total_rows: usize = 0;
 
+    // Load from URL if provided
+    if (parsed.url) |url| {
+        var http_status: ?u16 = null;
+        const fetch_result = http_mod.fetchUrl(allocator, io, url, parsed.http_headers, parsed.max_body_size, &http_status) catch |err| switch (err) {
+            error.InvalidUrl => fatal("invalid URL: {s}", stderr_writer, .usage, .{url}),
+            error.InvalidHttpHeader => fatal("invalid --http-header value", stderr_writer, .usage, .{}),
+            error.UrlFetchFailed => if (http_status) |status|
+                fatal("failed to fetch URL: {s} (HTTP {d})", stderr_writer, .usage, .{ url, status })
+            else
+                fatal("failed to fetch URL: {s}", stderr_writer, .usage, .{url}),
+            else => fatal("URL fetch failed: {s}", stderr_writer, .usage, .{@errorName(err)}),
+        };
+        defer allocator.free(fetch_result.body);
+
+        // Create reader from fetched body
+        var body_reader = std.Io.Reader.fixed(fetch_result.body);
+
+        // Use detected format unless -I explicitly provided
+        const input_format = if (parsed.input_format_explicit) parsed.input_format else fetch_result.format;
+
+        const rows = loadInput(allocator, io, db, "t", input_format, &body_reader, parsed, stderr_writer);
+        total_rows += rows;
+    }
+
     // Load each file argument into its named table
     for (parsed.files) |file_input| {
         var file_buf: [4096]u8 = undefined;
@@ -203,8 +228,8 @@ fn run(
         total_rows += rows;
     }
 
-    // Load stdin as `t` if piped
-    if (parsed.has_stdin) {
+    // Load stdin as `t` if piped (and no URL was provided)
+    if (parsed.has_stdin and parsed.url == null) {
         var stdin_buf: [4096]u8 = undefined;
         var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
         const rows = loadInput(allocator, io, db, "t", parsed.input_format, &stdin_reader.interface, parsed, stderr_writer);
@@ -231,7 +256,7 @@ fn run(
     }
 
     // Determine which table to show column context for on error
-    const main_table: []const u8 = if (parsed.files.len > 0) parsed.files[0].table_name else "t";
+    const main_table: []const u8 = if (parsed.url != null) "t" else if (parsed.files.len > 0) parsed.files[0].table_name else "t";
 
     // Print query plan to stderr when --explain is set
     if (parsed.explain) {
@@ -264,15 +289,14 @@ pub fn main(init: std.process.Init.Minimal) void {
     const args = init.args.toSlice(args_arena.allocator()) catch
         fatal("failed to read process arguments", stderr_writer, .usage, .{});
 
-    // Determine whether stdin has piped data available.
-    // Strategy: check if stdin is a TTY. If not, assume data is available.
-    // However, if we have file arguments, only load stdin if it's explicitly piped
-    // (not a TTY). This handles CI environments where stdin is /dev/null.
-    const has_stdin = !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
-
     const args_result = parseArgs(args_arena.allocator(), args) catch |err| {
         switch (err) {
             error.IncompatibleFlags => fatal("--header cannot be combined with non-CSV/TSV/HTML output format", stderr_writer, .usage, .{}),
+            error.InvalidUrl => fatal("--url requires a non-empty HTTP/HTTPS URL", stderr_writer, .usage, .{}),
+            error.InvalidHttpHeader => fatal("--http-header requires a non-empty 'Name: Value' header", stderr_writer, .usage, .{}),
+            error.InvalidMaxBodySize => fatal("--max-body-size requires a positive integer", stderr_writer, .usage, .{}),
+            error.HttpFlagsRequireUrl => fatal("--http-header and --max-body-size require --url", stderr_writer, .usage, .{}),
+            error.UrlIncompatibleMode => fatal("--url cannot be combined with special modes", stderr_writer, .usage, .{}),
             error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),
             error.InvalidMaxRows => fatal("--max-rows must be a positive integer", stderr_writer, .usage, .{}),
             error.InvalidInputFormat => fatal("unknown input format; supported: csv, tsv, json, ndjson, xml, yaml", stderr_writer, .usage, .{}),
@@ -388,7 +412,7 @@ pub fn main(init: std.process.Init.Minimal) void {
         },
         .parsed => |mut_parsed| {
             var parsed = mut_parsed;
-            parsed.has_stdin = has_stdin;
+            parsed.has_stdin = if (parsed.url != null) false else !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
             // Read query from file if -f/--file was used.
             // Arena-allocated to match the lifetime of parsed args.
             if (parsed.query_file) |path| {
@@ -401,8 +425,8 @@ pub fn main(init: std.process.Init.Minimal) void {
                 }
                 parsed.query = trimmed;
             }
-            // Check for file-stdin table name collision (t is reserved for stdin)
-            if (parsed.has_stdin) {
+            // `t` is reserved for stdin and URL input.
+            if (parsed.has_stdin or parsed.url != null) {
                 for (parsed.files) |f| {
                     if (std.mem.eql(u8, f.table_name, "t")) {
                         fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{});
