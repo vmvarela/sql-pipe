@@ -16,7 +16,7 @@ No server, no schema files, no setup. If you know SQL and work with CSV in the t
 ## Usage
 
 ```
-curl -s https://example.com/data.csv | sql-pipe "SELECT region, SUM(revenue) FROM t GROUP BY region ORDER BY 2 DESC"
+sql-pipe --url https://example.com/data.csv "SELECT region, SUM(revenue) FROM t GROUP BY region ORDER BY 2 DESC"
 ```
 
 Columns are auto-detected as INTEGER, REAL, or TEXT. Use `--no-type-inference` to force TEXT.

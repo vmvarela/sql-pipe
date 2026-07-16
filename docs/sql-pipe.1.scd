@@ -6,6 +6,7 @@ NAME
 SYNOPSIS
 	*sql-pipe* [OPTIONS] [<file>...] <query>
 	*sql-pipe* [OPTIONS] <query>
+	*sql-pipe* --url <url> [OPTIONS] [<file>...] <query>
 	*sql-pipe* -f <file> [OPTIONS] [<file>...]
 	*sql-pipe* -f <file> [OPTIONS]
 	*sql-pipe* --columns [OPTIONS] [<file>]
@@ -21,10 +22,12 @@ DESCRIPTION
 	executes the provided SQL query, and prints the results as CSV (or
 	JSON/XML when requested) to standard output.
 
-	When reading from stdin, data is loaded into a table named *t*. When files
+	When reading from stdin, data is loaded into a table named *t*. With *--url*,
+	the fetched response is loaded into *t* and stdin is ignored. When files
 	are passed as positional arguments, each file becomes a table named after
 	its basename without extension (e.g., *orders.csv* becomes table *orders*).
-	Stdin and file arguments can be combined — stdin is always table *t*.
+	File arguments remain available with *--url*. Stdin and file arguments can
+	be combined — stdin is table *t* when *--url* is not used.
 
 	Input format for files is auto-detected from the file extension (*.csv*,
 	*.tsv*, *.json*, *.ndjson*, *.yaml*, *.yml*, *.xml*). Unrecognized or
@@ -97,6 +100,20 @@ OPTIONS
 		Stop reading input after inserting <n> data rows and exit with
 		code 1 and an error message. Use this to guard against
 		accidentally piping extremely large files into memory.
+
+	*-u, --url* <url>
+		Fetch HTTP or HTTPS input from <url> into table *t*. Stdin is ignored
+		when this option is used; file arguments remain available. Use *-I* /
+		*--input-format* when format cannot be inferred from the URL.
+
+	*--http-header* <header>
+		Add an HTTP request header for *--url*, in *Key: Value* form. Repeat
+		this option to send multiple headers. Requests with headers do not follow
+		redirects; headerless requests follow up to five redirects.
+
+	*--max-body-size* <bytes>
+		Limit the *--url* response body to <bytes>. Default: *104857600* bytes
+		(100MB).
 
 	*-v, --verbose*
 		Print "Loaded <n> rows in <t>s" to standard error after all rows
@@ -234,6 +251,10 @@ EXAMPLES
 
 		$ sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
 
+	Fetch URL input into table t:
+
+		$ sql-pipe --url https://example.com/orders.csv 'SELECT * FROM t'
+
 	Join two files:
 
 		$ sql-pipe orders.csv customers.csv ++
@@ -313,8 +334,7 @@ EXAMPLES
 
 	Query XML input with nested structure using --xml-root and --xml-row (e.g. RSS feeds):
 
-		$ curl -s https://feeds.example.com/news.rss \
-		    | sql-pipe -I xml --xml-root channel --xml-row item 'SELECT title FROM t LIMIT 5'
+		$ sql-pipe --url https://feeds.example.com/news.rss -I xml --xml-root channel --xml-row item 'SELECT title FROM t LIMIT 5'
 
 	Output results as XML with custom element names:
 

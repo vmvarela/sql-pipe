@@ -79,6 +79,12 @@ pub const SqlPipeError = error{
     MissingNullValue,
     MissingHtmlClassValue,
     InvalidCompletionsShell,
+    InvalidUrl,
+    InvalidHttpHeader,
+    InvalidMaxBodySize,
+    HttpFlagsRequireUrl,
+    UrlIncompatibleMode,
+    UrlFetchFailed,
 };
 
 pub const ParsedArgs = struct {
@@ -98,6 +104,8 @@ pub const ParsedArgs = struct {
     header: bool,
     /// Input format (default: csv).
     input_format: InputFormat,
+    /// Whether -I/--input-format was explicitly provided (vs auto-detected).
+    input_format_explicit: bool = false,
     /// Output format (default: csv).
     output_format: OutputFormat,
     /// Abort with exit 1 when more than this many data rows are read; null = unlimited.
@@ -132,6 +140,12 @@ pub const ParsedArgs = struct {
     html_class: []const u8 = "",
     /// Custom string for NULL values in output (default: "NULL" for CSV/TSV/table, "" for markdown).
     null_value: ?[]const u8 = null,
+    /// URL to fetch input data from (when --url is used).
+    url: ?[]const u8 = null,
+    /// Custom HTTP headers for --url (repeatable, format: "Key: Value").
+    http_headers: []const []const u8 = &.{},
+    /// Maximum response body size in bytes for --url (default: 100MB).
+    max_body_size: usize = 100 * 1024 * 1024,
 };
 
 pub const ColumnsArgs = struct {
@@ -257,9 +271,9 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml, yaml
         \\                               Overrides file extension auto-detection; stdin always uses this value
         \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml, markdown (alias: md), html, sql
-  \\  --json                       Alias for --output-format json
-  \\  --sql-table <name>           Target table name for -O sql INSERT output (default: t)
-  \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
+        \\  --json                       Alias for --output-format json
+        \\  --sql-table <name>           Target table name for -O sql INSERT output (default: t)
+        \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
         \\  -H, --header                 Print column names as the first output row (CSV/TSV/HTML)
         \\  --max-rows <n>               Stop if more than <n> data rows are read (exit 1)
         \\  -v, --verbose                Force row count to stderr (shown automatically on TTY)
@@ -300,9 +314,16 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
         \\
+        \\HTTP Input:
+        \\  -u, --url <url>              Fetch input data from HTTP/HTTPS URL
+        \\                               Ignores stdin; can combine with file arguments
+        \\  --http-header <header>       Custom HTTP header for --url (repeatable, format: "Key: Value")
+        \\                               Requests with --http-header do not follow redirects
+        \\  --max-body-size <bytes>      Maximum response body size for --url (default: 104857600 = 100MB)
+        \\
         \\Exit codes:
         \\  0  Success
-        \\  1  Usage error (missing query, bad arguments)
+        \\  1  Usage error (missing query, bad arguments, network/HTTP errors)
         \\  2  Input parse error
         \\  3  SQL error
         \\
@@ -323,6 +344,22 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  cat data.csv | sql-pipe --sample 5
         \\  sql-pipe -f query.sql data.csv
         \\  cat data.csv | sql-pipe -f query.sql
+        \\
+        \\HTTP Examples:
+        \\  # Fetch CSV directly from URL
+        \\  sql-pipe --url https://example.com/data.csv 'SELECT * FROM t'
+        \\
+        \\  # Fetch JSON from API with auto-detection
+        \\  sql-pipe --url "https://api.github.com/repos/owner/repo/issues" 'SELECT * FROM t'
+        \\
+        \\  # With custom headers (e.g., Authorization)
+        \\  sql-pipe --url https://api.example.com/data.json --http-header "Authorization: Bearer token" 'SELECT * FROM t'
+        \\
+        \\  # Explicit format override with -I
+        \\  sql-pipe --url https://example.com/data --input-format csv 'SELECT * FROM t'
+        \\
+        \\  # Combine URL with file arguments (joins)
+        \\  sql-pipe --url https://api.example.com/orders.json orders.csv 'SELECT * FROM t JOIN orders ON t.id = orders.id'
         \\
     );
 }
@@ -384,6 +421,11 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var seen_dashdash = false;
     var positional_args: std.ArrayList([]const u8) = .empty;
     defer positional_args.deinit(allocator);
+
+    var url: ?[]const u8 = null;
+    var http_headers: std.ArrayList([]const u8) = .empty;
+    var max_body_size: usize = 100 * 1024 * 1024;
+    var max_body_size_set = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -555,6 +597,37 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             query_file_seen = true;
             query_file = arg["-f=".len..];
             if (query_file.?.len == 0) return error.InvalidQueryFile;
+        } else if (std.mem.eql(u8, arg, "--url") or std.mem.eql(u8, arg, "-u")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidUrl;
+            if (args[i].len == 0) return error.InvalidUrl;
+            url = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--url=")) {
+            const val = arg["--url=".len..];
+            if (val.len == 0) return error.InvalidUrl;
+            url = val;
+        } else if (std.mem.startsWith(u8, arg, "-u=")) {
+            const val = arg["-u=".len..];
+            if (val.len == 0) return error.InvalidUrl;
+            url = val;
+        } else if (std.mem.eql(u8, arg, "--http-header")) {
+            i += 1;
+            if (i >= args.len or !isValidHttpHeader(args[i])) return error.InvalidHttpHeader;
+            try http_headers.append(allocator, args[i]);
+        } else if (std.mem.startsWith(u8, arg, "--http-header=")) {
+            const val = arg["--http-header=".len..];
+            if (!isValidHttpHeader(val)) return error.InvalidHttpHeader;
+            try http_headers.append(allocator, val);
+        } else if (std.mem.eql(u8, arg, "--max-body-size")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidMaxBodySize;
+            max_body_size = std.fmt.parseUnsigned(usize, args[i], 10) catch return error.InvalidMaxBodySize;
+            if (max_body_size == 0) return error.InvalidMaxBodySize;
+            max_body_size_set = true;
+        } else if (std.mem.startsWith(u8, arg, "--max-body-size=")) {
+            max_body_size = std.fmt.parseUnsigned(usize, arg["--max-body-size=".len..], 10) catch return error.InvalidMaxBodySize;
+            if (max_body_size == 0) return error.InvalidMaxBodySize;
+            max_body_size_set = true;
         } else {
             try positional_args.append(allocator, arg);
         }
@@ -685,6 +758,11 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (table_mode == .always and output_format != .csv and output_format != .tsv)
         return error.TableWithNonCsv;
 
+    if (url != null and (list_columns or validate or sample_mode or stats_mode or schema_mode or explain))
+        return error.UrlIncompatibleMode;
+    if (url == null and (http_headers.items.len > 0 or max_body_size_set))
+        return error.HttpFlagsRequireUrl;
+
     // --columns mode: list headers and exit
     if (list_columns)
         return .{ .columns = ColumnsArgs{
@@ -745,6 +823,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .delimiter = delimiter,
         .header = header,
         .input_format = input_format,
+        .input_format_explicit = input_format_explicit,
         .output_format = output_format,
         .max_rows = max_rows,
         .verbose = verbose,
@@ -761,7 +840,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .sql_table = sql_table,
         .html_class = html_class,
         .null_value = null_value,
+        .url = url,
+        .http_headers = http_headers.items,
+        .max_body_size = max_body_size,
     } };
+}
+
+fn isValidHttpHeader(header: []const u8) bool {
+    const colon = std.mem.indexOfScalar(u8, header, ':') orelse return false;
+    return std.mem.trim(u8, header[0..colon], " \t").len > 0;
 }
 
 /// Derive a table name from a file path (basename without extension).

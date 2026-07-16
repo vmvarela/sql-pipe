@@ -9,7 +9,7 @@
 It exists because `awk` is cryptic, spinning up a Python interpreter for a one-liner feels wrong, and `sqlite3 :memory:` takes four commands before you can query anything. If you know SQL and work with CSV in the terminal, this is the tool you've been reaching for.
 
 ```sh
-$ curl -s https://example.com/data.csv | sql-pipe 'SELECT region, SUM(revenue) FROM t GROUP BY region ORDER BY 2 DESC'
+$ sql-pipe --url https://example.com/data.csv 'SELECT region, SUM(revenue) FROM t GROUP BY region ORDER BY 2 DESC'
 
 # Or pass files directly — each file becomes a table named after its basename
 $ sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
@@ -148,6 +148,15 @@ Binary lands at `./zig-out/bin/sql-pipe`. SQLite is compiled from the official a
 
 Input comes from stdin or file arguments. For CSV and TSV, the first row must be a header — those column names become the schema. Results go to stdout as comma-separated values by default.
 
+### URL input (table `t`)
+
+Use `-u` / `--url` to fetch HTTP or HTTPS input into table `t`. File arguments remain available, but stdin is ignored when `--url` is used. Set `-I` when the URL does not reveal its format. Repeat `--http-header` for request headers; `--max-body-size` limits the response body and defaults to `104857600` bytes (100MB).
+
+```sh
+$ sql-pipe --url https://example.com/orders.csv --http-header 'Authorization: Bearer token' \
+    'SELECT * FROM t'
+```
+
 ### Stdin input (table `t`)
 
 When reading from stdin, data is loaded into a table called `t`:
@@ -265,9 +274,8 @@ Real-world XML documents (RSS feeds, API responses) nest rows inside a container
 
 ```sh
 # Query an RSS feed: channel/item → rows
-$ curl -s https://feeds.feedburner.com/TheHackersNews \
-    | sql-pipe -I xml --xml-root channel --xml-row item \
-      'SELECT title FROM t LIMIT 5'
+$ sql-pipe --url https://feeds.feedburner.com/TheHackersNews -I xml \
+    --xml-root channel --xml-row item 'SELECT title FROM t LIMIT 5'
 
 # Query XML with a custom root and row name
 $ cat events.xml | sql-pipe -I xml --xml-root events --xml-row event \
@@ -300,7 +308,7 @@ Use `-I` to override auto-detection when the extension is wrong or ambiguous (`.
 $ sql-pipe -I tsv data.txt 'SELECT * FROM data'
 ```
 
-Stdin still works and is always available as table `t`. Mix stdin with file arguments:
+Stdin works as table `t`. Mix stdin with file arguments:
 
 ```sh
 # Stdin as t, file as named table
@@ -349,6 +357,9 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `-H`, `--header` | Print column names as the first output row (CSV/TSV/HTML) |
 | `--json` | Alias for `--output-format json` (mutually exclusive with `-H`) |
 | `--max-rows <n>` | Stop if more than `n` data rows are read (exit 1) |
+| `-u`, `--url <url>` | Fetch HTTP/HTTPS input into table `t`. Stdin is ignored; file arguments remain allowed. |
+| `--http-header <header>` | Request header for `--url`, in `Key: Value` form. Repeat for multiple headers. Requests with headers do not follow redirects; headerless requests follow up to five. |
+| `--max-body-size <bytes>` | Maximum `--url` response body size (default: `104857600`, 100MB). |
 | `--validate` | Parse the entire input and print a summary (`OK: <n> rows, <m> columns (col TYPE, ...)`) to stdout. Exit 0 on success, exit 2 on parse error. No query required. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format` (csv, tsv, json, ndjson, yaml, xml). JSON/NDJSON/YAML/XML columns are reported as TEXT. |
 | `--columns` | Read the input header, print each column name on its own line, and exit 0. Supports CSV, TSV, JSON, NDJSON, YAML, and XML input. With `-v`/`--verbose`, also shows the inferred type per column (`name INTEGER`). Respects `--delimiter` and `--tsv`. Mutually exclusive with a query argument. |
 | `--sample [<n>]` | Print a schema comment block to stderr and the first `<n>` data rows to stdout as CSV (default: `n=10`). The schema block lists each column name and its inferred type, prefixed with `#`. Implies `--header`. Compatible with `--delimiter` and `--tsv`. Mutually exclusive with `--json` and a query argument. No query required. |
@@ -510,10 +521,10 @@ The [engsoccerdata](https://github.com/jalapic/engsoccerdata) dataset covers
 Spanish first-division football since the inaugural season:
 
 ```sh
-$ curl -s https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/spain.csv \
-  | sql-pipe 'SELECT home AS team, COUNT(*) AS wins
-              FROM t WHERE CAST(hgoal AS INTEGER) > CAST(vgoal AS INTEGER) AND tier=1
-              GROUP BY home ORDER BY wins DESC LIMIT 8'
+$ sql-pipe --url https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/spain.csv \
+  'SELECT home AS team, COUNT(*) AS wins
+            FROM t WHERE CAST(hgoal AS INTEGER) > CAST(vgoal AS INTEGER) AND tier=1
+            GROUP BY home ORDER BY wins DESC LIMIT 8'
 Real Madrid,1174
 FC Barcelona,1163
 Atletico Madrid,956
@@ -529,8 +540,7 @@ Real Sociedad,721
 Same dataset, different angle — output as JSON for downstream tools:
 
 ```sh
-$ curl -s https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/spain.csv \
-  | sql-pipe --json \
+$ sql-pipe --url https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/spain.csv --json \
     'SELECT Season, COUNT(*) AS matches,
             ROUND(CAST(SUM(CAST(hgoal AS INTEGER)+CAST(vgoal AS INTEGER)) AS REAL)/COUNT(*),2) AS avg_goals
      FROM t WHERE tier=1 GROUP BY Season ORDER BY avg_goals DESC LIMIT 5'
@@ -543,11 +553,11 @@ $ curl -s https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-ra
 energy statistics for 200+ countries. Find who leads on solar:
 
 ```sh
-$ curl -s https://raw.githubusercontent.com/owid/energy-data/refs/heads/master/owid-energy-data.csv \
-  | sql-pipe 'SELECT country, ROUND(solar_share_elec,1) AS solar_pct
-              FROM t WHERE year=2023 AND solar_share_elec IS NOT NULL
-                AND iso_code NOT LIKE "%OWID%"
-              ORDER BY solar_pct DESC LIMIT 8'
+$ sql-pipe --url https://raw.githubusercontent.com/owid/energy-data/refs/heads/master/owid-energy-data.csv \
+  'SELECT country, ROUND(solar_share_elec,1) AS solar_pct
+            FROM t WHERE year=2023 AND solar_share_elec IS NOT NULL
+              AND iso_code NOT LIKE "%OWID%"
+            ORDER BY solar_pct DESC LIMIT 8'
 Cook Islands,50.0
 Palestine,40.0
 Namibia,27.0
@@ -565,8 +575,7 @@ Add wind and solar in a first pass, then filter above 30% in a second.
 
 ```sh
 $ ENERGY=https://raw.githubusercontent.com/owid/energy-data/refs/heads/master/owid-energy-data.csv
-$ curl -s "$ENERGY" \
-  | sql-pipe -H 'SELECT country,
+$ sql-pipe --url "$ENERGY" -H 'SELECT country,
                         ROUND(solar_share_elec,1) AS solar,
                         ROUND(wind_share_elec,1)  AS wind,
                         ROUND(solar_share_elec+wind_share_elec,1) AS total
@@ -589,7 +598,7 @@ Palestine,40.0,0.0,40.0
 **REST API: European population density**
 
 [restcountries.com](https://restcountries.com) returns a JSON array. Reshape
-with `jq` into NDJSON (one object per line) and query directly with `-I ndjson`:
+raw response with `jq` into NDJSON (one object per line), then query with `-I ndjson`:
 
 ```sh
 $ curl -s https://restcountries.com/v3.1/region/europe \
@@ -614,9 +623,7 @@ arrays need transposing into objects — `jq` handles that, then `-I ndjson` loa
 the result:
 
 ```sh
-$ curl -s "https://api.open-meteo.com/v1/forecast?latitude=40.4168&longitude=-3.7038\
-&daily=temperature_2m_max,temperature_2m_min,precipitation_sum\
-&timezone=Europe%2FMadrid&forecast_days=7" \
+$ curl -s "https://api.open-meteo.com/v1/forecast?latitude=40.4168&longitude=-3.7038&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Europe%2FMadrid&forecast_days=7" \
   | jq -c '.daily
     | [.time, .temperature_2m_max, .temperature_2m_min, .precipitation_sum]
     | transpose
@@ -638,13 +645,13 @@ The same [engsoccerdata](https://github.com/jalapic/engsoccerdata) dataset has a
 stores it as ISO 8601 text, so `julianday()` works directly — no preprocessing:
 
 ```sh
-$ curl -s https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/spain.csv \
-    | sql-pipe 'SELECT Season,
-                       MIN(Date) AS start,
-                       MAX(Date) AS end,
-                       CAST(julianday(MAX(Date)) - julianday(MIN(Date)) AS INTEGER) AS days
-                FROM t WHERE tier=1 AND Season BETWEEN 2018 AND 2022
-                GROUP BY Season ORDER BY Season'
+$ sql-pipe --url https://raw.githubusercontent.com/jalapic/engsoccerdata/master/data-raw/spain.csv \
+  'SELECT Season,
+                 MIN(Date) AS start,
+                 MAX(Date) AS end,
+                 CAST(julianday(MAX(Date)) - julianday(MIN(Date)) AS INTEGER) AS days
+          FROM t WHERE tier=1 AND Season BETWEEN 2018 AND 2022
+          GROUP BY Season ORDER BY Season'
 2018,2018-08-17,2019-05-19,275
 2019,2019-08-16,2020-07-19,338
 2020,2020-09-12,2021-05-23,253
