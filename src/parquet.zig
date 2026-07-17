@@ -445,14 +445,19 @@ pub fn loadParquetInput(
                         if (c.sqlite3_bind_double(stmt, param_idx, arr[row_idx]) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
                     },
-                    carquet_c.CARQUET_PHYSICAL_BYTE_ARRAY,
-                    carquet_c.CARQUET_PHYSICAL_FIXED_LEN_BYTE_ARRAY,
-                    carquet_c.CARQUET_PHYSICAL_INT96 => {
-                        const arr: [*]const carquet_c.carquet_byte_array_t = @ptrCast(@alignCast(data));
-                        const ba = arr[row_idx];
-                        if (c.sqlite3_bind_text(stmt, param_idx, @as([*]const u8, @ptrCast(ba.data)), ba.length, sqlite_mod.sqlite_static) != c.SQLITE_OK)
-                            sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-                    },
+                        carquet_c.CARQUET_PHYSICAL_BYTE_ARRAY,
+                        carquet_c.CARQUET_PHYSICAL_FIXED_LEN_BYTE_ARRAY,
+                        carquet_c.CARQUET_PHYSICAL_INT96 => {
+                            const arr: [*]const carquet_c.carquet_byte_array_t = @ptrCast(@alignCast(data));
+                            const ba = arr[row_idx];
+                            if (ba.data == null or ba.length == 0) {
+                                if (c.sqlite3_bind_text(stmt, param_idx, "", 0, sqlite_mod.sqlite_static) != c.SQLITE_OK)
+                                    sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                            } else {
+                                if (c.sqlite3_bind_text(stmt, param_idx, @as([*]const u8, @ptrCast(ba.data)), ba.length, sqlite_mod.sqlite_static) != c.SQLITE_OK)
+                                    sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                            }
+                        },
                     else => unreachable,
                 }
             }
