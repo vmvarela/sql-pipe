@@ -28,8 +28,11 @@ pub fn runSample(
         .stdin;
 
     switch (args.input_format) {
+        // ponytail: --sample for non-CSV formats requires loading into SQLite first;
+        // CSV/TSV stream directly. Upgrade: open temp DB, load Parquet/JSON/etc.,
+        // print schema via getTableColumnsWithTypes, SELECT LIMIT n for rows.
         .json, .ndjson, .xml, .yaml, .parquet => fatal(
-            "--sample is only supported with CSV and TSV input (not Parquet/JSON/XML/YAML)",
+            "--sample is only supported with CSV and TSV input",
             stderr_writer,
             .usage,
             .{},

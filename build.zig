@@ -133,9 +133,15 @@ pub fn build(b: *std.Build) void {
 
         // Static-link compression libs (.a archives → zero runtime deps)
         if (target.result.os.tag == .macos) {
-            exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/zstd/lib/libzstd.a" });
-            exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/lz4/lib/liblz4.a" });
-            exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/zlib/lib/libz.a" });
+            if (target.result.cpu.arch == .aarch64) {
+                exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/zstd/lib/libzstd.a" });
+                exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/lz4/lib/liblz4.a" });
+                exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/zlib/lib/libz.a" });
+            } else {
+                exe.root_module.addObjectFile(.{ .cwd_relative = "/usr/local/opt/zstd/lib/libzstd.a" });
+                exe.root_module.addObjectFile(.{ .cwd_relative = "/usr/local/opt/lz4/lib/liblz4.a" });
+                exe.root_module.addObjectFile(.{ .cwd_relative = "/usr/local/opt/zlib/lib/libz.a" });
+            }
         } else {
             exe.root_module.linkSystemLibrary("zstd", .{});
             exe.root_module.linkSystemLibrary("lz4", .{});
@@ -3739,5 +3745,40 @@ pub fn build(b: *std.Build) void {
         });
         test_parquet_columns.step.dependOn(b.getInstallStep());
         test_step.dependOn(&test_parquet_columns.step);
+
+        // Fuzzing tests: malformed Parquet files must not crash
+        const test_parquet_fuzz_truncated = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\# Truncated file (first 50 bytes only — missing footer)
+            \\dd if=tests/fixtures/sample.parquet bs=1 count=50 of=/tmp/fuzz_trunc.parquet 2>/dev/null
+            \\msg=$(./zig-out/bin/sql-pipe /tmp/fuzz_trunc.parquet 'SELECT 1' 2>&1; echo "EXIT:$?")
+            \\rm -f /tmp/fuzz_trunc.parquet
+            \\echo "$msg" | grep -q 'EXIT:[1-9]'
+        });
+        test_parquet_fuzz_truncated.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_fuzz_truncated.step);
+
+        const test_parquet_fuzz_bad_magic = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\# Corrupted PAR1 magic
+            \\cp tests/fixtures/sample.parquet /tmp/fuzz_bad.parquet
+            \\printf 'XXXX' | dd of=/tmp/fuzz_bad.parquet bs=1 count=4 conv=notrunc 2>/dev/null
+            \\msg=$(./zig-out/bin/sql-pipe /tmp/fuzz_bad.parquet 'SELECT 1' 2>&1; echo "EXIT:$?")
+            \\rm -f /tmp/fuzz_bad.parquet
+            \\echo "$msg" | grep -q 'PAR1' && echo "$msg" | grep -q 'EXIT:[1-9]'
+        });
+        test_parquet_fuzz_bad_magic.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_fuzz_bad_magic.step);
+
+        const test_parquet_fuzz_empty = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\# Empty file
+            \\printf '' > /tmp/fuzz_empty.parquet
+            \\msg=$(./zig-out/bin/sql-pipe /tmp/fuzz_empty.parquet 'SELECT 1' 2>&1; echo "EXIT:$?")
+            \\rm -f /tmp/fuzz_empty.parquet
+            \\echo "$msg" | grep -q 'EXIT:[1-9]'
+        });
+        test_parquet_fuzz_empty.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_fuzz_empty.step);
     }
 }
