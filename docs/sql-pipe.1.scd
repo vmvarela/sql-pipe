@@ -66,12 +66,6 @@ OPTIONS
 	*-I, --input-format* <fmt>
 		Set the input format explicitly: *csv* (default), *tsv*, *json*,
 		*ndjson*, *yaml*, *xml*, or *parquet*. When set, overrides file extension
-		auto-detection for all file arguments. Stdin always uses this value
-		(no filename to inspect). Useful when a file has an ambiguous
-		extension (*.txt*, *.dat*) or no extension at all. Both *.yaml* and
-		*.yml* extensions auto-detect to *yaml*. Parquet support must be
-		compiled in (*zig build -Dparquet=true*); without it, Parquet files
-		produce an error suggesting a rebuild.
 
 	*-O, --output-format* <fmt>
 		Set the output format: *csv* (default), *tsv*, *json*, *ndjson*,

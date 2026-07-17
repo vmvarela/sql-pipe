@@ -142,13 +142,7 @@ unzip -j sqlite.zip '*/sqlite3.c' '*/sqlite3.h' -d lib/
 zig build -Dbundle-sqlite=true -Doptimize=ReleaseSafe
 ```
 
-Binary lands at `./zig-out/bin/sql-pipe`. SQLite is compiled from the official amalgamation — no system dependencies.
-
-To build with Parquet support (opt-in, requires `zstd`, `lz4`, and `zlib` static libraries from Homebrew on macOS, or system dev packages on Linux):
-
-```sh
-zig build -Dbundle-sqlite=true -Dparquet=true -Doptimize=ReleaseSafe
-```
+Binary lands at `./zig-out/bin/sql-pipe`. SQLite and compression libraries are compiled from source — no system dependencies.
 
 ## Usage
 
@@ -356,7 +350,7 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 |------|-------------|
 | `-d`, `--delimiter <char>` | Input field delimiter (single character, default `,`) |
 | `--tsv` | Alias for `--delimiter '\t'` |
-| `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson`, `yaml`, `xml`, `parquet`. Overrides file extension auto-detection. Both `.yaml` and `.yml` file extensions auto-detect to `yaml`. Parquet support must be compiled in (`-Dparquet=true`). |
+| `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson`, `yaml`, `xml`, `parquet`. Overrides file extension auto-detection. Both `.yaml` and `.yml` file extensions auto-detect to `yaml`. |
 | `-O`, `--output-format <fmt>` | Output format: `csv` (default), `tsv`, `json`, `ndjson`, `xml`, `markdown` (alias: `md`), `html`, `sql` |
 | `--sql-table <name>` | Target table name for `-O sql` INSERT output (default: `t`) |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
@@ -702,7 +696,7 @@ The database is in-memory by default and vanishes when the process exits. Use `-
 ## Limitations
 
 - **File format auto-detection** is based on file extension. Files without a recognized extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.yaml`, `.yml`, `.xml`, `.parquet`) default to CSV. Use `-I` to override.
-- **Parquet support** is optional and must be compiled in (`zig build -Dparquet=true`). Without it, Parquet files produce an error suggesting a rebuild. Column types are mapped from Parquet physical types: INT32/INT64→INTEGER, FLOAT/DOUBLE→REAL, BYTE_ARRAY→TEXT, BOOLEAN→INTEGER (0/1). Logical types (DECIMAL, TIMESTAMP, DATE) are not yet mapped — stored by their physical representation.
+- **Parquet column types** are mapped from physical types: INT32/INT64→INTEGER, FLOAT/DOUBLE→REAL, BYTE_ARRAY→TEXT, BOOLEAN→INTEGER (0/1). Logical types (DATE, TIMESTAMP, DECIMAL) are converted to their ISO/text representation. Nested types (LIST, MAP, STRUCT) are not supported.
 
 ## Related
 

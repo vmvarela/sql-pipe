@@ -12,15 +12,6 @@ pub fn build(b: *std.Build) void {
         "Compile SQLite from lib/sqlite3.c (enables cross-compilation)",
     ) orelse false;
 
-    // Use -Dparquet=true to enable Parquet input format support.
-    // Bundles carquet C library (MIT, by Johan Natter) via lib/carquet/.
-    // Requires system libs: zstd, lz4, zlib (available via Homebrew/apt).
-    const parquet_enabled = b.option(
-        bool,
-        "parquet",
-        "Enable Parquet input format support (via carquet C library)",
-    ) orelse false;
-
     // Version: release CI injects from git tag with -Dversion=X.Y.Z
     const version = b.option(
         []const u8,
@@ -41,7 +32,6 @@ pub fn build(b: *std.Build) void {
     // Inject version string as a compile-time option accessible via @import("build_options")
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
-    build_options.addOption(bool, "parquet_enabled", parquet_enabled);
     exe.root_module.addOptions("build_options", build_options);
 
     // Translate sqlite3.h to Zig declarations, exposed as @import("c").
@@ -97,59 +87,56 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addCSourceFile(.{ .file = b.path("lib/linenoise/linenoise.c"), .flags = &.{} });
     }
 
-    // Parquet support via carquet C library (opt-in, gated behind -Dparquet)
-    // Copyright (c) 2025 Johan HG Natter (MIT). Acknowledgments in src/parquet.zig.
-    if (parquet_enabled) {
-        exe.root_module.addIncludePath(b.path("lib/carquet/include"));
-        exe.root_module.addIncludePath(b.path("lib/carquet/src"));
+    // Parquet support via carquet C library (MIT, by Johan Natter).
+    // Compression libs (zstd, lz4, zlib) bundled as C source alongside carquet.
+    // All statically linked — zero runtime deps.
+    exe.root_module.addIncludePath(b.path("lib/carquet/include"));
+    exe.root_module.addIncludePath(b.path("lib/carquet/src"));
+    exe.root_module.addIncludePath(b.path("lib/zstd"));
+    exe.root_module.addIncludePath(b.path("lib/lz4"));
+    exe.root_module.addIncludePath(b.path("lib/zlib"));
 
-        const carquet_src_root = "lib/carquet/src";
-        const carquet_flags = &.{ "-std=gnu11", "-D_GNU_SOURCE" };
-        inline for (.{
-            "core/arena.c", "core/allocator.c", "core/buffer.c",
-            "core/bitpack.c", "core/endian.c", "core/error.c", "core/geo_wkb.c",
-            "thrift/thrift_decode.c", "thrift/thrift_encode.c", "thrift/parquet_types.c",
-            "encoding/plain.c", "encoding/rle.c", "encoding/delta.c",
-            "encoding/delta_length.c", "encoding/delta_strings.c",
-            "encoding/dictionary.c", "encoding/byte_stream_split.c",
-            "compression/lz4.c", "compression/snappy.c", "compression/zstd.c",
-            "compression/gzip.c", "compression/custom.c",
-            "simd/detect.c", "simd/dispatch.c",
-            "reader/file_reader.c", "reader/batch_reader.c", "reader/column_reader.c",
-            "reader/page_reader.c", "reader/row_group_reader.c",
-            "reader/mmap_reader.c", "reader/statistics.c", "reader/page_filter.c",
-            "reader/worker_pool.c", "reader/arrow_c_export.c",
-            "reader/arrow_c_read.c", "reader/arrow_schema_read.c",
-            "writer/file_writer.c", "writer/row_group_writer.c", "writer/column_writer.c",
-            "writer/page_writer.c", "writer/arrow_schema.c", "writer/arrow_c_import.c",
-            "metadata/schema.c", "metadata/bloom_filter.c", "metadata/page_index.c",
-            "util/crc32.c", "util/xxhash.c",
-        }) |src_file| {
-            exe.root_module.addCSourceFile(.{
-                .file = b.path(carquet_src_root ++ "/" ++ src_file),
-                .flags = carquet_flags,
-            });
-        }
-
-        // Static-link compression libs (.a archives → zero runtime deps)
-        if (target.result.os.tag == .macos) {
-            if (target.result.cpu.arch == .aarch64) {
-                exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/zstd/lib/libzstd.a" });
-                exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/lz4/lib/liblz4.a" });
-                exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/zlib/lib/libz.a" });
-            } else {
-                exe.root_module.addObjectFile(.{ .cwd_relative = "/usr/local/opt/zstd/lib/libzstd.a" });
-                exe.root_module.addObjectFile(.{ .cwd_relative = "/usr/local/opt/lz4/lib/liblz4.a" });
-                exe.root_module.addObjectFile(.{ .cwd_relative = "/usr/local/opt/zlib/lib/libz.a" });
-            }
-        } else {
-            exe.root_module.linkSystemLibrary("zstd", .{});
-            exe.root_module.linkSystemLibrary("lz4", .{});
-            exe.root_module.linkSystemLibrary("z", .{});
-        }
-        exe.root_module.linkSystemLibrary("pthread", .{});
-        exe.root_module.linkSystemLibrary("m", .{});
+    const carquet_src_root = "lib/carquet/src";
+    const carquet_flags = &.{ "-std=gnu11", "-D_GNU_SOURCE" };
+    inline for (.{
+        "core/arena.c", "core/allocator.c", "core/buffer.c",
+        "core/bitpack.c", "core/endian.c", "core/error.c", "core/geo_wkb.c",
+        "thrift/thrift_decode.c", "thrift/thrift_encode.c", "thrift/parquet_types.c",
+        "encoding/plain.c", "encoding/rle.c", "encoding/delta.c",
+        "encoding/delta_length.c", "encoding/delta_strings.c",
+        "encoding/dictionary.c", "encoding/byte_stream_split.c",
+        "compression/lz4.c", "compression/snappy.c", "compression/zstd.c",
+        "compression/gzip.c", "compression/custom.c",
+        "simd/detect.c", "simd/dispatch.c",
+        "reader/file_reader.c", "reader/batch_reader.c", "reader/column_reader.c",
+        "reader/page_reader.c", "reader/row_group_reader.c",
+        "reader/mmap_reader.c", "reader/statistics.c", "reader/page_filter.c",
+        "reader/worker_pool.c", "reader/arrow_c_export.c",
+        "reader/arrow_c_read.c", "reader/arrow_schema_read.c",
+        "writer/file_writer.c", "writer/row_group_writer.c", "writer/column_writer.c",
+        "writer/page_writer.c", "writer/arrow_schema.c", "writer/arrow_c_import.c",
+        "metadata/schema.c", "metadata/bloom_filter.c", "metadata/page_index.c",
+        "util/crc32.c", "util/xxhash.c",
+    }) |src_file| {
+        exe.root_module.addCSourceFile(.{
+            .file = b.path(carquet_src_root ++ "/" ++ src_file),
+            .flags = carquet_flags,
+        });
     }
+
+    // Bundled compression libraries (C source, cross-compiles everywhere)
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/zstd/zstd.c"), .flags = &.{"-std=gnu11"} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/lz4/lz4.c"), .flags = &.{"-std=gnu11"} });
+    inline for (.{
+        "adler32.c", "compress.c", "crc32.c", "deflate.c",
+        "infback.c", "inffast.c",
+        "inflate.c", "inftrees.c", "trees.c", "uncompr.c", "zutil.c",
+    }) |zf| {
+        exe.root_module.addCSourceFile(.{ .file = b.path("lib/zlib/" ++ zf), .flags = &.{"-std=gnu11"} });
+    }
+
+    exe.root_module.linkSystemLibrary("pthread", .{});
+    exe.root_module.linkSystemLibrary("m", .{});
 
     b.installArtifact(exe);
 
@@ -3686,9 +3673,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_repl_exit_multiline.step);
 
     // ─── Parquet input integration tests (issue #206) ────────────────────────
-    // These tests require -Dparquet=true to run. They are skipped when not enabled.
-    if (parquet_enabled) {
-        // Integration test 206a: Basic Parquet read
+    // Integration test 206a: Basic Parquet read
         const test_parquet_basic = b.addSystemCommand(&.{
             "bash", "-c",
             \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet 'SELECT name FROM sample ORDER BY name')
@@ -3780,5 +3765,4 @@ pub fn build(b: *std.Build) void {
         });
         test_parquet_fuzz_empty.step.dependOn(b.getInstallStep());
         test_step.dependOn(&test_parquet_fuzz_empty.step);
-    }
 }

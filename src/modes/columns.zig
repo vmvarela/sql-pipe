@@ -5,7 +5,7 @@ const json_mod = @import("../json.zig");
 const xml_mod = @import("../xml.zig");
 const yaml_mod = @import("../yaml.zig");
 const build_options = @import("build_options");
-const parquet_mod = if (build_options.parquet_enabled) @import("../parquet.zig") else struct {};
+const parquet_mod = @import("../parquet.zig");
 const sqlite_mod = @import("../sqlite.zig");
 const loader = @import("../loader.zig");
 const args_mod = @import("../args.zig");
@@ -222,7 +222,7 @@ pub fn runColumns(
                 }
             }
         },
-        .parquet => if (build_options.parquet_enabled) {
+        .parquet => {
             var parquet_buf: [4096]u8 = undefined;
             const opened = source.openInput(io, input_source, stderr_writer);
             defer opened.deinit(io);
@@ -255,6 +255,8 @@ pub fn runColumns(
                     };
                 }
             }
-        } else sqlite_mod.fatal("parquet support was not compiled in (rebuild with -Dparquet=true)", stderr_writer, .usage, .{}),
+        },
     }
+    stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
+    stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
 }
