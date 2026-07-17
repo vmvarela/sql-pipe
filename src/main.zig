@@ -329,7 +329,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InvalidHttpHeader => fatal("--http-header requires a non-empty 'Name: Value' header", stderr_writer, .usage, .{}),
             error.InvalidMaxBodySize => fatal("--max-body-size requires a positive integer", stderr_writer, .usage, .{}),
             error.HttpFlagsRequireUrl => fatal("--http-header and --max-body-size require --url", stderr_writer, .usage, .{}),
-            error.UrlIncompatibleMode => fatal("--url cannot be combined with special modes", stderr_writer, .usage, .{}),
+            error.UrlIncompatibleMode => fatal("--url cannot be combined with --columns, --validate, or --sample", stderr_writer, .usage, .{}),
             error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),
             error.InvalidMaxRows => fatal("--max-rows must be a positive integer", stderr_writer, .usage, .{}),
             error.InvalidInputFormat => fatal("unknown input format; supported: csv, tsv, json, ndjson, xml, yaml, parquet", stderr_writer, .usage, .{}),
