@@ -69,8 +69,6 @@ pub fn build(b: *std.Build) void {
     // (we don't emit YAML).
     exe.root_module.addIncludePath(b.path("lib/yaml"));
 
-    // Bundle linenoise — line-editing library for REPL
-    exe.root_module.addIncludePath(b.path("lib/linenoise"));
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/api.c"), .flags = &.{
         "-DYAML_VERSION_MAJOR=0",
         "-DYAML_VERSION_MINOR=2",
@@ -83,8 +81,11 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"), .flags = &.{} });
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"), .flags = &.{} });
 
-    // Bundle linenoise — line-editing library for REPL
-    exe.root_module.addCSourceFile(.{ .file = b.path("lib/linenoise/linenoise.c"), .flags = &.{} });
+    // Bundle linenoise — line-editing library for REPL (Unix only)
+    if (target.result.os.tag != .windows) {
+        exe.root_module.addIncludePath(b.path("lib/linenoise"));
+        exe.root_module.addCSourceFile(.{ .file = b.path("lib/linenoise/linenoise.c"), .flags = &.{} });
+    }
 
     b.installArtifact(exe);
 
