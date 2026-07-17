@@ -11,6 +11,11 @@ const linenoise = if (builtin.os.tag != .windows) @cImport({
     @cInclude("linenoise.h");
 }) else struct {};
 
+// ponytail: C stdio for Windows stdin reading (Zig 0.16 I/O API is inconsistent on Windows)
+const c_stdio = if (builtin.os.tag == .windows) @cImport({
+    @cInclude("stdio.h");
+}) else struct {};
+
 const ParsedArgs = args_mod.ParsedArgs;
 const fatal = sqlite_mod.fatal;
 const printSqlError = sqlite_mod.printSqlError;
@@ -18,8 +23,9 @@ const fmtThousands = loader.fmtThousands;
 
 /// Read a line with prompt. Returns heap-allocated null-terminated string, or null on EOF.
 /// Caller must call freeLine() to free.
-/// On Windows, stdin_reader must be a persistent reader (created once before the loop).
-fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_reader: anytype, prompt: []const u8) ?[:0]u8 {
+/// On Windows, uses C stdio getc(stdin) directly.
+/// On Unix, uses linenoise for interactive editing.
+fn readLine(allocator: std.mem.Allocator, io: std.Io, _: anytype, prompt: []const u8) ?[:0]u8 {
     if (builtin.os.tag == .windows) {
         // Write prompt to stderr — keeps stdout clean for piping (B1)
         var err_buf: [256]u8 = undefined;
@@ -29,7 +35,7 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_reader: anytype, pro
 
         // ponytail: 8KB line limit; bump if users report truncation (B3)
         var buf: [8192]u8 = undefined;
-        const raw = readLineWindows(stdin_reader, &buf) catch return null orelse return null;
+        const raw = readLineWindows(&buf) orelse return null;
 
         // Strip trailing \r (Windows CRLF)
         const trimmed = if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
@@ -44,18 +50,18 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_reader: anytype, pro
     }
 }
 
-/// Read a line from stdin on Windows using basic read() method.
+/// Read a line from stdin on Windows using C stdio getc().
 /// Returns slice of the buffer up to newline, or null on EOF/error.
-fn readLineWindows(stdin_reader: anytype, buf: anytype) ?[]u8 {
+fn readLineWindows(buf: anytype) ?[]u8 {
     var pos: usize = 0;
-    while (true) {
-        if (pos >= buf.len) return null; // line too long
-        const n = stdin_reader.read(buf[pos..pos+1]) catch return null;
-        if (n == 0) {
+    while (pos < buf.len) {
+        const ch = c_stdio.getc(c_stdio.stdin);
+        if (ch == -1) {
             if (pos == 0) return null; // EOF
             break; // EOF after some data
         }
-        if (buf[pos] == '\n') break;
+        if (ch == '\n') break;
+        buf[pos] = @intCast(ch);
         pos += 1;
     }
     return buf[0..pos];
@@ -243,9 +249,9 @@ pub fn runRepl(
 
     const main_table = main_mod.mainTableName(parsed);
 
-    // ponytail: persistent stdin reader for Windows — avoids buffer loss across iterations (B2)
+    // ponytail: persistent stdin reader for Unix — Windows uses C stdio getc() directly
     var stdin_buf: [8192]u8 = undefined;
-    const stdin_r = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+    const stdin_r = if (builtin.os.tag != .windows) std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf) else undefined;
 
     stderr_writer.writeAll("Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.\n") catch {};
     stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
