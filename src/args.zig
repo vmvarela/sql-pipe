@@ -44,6 +44,7 @@ pub const SqlPipeError = error{
     ValidateWithColumns,
     OutputWithValidate,
     InvalidMaxRows,
+    InvalidSavePath,
     InvalidInputFormat,
     InvalidOutputFormat,
     MissingXmlFlagValue,
@@ -65,6 +66,8 @@ pub const SqlPipeError = error{
     SampleWithQuery,
     SampleWithJson,
     SampleWithColumns,
+    SaveIncompatibleDisk,
+    SaveIncompatibleMode,
     SampleWithValidate,
     SampleWithOutput,
     InvalidSampleCount,
@@ -132,6 +135,9 @@ pub const ParsedArgs = struct {
     /// Use a file-backed temporary SQLite database instead of :memory: when true.
     /// Enables processing datasets larger than available RAM; also sets PRAGMA temp_store = FILE.
     disk: bool,
+    /// Path to save the SQLite database to (when --save/-S is used).
+    /// When set, the DB is opened at this path directly (file-backed).
+    save_path: ?[:0]const u8 = null,
     /// Print EXPLAIN QUERY PLAN to stderr before executing the query.
     explain: bool = false,
     /// Pretty-printed table output mode (default: auto — TTY detection).
@@ -307,6 +313,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --disk                       Use a file-backed temp database instead of :memory:
         \\                               Enables processing datasets larger than available RAM
         \\                               Also sets PRAGMA temp_store = FILE for transient structures
+        \\  --save <file> / -S <file>    Use <file> as the SQLite database (disk-backed, persisted)
         \\  --explain                    Print SQLite query plan to stderr before executing
         \\  --table                      Force pretty-printed table output (auto-detected on TTY)
         \\  --no-table                   Force CSV output even when stdout is a TTY
@@ -418,6 +425,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var stats_mode = false;
     var schema_mode = false;
     var disk = false;
+    var save_path: ?[:0]const u8 = null;
     var explain = false;
     var table_mode: TableMode = .auto;
     var sql_table: []const u8 = "t";
@@ -560,6 +568,19 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             json_path = arg["--json-path=".len..];
         } else if (std.mem.eql(u8, arg, "--disk")) {
             disk = true;
+        } else if (std.mem.eql(u8, arg, "--save") or std.mem.eql(u8, arg, "-S")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidSavePath;
+            if (args[i].len == 0) return error.InvalidSavePath;
+            save_path = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--save=")) {
+            const val = arg["--save=".len..];
+            if (val.len == 0) return error.InvalidSavePath;
+            save_path = val;
+        } else if (std.mem.startsWith(u8, arg, "-S=")) {
+            const val = arg["-S=".len..];
+            if (val.len == 0) return error.InvalidSavePath;
+            save_path = val;
         } else if (std.mem.eql(u8, arg, "--explain")) {
             explain = true;
         } else if (std.mem.eql(u8, arg, "--table")) {
@@ -746,6 +767,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (schema_mode and (explain or list_columns or validate or sample_mode or stats_mode or query != null or query_file != null or output != null))
         return error.SchemaWithFlags;
 
+    // --save is incompatible with special modes
+    if (save_path != null and (list_columns or validate or sample_mode or stats_mode or schema_mode or explain))
+        return error.SaveIncompatibleMode;
+
+    // --save implies disk-backed behavior; both together is redundant
+    if (save_path != null and disk)
+        return error.SaveIncompatibleDisk;
+
     // --silent and --verbose are mutually exclusive
     if (silent and verbose)
         return error.SilentVerboseConflict;
@@ -842,6 +871,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .xml_row_input = xml_row_input,
         .json_path = json_path,
         .disk = disk,
+        .save_path = save_path,
         .explain = explain,
         .table_mode = table_mode,
         .sql_table = sql_table,

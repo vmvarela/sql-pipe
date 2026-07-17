@@ -20,7 +20,7 @@ pub fn runStats(
     stderr_writer: *std.Io.Writer,
     stdout_writer: *std.Io.Writer,
 ) void {
-    const db = sqlite_mod.openDb(false, stderr_writer);
+    const db = sqlite_mod.openDb(false, null, stderr_writer);
     defer _ = c.sqlite3_close(db);
 
     const parsed: args_mod.ParsedArgs = .{

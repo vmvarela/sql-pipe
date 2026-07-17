@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/vmvarela/sql-pipe)](https://github.com/vmvarela/sql-pipe/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`sql-pipe` reads CSV, JSON, NDJSON, YAML, or XML from stdin or file arguments, loads it into an in-memory SQLite database, runs a SQL query, and prints the results. No server, no schema files, no setup.
+`sql-pipe` reads CSV, JSON, NDJSON, YAML, or XML from stdin or file arguments, loads it into an in-memory SQLite database, runs a SQL query, and prints the results. No server, no schema files, no setup. Use `--save` to persist the database to a file for later reuse.
 
 It exists because `awk` is cryptic, spinning up a Python interpreter for a one-liner feels wrong, and `sqlite3 :memory:` takes four commands before you can query anything. If you know SQL and work with CSV in the terminal, this is the tool you've been reaching for.
 
@@ -365,7 +365,10 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `--sample [<n>]` | Print a schema comment block to stderr and the first `<n>` data rows to stdout as CSV (default: `n=10`). The schema block lists each column name and its inferred type, prefixed with `#`. Implies `--header`. Compatible with `--delimiter` and `--tsv`. Mutually exclusive with `--json` and a query argument. No query required. |
 | `--stats` | Load input and print per-column statistics (column name, type, non-null count, min, max, mean) as a formatted table. Mean is blank for non-numeric columns. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, and `--output`. |
 | `--profile` | Alias for `--stats` |
-| `--schema` | Load input and print the inferred `CREATE TABLE` DDL to stdout. One DDL block per input file; stdin uses table `t`. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, `--stats`, `--output`, and `-f`/`--file`. |
+| `--schema` | Load input and print the inferred `CREATE TABLE` DDL to stdout. One DDL block per input file; stdin uses table `t`. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, `--stats`, `--output`, `--save`, and `-f`/`--file`. |
+| `-S`, `--save <file>` | Use `<file>` as the SQLite database instead of an in-memory database. The file persists after sql-pipe exits and can be queried with `sqlite3`. Implies disk-backed behavior; cannot be combined with `--disk` or special modes (`--columns`, `--validate`, `--sample`, `--stats`, `--schema`, `--explain`). |
+| `--disk` | Use a file-backed temporary database instead of `:memory:`. Enables processing datasets larger than available RAM. Cannot be combined with `--save`. |
+| `--no-stdin` | Do not read from stdin. Prevents hangs in CI pipelines where stdin is a non-TTY pipe without EOF. |
 | `--explain` | Print the SQLite query plan to stderr before executing the query. Each line is prefixed with `QUERY PLAN: `. The actual query still runs and results go to stdout. Mutually exclusive with `--columns`, `--validate`, `--sample`, `--stats`, `--schema`, and `--output`. |
 | `--xml-root <name>` | Root element name for XML I/O (default: `results`) |
 | `--xml-row <name>` | Row element name for XML I/O (default: `row`) |
@@ -655,7 +658,7 @@ World Cup break. A normal season is ~275 days.
 
 Each run opens a fresh `:memory:` SQLite database. The header row drives a `CREATE TABLE t (...)` with types inferred from the first 100 rows — `INTEGER`, `REAL`, `DATE`, `DATETIME`, or `TEXT`. Date variants use TEXT affinity so ISO 8601 string semantics are preserved and all SQLite date functions work correctly. Rows are loaded in a single transaction via a prepared `INSERT` statement, then `sqlite3_exec` runs your query and prints rows one by one.
 
-The database never touches disk and vanishes when the process exits. No state, no cleanup.
+The database is in-memory by default and vanishes when the process exits. Use `--save <file>` to persist it to disk for later queries with `sqlite3`, or `--disk` for a file-backed temporary database when processing datasets larger than available RAM.
 
 ## Limitations
 

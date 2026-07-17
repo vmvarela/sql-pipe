@@ -36,6 +36,10 @@ fn generateBash(writer: *std.Io.Writer) !void {
         \\    -u|--url|--http-header|--max-body-size|--max-rows|--sql-table|--null-value|--html-class|--output|--xml-root|--xml-row|--json-path)
         \\      return
         \\      ;;
+        \\    -S|--save)
+        \\      _filedir
+        \\      return
+        \\      ;;
         \\    --sample)
         \\      COMPREPLY=($(compgen -W "1 5 10 25 50 100 500 1000" -- "$cur"))
         \\      return
@@ -73,6 +77,7 @@ fn generateBash(writer: *std.Io.Writer) !void {
         \\      --xml-row
         \\      --json-path
         \\      --disk
+        \\      --save -S
         \\      --explain
         \\      --table --no-table
         \\      --null-value
@@ -124,6 +129,7 @@ fn generateZsh(writer: *std.Io.Writer) !void {
         \\    '--xml-row=[Row element name]:name:'
         \\    '--json-path=[Path to JSON array]:path:'
         \\    '--disk[Use file-backed temp database]'
+        \\    '(-S --save)'{-S+,--save=}'[Persist DB to file]:file:_files'
         \\    '--explain[Print query plan to stderr]'
         \\    '--table[Force table output]'
         \\    '--no-table[Force CSV output]'
@@ -178,6 +184,7 @@ fn generateFish(writer: *std.Io.Writer) !void {
         \\complete -c sql-pipe -l xml-row -r -d "Row element name for XML"
         \\complete -c sql-pipe -l json-path -r -d "Path to JSON array"
         \\complete -c sql-pipe -l disk -d "Use file-backed temp database"
+        \\complete -c sql-pipe -s S -l save -r -d "Use file as SQLite DB (persisted)"
         \\complete -c sql-pipe -l explain -d "Print query plan to stderr"
         \\complete -c sql-pipe -l table -d "Force pretty-printed table output"
         \\complete -c sql-pipe -l no-table -d "Force CSV output"

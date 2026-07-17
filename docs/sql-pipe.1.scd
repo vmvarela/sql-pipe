@@ -120,6 +120,19 @@ OPTIONS
 		Limit the *--url* response body to <bytes>. Default: *104857600* bytes
 		(100MB).
 
+	*-S, --save* <file>
+		Use <file> as the SQLite database instead of an in-memory
+		database. The file persists after sql-pipe exits and can be
+		queried with *sqlite3* or sql-pipe itself. Implies disk-backed
+		behavior (like *--disk*); cannot be combined with *--disk*.
+
+		If <file> already exists and contains tables with conflicting
+		names, the *CREATE TABLE* step fails. Remove the file first to
+		start fresh.
+
+		Cannot be combined with special modes (*--columns*,
+		*--validate*, *--sample*, *--stats*, *--schema*, *--explain*).
+
 	*-v, --verbose*
 		Print "Loaded <n> rows in <t>s" to standard error after all rows
 		are inserted. The message is shown automatically when stderr is a

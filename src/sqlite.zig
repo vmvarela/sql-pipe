@@ -199,17 +199,30 @@ pub fn commitTransaction(db: *c.sqlite3, writer: *std.Io.Writer) void {
     execSql(db, "COMMIT", writer);
 }
 
-/// openDb(disk, writer) → *sqlite3
+/// openDb(disk, save_path, writer) → *sqlite3
 /// Pre:  —
 /// Post: result is an open, empty SQLite database handle.
+///       When save_path != null: file-backed database at <save_path>; persists
+///         after close. PRAGMA temp_store = FILE is set. Exits with sql_error
+///         if the file cannot be opened.
 ///       When disk=false: in-memory database (`:memory:`).
 ///       When disk=true:  file-backed private temp database (`""`); SQLite
 ///         creates a temp file and deletes it automatically on close.
 ///         PRAGMA temp_store = FILE is set so ORDER BY / GROUP BY transient
 ///         structures also spill to disk rather than RAM.
 ///         Exits with sql_error if the temp directory is not writable.
-pub fn openDb(disk: bool, writer: *std.Io.Writer) *c.sqlite3 {
+pub fn openDb(disk: bool, save_path: ?[:0]const u8, writer: *std.Io.Writer) *c.sqlite3 {
     var db: ?*c.sqlite3 = null;
+
+    if (save_path) |path| {
+        if (c.sqlite3_open(path.ptr, &db) != c.SQLITE_OK) {
+            const msg = std.mem.span(c.sqlite3_errmsg(db));
+            fatal("failed to open database '{s}': {s}", writer, .sql_error, .{ path, msg });
+        }
+        execSql(db.?, "PRAGMA temp_store = FILE", writer);
+        return db.?;
+    }
+
     if (!disk) {
         if (c.sqlite3_open(":memory:", &db) != c.SQLITE_OK)
             fatal("failed to open in-memory database", writer, .sql_error, .{});

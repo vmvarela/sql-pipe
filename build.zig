@@ -3356,4 +3356,93 @@ pub fn build(b: *std.Build) void {
     });
     test_no_false_warning.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_no_false_warning.step);
+
+    // Integration test 182: --save creates a valid SQLite file (check magic header)
+    const test_save_creates_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --save "$tmp" 'SELECT 1'
+        \\[ "$(head -c 15 "$tmp")" = "SQLite format 3" ]
+        \\rm -f "$tmp"
+    });
+    test_save_creates_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_save_creates_file.step);
+
+    // Integration test 183: -S alias works same as --save
+    const test_save_short_alias = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe -S "$tmp" 'SELECT 1'
+        \\[ "$(head -c 15 "$tmp")" = "SQLite format 3" ]
+        \\rm -f "$tmp"
+    });
+    test_save_short_alias.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_save_short_alias.step);
+
+    // Integration test 184: default :memory: creates no file
+    const test_save_no_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp="/tmp/sql-pipe-test-184-$$.db"
+        \\rm -f "$tmp"
+        \\printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe 'SELECT 1' >/dev/null
+        \\! [ -f "$tmp" ]
+    });
+    test_save_no_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_save_no_file.step);
+
+    // Integration test 185: persisted DB is queryable by external sqlite3 (skip if not available)
+    const test_save_queryable = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 not available; skip"; exit 0; }
+        \\tmp=$(mktemp)
+        \\printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --save "$tmp" 'SELECT 1'
+        \\result=$(sqlite3 "$tmp" 'SELECT name FROM t ORDER BY name')
+        \\[ "$result" = "$(printf 'Alice\nBob')" ]
+        \\rm -f "$tmp"
+    });
+    test_save_queryable.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_save_queryable.step);
+
+    // Integration test 186: --save + --disk errors with exit 1
+    const test_save_disk_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\! printf 'name\nX\n' | ./zig-out/bin/sql-pipe --save "$(mktemp -u)" --disk 'SELECT 1' >/dev/null 2>/dev/null
+    });
+    test_save_disk_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_save_disk_error.step);
+
+    // Integration test 187: --save + --columns errors with exit 1 (SaveIncompatibleMode)
+    const test_save_columns_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\! printf 'a\n1\n' | ./zig-out/bin/sql-pipe --save "$(mktemp -u)" --columns >/dev/null 2>/dev/null
+    });
+    test_save_columns_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_save_columns_error.step);
+
+    // Integration test 188: --save with empty path errors (InvalidSavePath)
+    const test_save_empty_path = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\! ./zig-out/bin/sql-pipe --save "" 'SELECT 1' >/dev/null 2>/dev/null
+    });
+    test_save_empty_path.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_save_empty_path.step);
+
+    // Integration test 189: --save=path form works
+    const test_save_equals_form = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp)
+        \\printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --save="$tmp" 'SELECT 1'
+        \\[ "$(head -c 15 "$tmp")" = "SQLite format 3" ]
+        \\rm -f "$tmp"
+    });
+    test_save_equals_form.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_save_equals_form.step);
+
+    // Integration test 190: --save + --validate errors (SaveIncompatibleMode on another mode)
+    const test_save_validate_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\! printf 'a\n1\n' | ./zig-out/bin/sql-pipe --save "$(mktemp -u)" --validate >/dev/null 2>/dev/null
+    });
+    test_save_validate_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_save_validate_error.step);
 }

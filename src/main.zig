@@ -184,7 +184,7 @@ fn run(
 ) void {
     const query = parsed.query;
 
-    const db = sqlite_mod.openDb(parsed.disk, stderr_writer);
+    const db = sqlite_mod.openDb(parsed.disk, parsed.save_path, stderr_writer);
     defer _ = c.sqlite3_close(db);
 
     const start_ts = std.Io.Timestamp.now(io, .awake);
@@ -333,6 +333,9 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.DuplicateTableName => fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{}),
             error.TableWithNonCsv => fatal("--table requires CSV or TSV output format (not compatible with --json, -O json, etc.)", stderr_writer, .usage, .{}),
             error.ExplainWithFlags => fatal("--explain cannot be combined with --columns, --validate, --sample, --stats, --schema, or --output", stderr_writer, .usage, .{}),
+            error.InvalidSavePath => fatal("--save requires a non-empty file path", stderr_writer, .usage, .{}),
+            error.SaveIncompatibleMode => fatal("--save cannot be combined with special modes", stderr_writer, .usage, .{}),
+            error.SaveIncompatibleDisk => fatal("--save implies --disk; remove --disk", stderr_writer, .usage, .{}),
             error.MissingNullValue => fatal("--null-value requires a value", stderr_writer, .usage, .{}),
             error.MissingHtmlClassValue => fatal("--html-class requires a value", stderr_writer, .usage, .{}),
             error.InvalidCompletionsShell => fatal("unknown shell; supported: bash, zsh, fish", stderr_writer, .usage, .{}),
