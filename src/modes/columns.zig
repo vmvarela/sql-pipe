@@ -4,6 +4,8 @@ const csv_mod = @import("../csv.zig");
 const json_mod = @import("../json.zig");
 const xml_mod = @import("../xml.zig");
 const yaml_mod = @import("../yaml.zig");
+const build_options = @import("build_options");
+const parquet_mod = @import("../parquet.zig");
 const sqlite_mod = @import("../sqlite.zig");
 const loader = @import("../loader.zig");
 const args_mod = @import("../args.zig");
@@ -220,5 +222,41 @@ pub fn runColumns(
                 }
             }
         },
+        .parquet => {
+            var parquet_buf: [4096]u8 = undefined;
+            const opened = source.openInput(io, input_source, stderr_writer);
+            defer opened.deinit(io);
+            var parquet_reader = std.Io.File.reader(opened.file, io, &parquet_buf);
+            const parquet_db = sqlite_mod.openDb(false, null, stderr_writer);
+            defer _ = c.sqlite3_close(parquet_db);
+            _ = parquet_mod.loadParquetInput(allocator, io, parquet_db, "t", &parquet_reader.interface, null, stderr_writer);
+            if (args.verbose) {
+                const info = sqlite_mod.getTableColumnsWithTypes(allocator, parquet_db, "t", stderr_writer);
+                defer {
+                    for (info.names) |n| allocator.free(n);
+                    allocator.free(info.names);
+                    for (info.types) |t| allocator.free(t);
+                    allocator.free(info.types);
+                }
+                for (info.names, info.types) |name, col_type| {
+                    stdout_writer.print("{s} {s}\n", .{ name, col_type }) catch |err| {
+                        std.log.err("failed to write output: {}", .{err});
+                    };
+                }
+            } else {
+                const cols = sqlite_mod.getTableColumns(allocator, parquet_db, "t", stderr_writer);
+                defer {
+                    for (cols) |col| allocator.free(col);
+                    allocator.free(cols);
+                }
+                for (cols) |col| {
+                    stdout_writer.print("{s}\n", .{col}) catch |err| {
+                        std.log.err("failed to write output: {}", .{err});
+                    };
+                }
+            }
+        },
     }
+    stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
+    stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
 }

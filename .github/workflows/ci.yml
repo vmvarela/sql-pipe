@@ -31,9 +31,7 @@ jobs:
       - name: Cache Zig
         uses: actions/cache@v6
         with:
-          path: |
-            ~/.cache/zig
-            ~/AppData/Local/zig
+          path: ${{ runner.os == 'Windows' && '~/AppData/Local/zig' || '~/.cache/zig' }}
           key: zig-cache-${{ matrix.os }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
           restore-keys: zig-cache-${{ matrix.os }}-
 

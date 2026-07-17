@@ -87,6 +87,57 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addCSourceFile(.{ .file = b.path("lib/linenoise/linenoise.c"), .flags = &.{} });
     }
 
+    // Parquet support via carquet C library (MIT, by Johan Natter).
+    // Compression libs (zstd, lz4, zlib) bundled as C source alongside carquet.
+    // All statically linked — zero runtime deps.
+    exe.root_module.addIncludePath(b.path("lib/carquet/include"));
+    exe.root_module.addIncludePath(b.path("lib/carquet/src"));
+    exe.root_module.addIncludePath(b.path("lib/zstd"));
+    exe.root_module.addIncludePath(b.path("lib/lz4"));
+    exe.root_module.addIncludePath(b.path("lib/zlib"));
+
+    const carquet_src_root = "lib/carquet/src";
+    const carquet_flags = &.{ "-std=gnu11", "-D_GNU_SOURCE" };
+    inline for (.{
+        "core/arena.c", "core/allocator.c", "core/buffer.c",
+        "core/bitpack.c", "core/endian.c", "core/error.c", "core/geo_wkb.c",
+        "thrift/thrift_decode.c", "thrift/thrift_encode.c", "thrift/parquet_types.c",
+        "encoding/plain.c", "encoding/rle.c", "encoding/delta.c",
+        "encoding/delta_length.c", "encoding/delta_strings.c",
+        "encoding/dictionary.c", "encoding/byte_stream_split.c",
+        "compression/lz4.c", "compression/snappy.c", "compression/zstd.c",
+        "compression/gzip.c", "compression/custom.c",
+        "simd/detect.c", "simd/dispatch.c",
+        "reader/file_reader.c", "reader/batch_reader.c", "reader/column_reader.c",
+        "reader/page_reader.c", "reader/row_group_reader.c",
+        "reader/mmap_reader.c", "reader/statistics.c", "reader/page_filter.c",
+        "reader/worker_pool.c", "reader/arrow_c_export.c",
+        "reader/arrow_c_read.c", "reader/arrow_schema_read.c",
+        "writer/file_writer.c", "writer/row_group_writer.c", "writer/column_writer.c",
+        "writer/page_writer.c", "writer/arrow_schema.c", "writer/arrow_c_import.c",
+        "metadata/schema.c", "metadata/bloom_filter.c", "metadata/page_index.c",
+        "util/crc32.c", "util/xxhash.c",
+    }) |src_file| {
+        exe.root_module.addCSourceFile(.{
+            .file = b.path(carquet_src_root ++ "/" ++ src_file),
+            .flags = carquet_flags,
+        });
+    }
+
+    // Bundled compression libraries (C source, cross-compiles everywhere)
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/zstd/zstd.c"), .flags = &.{"-std=gnu11"} });
+    exe.root_module.addCSourceFile(.{ .file = b.path("lib/lz4/lz4.c"), .flags = &.{"-std=gnu11"} });
+    inline for (.{
+        "adler32.c", "compress.c", "crc32.c", "deflate.c",
+        "infback.c", "inffast.c",
+        "inflate.c", "inftrees.c", "trees.c", "uncompr.c", "zutil.c",
+    }) |zf| {
+        exe.root_module.addCSourceFile(.{ .file = b.path("lib/zlib/" ++ zf), .flags = &.{"-std=gnu11"} });
+    }
+
+    exe.root_module.linkSystemLibrary("pthread", .{});
+    exe.root_module.linkSystemLibrary("m", .{});
+
     b.installArtifact(exe);
 
     // Generate man page from scdoc source if scdoc (and gzip) are available (optional dependencies)
@@ -674,7 +725,7 @@ pub fn build(b: *std.Build) void {
     // Integration test 57: unknown input format → error exit 1
     const test_bad_input_format = b.addSystemCommand(&.{
         "bash", "-c",
-        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --input-format parquet 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --input-format protobuf 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
         \\echo "$msg" | grep -q 'unknown input format' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_bad_input_format.step.dependOn(b.getInstallStep());
@@ -3620,4 +3671,98 @@ pub fn build(b: *std.Build) void {
     });
     test_repl_exit_multiline.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_exit_multiline.step);
+
+    // ─── Parquet input integration tests (issue #206) ────────────────────────
+    // Integration test 206a: Basic Parquet read
+        const test_parquet_basic = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet 'SELECT name FROM sample ORDER BY name')
+            \\expected=$(printf 'Alice\nBob\nCarol')
+            \\[ "$result" = "$expected" ]
+        });
+        test_parquet_basic.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_basic.step);
+
+        // Integration test 206b: Parquet type mapping — INTEGER, REAL, BOOLEAN columns
+        const test_parquet_types = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet 'SELECT name, age, score, active FROM sample ORDER BY age')
+            \\expected=$(printf 'Bob,25,88.0,0\nAlice,30,95.5,1\nCarol,35,92.3,1')
+            \\[ "$result" = "$expected" ]
+        });
+        test_parquet_types.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_types.step);
+
+        // Integration test 206c: Parquet filter WHERE active = true
+        const test_parquet_filter = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet 'SELECT name FROM sample WHERE active = true ORDER BY name')
+            \\expected=$(printf 'Alice\nCarol')
+            \\[ "$result" = "$expected" ]
+        });
+        test_parquet_filter.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_filter.step);
+
+        // Integration test 206d: Parquet aggregates
+        const test_parquet_aggregate = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet 'SELECT COUNT(*) FROM sample')
+            \\[ "$result" = "3" ]
+        });
+        test_parquet_aggregate.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_aggregate.step);
+
+        // Integration test 206e: Parquet --schema prints correct DDL
+        const test_parquet_schema = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet --schema)
+            \\echo "$result" | grep -q 'CREATE TABLE "sample"' && echo "$result" | grep -q '"name" TEXT' && echo "$result" | grep -q '"age" INTEGER' && echo "$result" | grep -q '"score" REAL'
+        });
+        test_parquet_schema.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_schema.step);
+
+        // Integration test 206f: Parquet --columns lists columns
+        const test_parquet_columns = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet --columns)
+            \\expected=$(printf 'name\nage\nscore\nactive')
+            \\[ "$result" = "$expected" ]
+        });
+        test_parquet_columns.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_columns.step);
+
+        // Fuzzing tests: malformed Parquet files must not crash
+        const test_parquet_fuzz_truncated = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\# Truncated file (first 50 bytes only — missing footer)
+            \\dd if=tests/fixtures/sample.parquet bs=1 count=50 of=/tmp/fuzz_trunc.parquet 2>/dev/null
+            \\msg=$(./zig-out/bin/sql-pipe /tmp/fuzz_trunc.parquet 'SELECT 1' 2>&1; echo "EXIT:$?")
+            \\rm -f /tmp/fuzz_trunc.parquet
+            \\echo "$msg" | grep -q 'EXIT:[1-9]'
+        });
+        test_parquet_fuzz_truncated.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_fuzz_truncated.step);
+
+        const test_parquet_fuzz_bad_magic = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\# Corrupted PAR1 magic
+            \\cp tests/fixtures/sample.parquet /tmp/fuzz_bad.parquet
+            \\printf 'XXXX' | dd of=/tmp/fuzz_bad.parquet bs=1 count=4 conv=notrunc 2>/dev/null
+            \\msg=$(./zig-out/bin/sql-pipe /tmp/fuzz_bad.parquet 'SELECT 1' 2>&1; echo "EXIT:$?")
+            \\rm -f /tmp/fuzz_bad.parquet
+            \\echo "$msg" | grep -q 'PAR1' && echo "$msg" | grep -q 'EXIT:[1-9]'
+        });
+        test_parquet_fuzz_bad_magic.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_fuzz_bad_magic.step);
+
+        const test_parquet_fuzz_empty = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\# Empty file
+            \\printf '' > /tmp/fuzz_empty.parquet
+            \\msg=$(./zig-out/bin/sql-pipe /tmp/fuzz_empty.parquet 'SELECT 1' 2>&1; echo "EXIT:$?")
+            \\rm -f /tmp/fuzz_empty.parquet
+            \\echo "$msg" | grep -q 'EXIT:[1-9]'
+        });
+        test_parquet_fuzz_empty.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_fuzz_empty.step);
 }

@@ -11,6 +11,7 @@ const sqlite_mod = @import("sqlite.zig");
 const loader = @import("loader.zig");
 const yaml_mod = @import("yaml.zig");
 const http_mod = @import("http.zig");
+const parquet_mod = @import("parquet.zig");
 
 const columns_mode = @import("modes/columns.zig");
 const validate_mode = @import("modes/validate.zig");
@@ -126,6 +127,7 @@ fn loadInput(
         .ndjson => json.loadNdjsonInput(allocator, reader, db, table_name, parsed.max_rows, stderr_writer),
         .xml => xml.loadXmlInput(allocator, reader, db, table_name, parsed.xml_root_input, parsed.xml_row_input, parsed.max_rows, stderr_writer),
         .yaml => yaml_mod.loadYamlInput(allocator, reader, db, table_name, parsed.max_rows, stderr_writer),
+        .parquet => parquet_mod.loadParquetInput(allocator, io, db, table_name, reader, parsed.max_rows, stderr_writer),
     };
 }
 
@@ -324,10 +326,10 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InvalidHttpHeader => fatal("--http-header requires a non-empty 'Name: Value' header", stderr_writer, .usage, .{}),
             error.InvalidMaxBodySize => fatal("--max-body-size requires a positive integer", stderr_writer, .usage, .{}),
             error.HttpFlagsRequireUrl => fatal("--http-header and --max-body-size require --url", stderr_writer, .usage, .{}),
-            error.UrlIncompatibleMode => fatal("--url cannot be combined with special modes", stderr_writer, .usage, .{}),
+            error.UrlIncompatibleMode => fatal("--url cannot be combined with --columns, --validate, or --sample", stderr_writer, .usage, .{}),
             error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),
             error.InvalidMaxRows => fatal("--max-rows must be a positive integer", stderr_writer, .usage, .{}),
-            error.InvalidInputFormat => fatal("unknown input format; supported: csv, tsv, json, ndjson, xml, yaml", stderr_writer, .usage, .{}),
+            error.InvalidInputFormat => fatal("unknown input format; supported: csv, tsv, json, ndjson, xml, yaml, parquet", stderr_writer, .usage, .{}),
             error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml, markdown (md), html, sql", stderr_writer, .usage, .{}),
             error.ColumnsWithQuery => fatal("--columns cannot be combined with a query argument", stderr_writer, .usage, .{}),
             error.ValidateWithQuery => fatal("--validate cannot be combined with a query argument", stderr_writer, .usage, .{}),

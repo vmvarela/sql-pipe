@@ -23,6 +23,7 @@ pub const InputFormat = enum {
     ndjson,
     xml,
     yaml,
+    parquet,
 
     /// Parse a format name string.
     /// Returns error.InvalidInputFormat when the value is unrecognised.

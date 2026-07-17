@@ -4,6 +4,8 @@ const csv_mod = @import("../csv.zig");
 const json_mod = @import("../json.zig");
 const xml_mod = @import("../xml.zig");
 const yaml_mod = @import("../yaml.zig");
+const build_options = @import("build_options");
+const parquet_mod = @import("../parquet.zig");
 const sqlite_mod = @import("../sqlite.zig");
 const loader = @import("../loader.zig");
 const args_mod = @import("../args.zig");
@@ -346,6 +348,40 @@ pub fn runValidate(
                     std.process.exit(@intFromEnum(ExitCode.usage));
                 };
                 stdout_writer.print("{s} TEXT", .{name}) catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+            }
+            stdout_writer.writeAll(")\n") catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
+        },
+        .parquet => {
+            var parquet_buf: [4096]u8 = undefined;
+            const opened = source.openInput(io, input_source, stderr_writer);
+            defer opened.deinit(io);
+            var parquet_reader = std.Io.File.reader(opened.file, io, &parquet_buf);
+            const parquet_db = sqlite_mod.openDb(false, null, stderr_writer);
+            defer _ = c.sqlite3_close(parquet_db);
+            const count = parquet_mod.loadParquetInput(allocator, io, parquet_db, "t", &parquet_reader.interface, null, stderr_writer);
+            const cols = sqlite_mod.getTableColumns(allocator, parquet_db, "t", stderr_writer);
+            defer {
+                for (cols) |col| allocator.free(col);
+                allocator.free(cols);
+            }
+            var count_buf: [32]u8 = undefined;
+            const count_str = fmtThousands(&count_buf, count);
+            stdout_writer.print("OK: {s} rows, {d} columns (", .{ count_str, cols.len }) catch |err| {
+                std.log.err("failed to write output: {}", .{err});
+                std.process.exit(@intFromEnum(ExitCode.usage));
+            };
+            for (cols, 0..) |col, i| {
+                if (i > 0) stdout_writer.writeAll(", ") catch |err| {
+                    std.log.err("failed to write output: {}", .{err});
+                    std.process.exit(@intFromEnum(ExitCode.usage));
+                };
+                stdout_writer.print("{s} TEXT", .{col}) catch |err| {
                     std.log.err("failed to write output: {}", .{err});
                     std.process.exit(@intFromEnum(ExitCode.usage));
                 };

@@ -216,6 +216,8 @@ pub const StatsArgs = struct {
     input_format: InputFormat,
     /// Infer column types from buffered rows when true; show all TEXT when false.
     type_inference: bool,
+    /// URL to fetch input from (supports --url).
+    url: ?[]const u8 = null,
 };
 
 pub const SchemaArgs = struct {
@@ -227,6 +229,8 @@ pub const SchemaArgs = struct {
     input_format: InputFormat,
     /// Infer column types from buffered rows when true; show all TEXT when false.
     type_inference: bool,
+    /// URL to fetch input from (supports --url).
+    url: ?[]const u8 = null,
 };
 
 pub const CompletionsShell = enum {
@@ -283,7 +287,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\Options:
         \\  -d, --delimiter <string>     Input field delimiter for CSV: 1–8 chars (default: ,)
         \\  --tsv                        Alias for --delimiter '\t'
-        \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml, yaml
+        \\  -I, --input-format <fmt>     Input format: csv (default), tsv, json, ndjson, xml, yaml, parquet
         \\                               Overrides file extension auto-detection; stdin always uses this value
         \\  -O, --output-format <fmt>    Output format: csv (default), tsv, json, ndjson, xml, markdown (alias: md), html, sql
         \\  --json                       Alias for --output-format json
@@ -808,7 +812,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (table_mode == .always and output_format != .csv and output_format != .tsv)
         return error.TableWithNonCsv;
 
-    if (url != null and (list_columns or validate or sample_mode or stats_mode or schema_mode or explain))
+    if (url != null and (list_columns or validate or sample_mode))
         return error.UrlIncompatibleMode;
     if (url == null and (http_headers.items.len > 0 or max_body_size_set))
         return error.HttpFlagsRequireUrl;
@@ -854,6 +858,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             .delimiter = delimiter,
             .input_format = effective_input_format,
             .type_inference = type_inference,
+            .url = url,
         } };
 
     // --schema mode: print inferred CREATE TABLE DDL and exit
@@ -863,6 +868,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             .delimiter = delimiter,
             .input_format = effective_input_format,
             .type_inference = type_inference,
+            .url = url,
         } };
 
     // --repl validation: reject incompatible flags
