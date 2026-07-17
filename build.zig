@@ -12,6 +12,15 @@ pub fn build(b: *std.Build) void {
         "Compile SQLite from lib/sqlite3.c (enables cross-compilation)",
     ) orelse false;
 
+    // Use -Dparquet=true to enable Parquet input format support.
+    // Bundles carquet C library (MIT, by Johan Natter) via lib/carquet/.
+    // Requires system libs: zstd, lz4, zlib (available via Homebrew/apt).
+    const parquet_enabled = b.option(
+        bool,
+        "parquet",
+        "Enable Parquet input format support (via carquet C library)",
+    ) orelse false;
+
     // Version: release CI injects from git tag with -Dversion=X.Y.Z
     const version = b.option(
         []const u8,
@@ -32,6 +41,7 @@ pub fn build(b: *std.Build) void {
     // Inject version string as a compile-time option accessible via @import("build_options")
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
+    build_options.addOption(bool, "parquet_enabled", parquet_enabled);
     exe.root_module.addOptions("build_options", build_options);
 
     // Translate sqlite3.h to Zig declarations, exposed as @import("c").
@@ -85,6 +95,54 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag != .windows) {
         exe.root_module.addIncludePath(b.path("lib/linenoise"));
         exe.root_module.addCSourceFile(.{ .file = b.path("lib/linenoise/linenoise.c"), .flags = &.{} });
+    }
+
+    // Parquet support via carquet C library (opt-in, gated behind -Dparquet)
+    // Copyright (c) 2025 Johan HG Natter (MIT). Acknowledgments in src/parquet.zig.
+    if (parquet_enabled) {
+        exe.root_module.addIncludePath(b.path("lib/carquet/include"));
+        exe.root_module.addIncludePath(b.path("lib/carquet/src"));
+
+        const carquet_src_root = "lib/carquet/src";
+        const carquet_flags = &.{ "-std=gnu11", "-D_GNU_SOURCE" };
+        inline for (.{
+            "core/arena.c", "core/allocator.c", "core/buffer.c",
+            "core/bitpack.c", "core/endian.c", "core/error.c", "core/geo_wkb.c",
+            "thrift/thrift_decode.c", "thrift/thrift_encode.c", "thrift/parquet_types.c",
+            "encoding/plain.c", "encoding/rle.c", "encoding/delta.c",
+            "encoding/delta_length.c", "encoding/delta_strings.c",
+            "encoding/dictionary.c", "encoding/byte_stream_split.c",
+            "compression/lz4.c", "compression/snappy.c", "compression/zstd.c",
+            "compression/gzip.c", "compression/custom.c",
+            "simd/detect.c", "simd/dispatch.c",
+            "reader/file_reader.c", "reader/batch_reader.c", "reader/column_reader.c",
+            "reader/page_reader.c", "reader/row_group_reader.c",
+            "reader/mmap_reader.c", "reader/statistics.c", "reader/page_filter.c",
+            "reader/worker_pool.c", "reader/arrow_c_export.c",
+            "reader/arrow_c_read.c", "reader/arrow_schema_read.c",
+            "writer/file_writer.c", "writer/row_group_writer.c", "writer/column_writer.c",
+            "writer/page_writer.c", "writer/arrow_schema.c", "writer/arrow_c_import.c",
+            "metadata/schema.c", "metadata/bloom_filter.c", "metadata/page_index.c",
+            "util/crc32.c", "util/xxhash.c",
+        }) |src_file| {
+            exe.root_module.addCSourceFile(.{
+                .file = b.path(carquet_src_root ++ "/" ++ src_file),
+                .flags = carquet_flags,
+            });
+        }
+
+        // Static-link compression libs (.a archives → zero runtime deps)
+        if (target.result.os.tag == .macos) {
+            exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/zstd/lib/libzstd.a" });
+            exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/lz4/lib/liblz4.a" });
+            exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/homebrew/opt/zlib/lib/libz.a" });
+        } else {
+            exe.root_module.linkSystemLibrary("zstd", .{});
+            exe.root_module.linkSystemLibrary("lz4", .{});
+            exe.root_module.linkSystemLibrary("z", .{});
+        }
+        exe.root_module.linkSystemLibrary("pthread", .{});
+        exe.root_module.linkSystemLibrary("m", .{});
     }
 
     b.installArtifact(exe);
@@ -674,7 +732,7 @@ pub fn build(b: *std.Build) void {
     // Integration test 57: unknown input format → error exit 1
     const test_bad_input_format = b.addSystemCommand(&.{
         "bash", "-c",
-        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --input-format parquet 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\msg=$(printf '' | ./zig-out/bin/sql-pipe --input-format protobuf 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
         \\echo "$msg" | grep -q 'unknown input format' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_bad_input_format.step.dependOn(b.getInstallStep());
@@ -3620,4 +3678,66 @@ pub fn build(b: *std.Build) void {
     });
     test_repl_exit_multiline.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_exit_multiline.step);
+
+    // ─── Parquet input integration tests (issue #206) ────────────────────────
+    // These tests require -Dparquet=true to run. They are skipped when not enabled.
+    if (parquet_enabled) {
+        // Integration test 206a: Basic Parquet read
+        const test_parquet_basic = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet 'SELECT name FROM sample ORDER BY name')
+            \\expected=$(printf 'Alice\nBob\nCarol')
+            \\[ "$result" = "$expected" ]
+        });
+        test_parquet_basic.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_basic.step);
+
+        // Integration test 206b: Parquet type mapping — INTEGER, REAL, BOOLEAN columns
+        const test_parquet_types = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet 'SELECT name, age, score, active FROM sample ORDER BY age')
+            \\expected=$(printf 'Bob,25,88.0,0\nAlice,30,95.5,1\nCarol,35,92.3,1')
+            \\[ "$result" = "$expected" ]
+        });
+        test_parquet_types.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_types.step);
+
+        // Integration test 206c: Parquet filter WHERE active = true
+        const test_parquet_filter = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet 'SELECT name FROM sample WHERE active = true ORDER BY name')
+            \\expected=$(printf 'Alice\nCarol')
+            \\[ "$result" = "$expected" ]
+        });
+        test_parquet_filter.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_filter.step);
+
+        // Integration test 206d: Parquet aggregates
+        const test_parquet_aggregate = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet 'SELECT COUNT(*) FROM sample')
+            \\[ "$result" = "3" ]
+        });
+        test_parquet_aggregate.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_aggregate.step);
+
+        // Integration test 206e: Parquet --schema prints correct DDL
+        const test_parquet_schema = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet --schema)
+            \\echo "$result" | grep -q 'CREATE TABLE "sample"' && echo "$result" | grep -q '"name" TEXT' && echo "$result" | grep -q '"age" INTEGER' && echo "$result" | grep -q '"score" REAL'
+        });
+        test_parquet_schema.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_schema.step);
+
+        // Integration test 206f: Parquet --columns lists columns
+        const test_parquet_columns = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.parquet --columns)
+            \\expected=$(printf 'name\nage\nscore\nactive')
+            \\[ "$result" = "$expected" ]
+        });
+        test_parquet_columns.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_columns.step);
+    }
 }

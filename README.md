@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/vmvarela/sql-pipe)](https://github.com/vmvarela/sql-pipe/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`sql-pipe` reads CSV, JSON, NDJSON, YAML, or XML from stdin or file arguments, loads it into an in-memory SQLite database, runs a SQL query, and prints the results. No server, no schema files, no setup. Use `--save` to persist the database to a file for later reuse.
+`sql-pipe` reads CSV, JSON, NDJSON, YAML, XML, or Parquet from stdin or file arguments, loads it into an in-memory SQLite database, runs a SQL query, and prints the results. No server, no schema files, no setup. Use `--save` to persist the database to a file for later reuse.
 
 It exists because `awk` is cryptic, spinning up a Python interpreter for a one-liner feels wrong, and `sqlite3 :memory:` takes four commands before you can query anything. If you know SQL and work with CSV in the terminal, this is the tool you've been reaching for.
 
@@ -143,6 +143,12 @@ zig build -Dbundle-sqlite=true -Doptimize=ReleaseSafe
 ```
 
 Binary lands at `./zig-out/bin/sql-pipe`. SQLite is compiled from the official amalgamation — no system dependencies.
+
+To build with Parquet support (opt-in, requires `zstd`, `lz4`, and `zlib` static libraries from Homebrew on macOS, or system dev packages on Linux):
+
+```sh
+zig build -Dbundle-sqlite=true -Dparquet=true -Doptimize=ReleaseSafe
+```
 
 ## Usage
 
@@ -284,14 +290,14 @@ $ cat events.xml | sql-pipe -I xml --xml-root events --xml-row event \
 
 ### File arguments
 
-Pass files as positional arguments instead of piping through stdin. Each file becomes a table named after its basename (without extension). The input format is auto-detected from the file extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.yaml`, `.yml`, `.xml`):
+Pass files as positional arguments instead of piping through stdin. Each file becomes a table named after its basename (without extension). The input format is auto-detected from the file extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.yaml`, `.yml`, `.xml`, `.parquet`):
 
 ```sh
 # Single file — no more cat
 $ sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
 
-# JSON file — extension tells sql-pipe the format, no -I needed
-$ sql-pipe data.json 'SELECT * FROM data WHERE score > 80'
+# Parquet file — extension auto-detected, no -I needed
+$ sql-pipe data.parquet 'SELECT name FROM data WHERE active = true'
 
 # YAML file — .yaml and .yml both auto-detect
 $ sql-pipe users.yaml 'SELECT name FROM users WHERE country = "US"'
@@ -350,7 +356,7 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 |------|-------------|
 | `-d`, `--delimiter <char>` | Input field delimiter (single character, default `,`) |
 | `--tsv` | Alias for `--delimiter '\t'` |
-| `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson`, `yaml`, `xml`. Overrides file extension auto-detection. Both `.yaml` and `.yml` file extensions auto-detect to `yaml`. |
+| `-I`, `--input-format <fmt>` | Input format: `csv` (default), `tsv`, `json`, `ndjson`, `yaml`, `xml`, `parquet`. Overrides file extension auto-detection. Both `.yaml` and `.yml` file extensions auto-detect to `yaml`. Parquet support must be compiled in (`-Dparquet=true`). |
 | `-O`, `--output-format <fmt>` | Output format: `csv` (default), `tsv`, `json`, `ndjson`, `xml`, `markdown` (alias: `md`), `html`, `sql` |
 | `--sql-table <name>` | Target table name for `-O sql` INSERT output (default: `t`) |
 | `--no-type-inference` | Treat all columns as TEXT (skip auto-detection) |
@@ -695,7 +701,8 @@ The database is in-memory by default and vanishes when the process exits. Use `-
 
 ## Limitations
 
-- **File format auto-detection** is based on file extension. Files without a recognized extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.yaml`, `.yml`, `.xml`) default to CSV. Use `-I` to override.
+- **File format auto-detection** is based on file extension. Files without a recognized extension (`.csv`, `.tsv`, `.json`, `.ndjson`, `.yaml`, `.yml`, `.xml`, `.parquet`) default to CSV. Use `-I` to override.
+- **Parquet support** is optional and must be compiled in (`zig build -Dparquet=true`). Without it, Parquet files produce an error suggesting a rebuild. Column types are mapped from Parquet physical types: INT32/INT64→INTEGER, FLOAT/DOUBLE→REAL, BYTE_ARRAY→TEXT, BOOLEAN→INTEGER (0/1). Logical types (DECIMAL, TIMESTAMP, DATE) are not yet mapped — stored by their physical representation.
 
 ## Related
 

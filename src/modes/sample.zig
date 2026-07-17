@@ -28,8 +28,8 @@ pub fn runSample(
         .stdin;
 
     switch (args.input_format) {
-        .json, .ndjson, .xml, .yaml => fatal(
-            "--sample is only supported with CSV and TSV input",
+        .json, .ndjson, .xml, .yaml, .parquet => fatal(
+            "--sample is only supported with CSV and TSV input (not Parquet/JSON/XML/YAML)",
             stderr_writer,
             .usage,
             .{},

@@ -3,6 +3,8 @@ const c = @import("c");
 const json_mod = @import("../json.zig");
 const xml_mod = @import("../xml.zig");
 const yaml_mod = @import("../yaml.zig");
+const build_options = @import("build_options");
+const parquet_mod = if (build_options.parquet_enabled) @import("../parquet.zig") else struct {};
 const sqlite_mod = @import("../sqlite.zig");
 const loader = @import("../loader.zig");
 const format = @import("../format.zig");
@@ -89,6 +91,10 @@ fn loadTable(
         .ndjson => json_mod.loadNdjsonInput(allocator, reader, db, table_name, parsed.max_rows, stderr_writer),
         .xml => xml_mod.loadXmlInput(allocator, reader, db, table_name, parsed.xml_root_input, parsed.xml_row_input, parsed.max_rows, stderr_writer),
         .yaml => yaml_mod.loadYamlInput(allocator, reader, db, table_name, parsed.max_rows, stderr_writer),
+        .parquet => if (build_options.parquet_enabled)
+            parquet_mod.loadParquetInput(allocator, io, db, table_name, reader, parsed.max_rows, stderr_writer)
+        else
+            sqlite_mod.fatal("parquet support was not compiled in (rebuild with -Dparquet=true)", stderr_writer, .usage, .{}),
     };
     if (rows == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 }

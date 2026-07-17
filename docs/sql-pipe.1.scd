@@ -1,7 +1,7 @@
 sql-pipe(1)
 
 NAME
-	sql-pipe - Execute SQL queries on CSV/JSON/NDJSON/YAML/XML data from stdin or files
+	sql-pipe - Execute SQL queries on CSV/JSON/NDJSON/YAML/XML/Parquet data from stdin or files
 
 SYNOPSIS
 	*sql-pipe* [OPTIONS] [<file>...] <query>
@@ -18,7 +18,7 @@ SYNOPSIS
 	*sql-pipe* --completions <shell>
 
 DESCRIPTION
-	sql-pipe reads CSV, JSON, NDJSON, YAML, or XML data from standard input
+	sql-pipe reads CSV, JSON, NDJSON, YAML, XML, or Parquet data from standard input
 	and/or file arguments, loads it into an in-memory SQLite database,
 	executes the provided SQL query, and prints the results as CSV (or
 	JSON/XML when requested) to standard output.
@@ -31,7 +31,7 @@ DESCRIPTION
 	be combined — stdin is table *t* when *--url* is not used.
 
 	Input format for files is auto-detected from the file extension (*.csv*,
-	*.tsv*, *.json*, *.ndjson*, *.yaml*, *.yml*, *.xml*). Unrecognized or
+	*.tsv*, *.json*, *.ndjson*, *.yaml*, *.yml*, *.xml*, *.parquet*). Unrecognized or
 	missing extensions default to CSV. Use *-I* to override auto-detection
 	(e.g., when a TSV file has a *.txt* extension).
 
@@ -65,11 +65,13 @@ OPTIONS
 
 	*-I, --input-format* <fmt>
 		Set the input format explicitly: *csv* (default), *tsv*, *json*,
-		*ndjson*, *yaml*, or *xml*. When set, overrides file extension
+		*ndjson*, *yaml*, *xml*, or *parquet*. When set, overrides file extension
 		auto-detection for all file arguments. Stdin always uses this value
 		(no filename to inspect). Useful when a file has an ambiguous
 		extension (*.txt*, *.dat*) or no extension at all. Both *.yaml* and
-		*.yml* extensions auto-detect to *yaml*.
+		*.yml* extensions auto-detect to *yaml*. Parquet support must be
+		compiled in (*zig build -Dparquet=true*); without it, Parquet files
+		produce an error suggesting a rebuild.
 
 	*-O, --output-format* <fmt>
 		Set the output format: *csv* (default), *tsv*, *json*, *ndjson*,
@@ -306,6 +308,10 @@ EXAMPLES
 	Query a JSON file (format auto-detected from extension):
 
 		$ sql-pipe data.json 'SELECT * FROM data WHERE score > 80'
+
+	Query a Parquet file (format auto-detected, requires -Dparquet=true build):
+
+		$ sql-pipe data.parquet 'SELECT name FROM data WHERE active = true'
 
 	Override auto-detection when the extension is wrong:
 
