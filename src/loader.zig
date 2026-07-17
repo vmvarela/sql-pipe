@@ -237,6 +237,16 @@ pub fn inferTypes(
             } else if (!isInteger(val)) {
                 inferences[j].can_be_integer = false;
             }
+
+            // ponytail: leading-zero integers like "007" are codes, not numbers
+            if (inferences[j].can_be_integer and val.len > 1) {
+                const start: usize = if (val[0] == '+' or val[0] == '-') 1 else 0;
+                // +0 and -0 are still valid zero; only flag when digits follow
+                if (start < val.len and val[start] == '0' and start + 1 < val.len) {
+                    inferences[j].can_be_integer = false;
+                    inferences[j].can_be_real = false;
+                }
+            }
         }
     }
 
@@ -994,4 +1004,52 @@ test "inferTypes: mixed ISO date and slash date → TEXT (d_has_nonslash && d_ha
     const types = try inferTypes(allocator, rows, 1);
     defer allocator.free(types);
     try std.testing.expectEqual(ColumnType.TEXT, types[0]);
+}
+
+test "inferTypes: leading-zero integer becomes TEXT" {
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("007")};
+    const rows: []const [][]u8 = &.{&f1};
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.TEXT, types[0]);
+}
+
+test "inferTypes: negative leading-zero integer becomes TEXT" {
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("-007")};
+    const rows: []const [][]u8 = &.{&f1};
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.TEXT, types[0]);
+}
+
+test "inferTypes: single zero stays INTEGER" {
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("0")};
+    var f2: [1][]u8 = .{@constCast("42")};
+    const rows: []const [][]u8 = &.{ &f1, &f2 };
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.INTEGER, types[0]);
+}
+
+test "inferTypes: negative zero stays INTEGER" {
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("-0")};
+    var f2: [1][]u8 = .{@constCast("42")};
+    const rows: []const [][]u8 = &.{ &f1, &f2 };
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.INTEGER, types[0]);
+}
+
+test "inferTypes: positive zero stays INTEGER" {
+    const allocator = std.testing.allocator;
+    var f1: [1][]u8 = .{@constCast("+0")};
+    var f2: [1][]u8 = .{@constCast("42")};
+    const rows: []const [][]u8 = &.{ &f1, &f2 };
+    const types = try inferTypes(allocator, rows, 1);
+    defer allocator.free(types);
+    try std.testing.expectEqual(ColumnType.INTEGER, types[0]);
 }

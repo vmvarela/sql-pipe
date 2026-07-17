@@ -1,39 +1,123 @@
 # src/
 
 ## Responsibility
-Core pipeline implementation for sql-pipe: argument parsing, input format handling (CSV/TSV/JSON/NDJSON/XML), SQLite database bridge, type inference, and output formatting (CSV/TSV/JSON/NDJSON/XML/Markdown/HTML/SQL INSERT/table).
 
-## Design
+CLI tool that pipes structured data (CSV, TSV, JSON, NDJSON, XML, YAML) through an embedded SQLite engine. Accepts piped stdin, file arguments, and HTTP(S) URLs as input sources. Loads each source into a named in-memory (or disk-backed) SQLite table, runs a user-supplied SQL query, and emits results in one of eight output formats (CSV, TSV, JSON, NDJSON, XML, Markdown, HTML, SQL). Also provides ancillary modes for column listing, validation, sampling, statistics, and schema DDL generation — plus shell completion scripts for bash/zsh/fish.
 
-### Module Layout
+## Module Overview
+
 | File | Role |
-|------|------|
-| `main.zig` | CLI entry point, mode dispatch, stdin/file detection, query execution loop |
-| `args.zig` | Argument definitions, CLI parsing (getopt-style), mode structs, help text, exit codes |
-| `sqlite.zig` | SQLite C FFI wrappers: `openDb`, `createTable`, `insertRow`, `execSql`, `columnText/Name`, `readAllInput`, `fatal` |
-| `loader.zig` | CSV/TSV input loading pipeline: header parsing, row buffering, type inference (date/datetime/numeric detection), schema generation, INSERT statement preparation |
-| `format.zig` | Input format detection (from extension + `-I` override), output format dispatch, write functions for each format |
-| `csv.zig` | Streaming CSV reader with custom delimiter and quote handling |
-| `json.zig` | JSON array, NDJSON, and JSONPath loading; first-object schema extraction |
-| `xml.zig` | Custom streaming XML parser (`XmlParser`) with entity decoding, `navigateToRoot`, `readContent`, row/column extraction |
-| `table.zig` | Pretty-printed table output (box-drawing chars), two-pass col-width computation, numeric right-alignment |
-| `markdown.zig` | Markdown table output, two-pass streaming, numeric right-alignment |
-| `visual.zig` | UTF-8 display-width helpers (CJK/emoji = 2, ASCII = 1), `writeCharRepeated`, `writeSpaces` |
-| `completions.zig` | Shell completion generation for bash, zsh, fish |
+|---|---|
+| `main.zig` | Entry point, top-level orchestration of load-query-output pipeline |
+| `args.zig` | CLI argument parser, error types, struct definitions for all modes |
+| `format.zig` | Input/Output format enums, `OutputWriter` dispatcher, CSV write helpers |
+| `sqlite.zig` | Shared SQLite wrappers (create table, prepare insert, transactions, error helpers) |
+| `csv.zig` | RFC 4180 streaming CSV parser (state machine, multi-char delimiters) |
+| `loader.zig` | CSV/TSV loader with type inference (INTEGER, REAL, DATE, DATETIME variants) |
+| `json.zig` | JSON array + NDJSON input loading, JSON/NDJSON output formatting |
+| `xml.zig` | Custom row-based XML parser, XML output formatting (header/row/footer) |
+| `yaml.zig` | YAML sequence-of-mappings input loader via libyaml FFI |
+| `table.zig` | Pretty-printed table (box-drawing) — two-pass streaming, O(cols) memory |
+| `markdown.zig` | Markdown table output — two-pass streaming, O(cols) memory |
+| `visual.zig` | UTF-8 display-width helpers (CJK width 2, emoji width 2) |
+| `http.zig` | HTTP(S) URL fetching with content-type and extension format detection |
+| `completions.zig` | Shell completion generation (bash `complete`, zsh `_arguments`, fish `complete`) |
 
-### Patterns
-- **Streaming I/O** — All readers use `std.Io.Reader` with stack-allocated buffers, no full-file reads (except JSON/XML which need complete parse)
-- **Two-pass table output** — `table.zig` and `markdown.zig` first step through SQLite results to compute column widths, reset, then print — O(cols) memory, rows never buffered
-- **Fail-fast errors** — `fatal()` writes to stderr with typed exit code and aborts
-- **SourceFile pattern** — `source.zig` in `modes/` provides uniform file-or-stdin opening with `needs_close` flag
+## Design Patterns
 
-## Flow
-1. `main.zig` parses args via `args.zig` → determines mode (query, `--columns`, `--validate`, `--sample`, `--schema`, `--stats`)
-2. Input data loaded into SQLite via `loader.zig` (CSV), `json.zig`, or `xml.zig` → creates table with inferred column types
-3. SQL query executed via `sqlite.zig` → if `--explain`, also runs `EXPLAIN QUERY PLAN`
-4. Results formatted via `format.zig` dispatcher → written to stdout/file
+**Pipeline architecture.** Data flows through three stages: load → query → output. All input formats parse into SQLite tables; all output formats read from SQLite result sets. The pipeline processes each input source independently (URL first, then file arguments, then stdin), inserting into separate named tables before the single user query runs.
 
-## Integration
-- **Consumed by**: `main.zig` entry point, `modes/*.zig` sub-commands
-- **Depends on**: C FFI (`c` module, SQLite3), Zig 0.16 stdlib (`std.Io`, `std.ArrayList`, etc.)
-- **Shared utility**: `visual.zig` used by both `table.zig` and `markdown.zig`
+**OutputWriter dispatcher.** `format.zig` defines an `OutputWriter` struct with `begin()` / `writeRow()` / `end()` lifecycle. A single dispatch point in `execQuery()` selects format-specific writers (JSON, NDJSON, CSV, TSV, XML, SQL, HTML). Markdown and table are handled as special cases before the generic path (they require two-pass streaming over all rows).
+
+**Two-pass streaming for formatted tables.** Both `table.zig` and `markdown.zig` use an identical two-pass pattern: first pass steps through all rows to measure column widths and detect numeric columns (via SQLite column type, not string parsing); second pass resets the statement and writes header/separator/rows. Memory is `O(cols)` — rows are never buffered.
+
+**CSV state machine.** `csv.zig` implements a 4-state automaton (`field_start`, `unquoted`, `quoted`, `quote_saw`) over a byte-level reader. Supports RFC 4180 including multi-char delimiters (up to 8 bytes) with greedy left-to-right partial matching. Zero intermediate buffering — each byte processed exactly once.
+
+**Event-driven XML parser.** `xml.zig` contains a hand-written, row-oriented XML parser (`XmlParser`) with line/column error reporting. Skips prologue (declaration, comments, PIs), navigates to a configurable container element, and iterates row elements via `nextRow()`. Entity decoding for the 5 predefined XML entities plus numeric character references (decimal and hex). Nested elements in column content are preserved as raw XML substrings.
+
+**Type inference ladder.** `loader.zig` infers SQLite column types from CSV data using a priority ladder: DATETIME > DATE > INTEGER > REAL > TEXT. Slash-format date disambiguation (DD/MM vs MM/DD) uses a per-column voting system. Leading-zero integers like `"007"` are demoted to TEXT to prevent lossy numeric coercion.
+
+**Comptime enum reflection.** Both `InputFormat` and `OutputFormat` use `std.meta.stringToEnum` for parsing and `std.fs.path.extension` combined with `stringToEnum` for file extension auto-detection. Zig's comptime reflection eliminates manual switch/match tables for format names.
+
+**Arena + defer memory management.** Functions like `writeTable` and `writeMarkdown` use arena allocators with `defer arena.deinit()`. The `run()` function in `main.zig` uses a per-function arena for args and defers cleanup. The XML parser's `Column` struct owns its value with explicit `defer` cleanup at every call site. YAML input uses a block of `defer` statements to free accumulated key/value lists.
+
+## Data & Control Flow
+
+```
+CLI args → parseArgs() → ArgsResult (tagged union)
+                              │
+                ┌─────────────┼──────────────┐
+                │ parsed      │ help/version  │ special modes
+                │             │ (print+exit)  │ (columns/validate/
+                │             │               │  sample/stats/schema)
+                │             │               │
+           run() ├────── url? ──► http.zig:fetchUrl()
+                │              │    detectFormatFromContentType()
+                │              │    detectFormatFromUrl()
+                │              │
+                │──── files ──► loadInput() per file
+                │  stdin?      │    dispatch on InputFormat:
+                │              │      csv/tsv → loader.zig:loadCsvInput()
+                │              │               csv.zig parser → type inference → SQLite
+                │              │      json   → json.zig:loadJsonArray()
+                │              │               parse → first object keys = columns → SQLite
+                │              │      ndjson → json.zig:loadNdjsonInput()
+                │              │      xml    → xml.zig:loadXmlInput()
+                │              │               custom XmlParser → first row columns → SQLite
+                │              │      yaml   → yaml.zig:loadYamlInput()
+                │              │               libyaml event parser → first mapping keys = cols → SQLite
+                │              │
+                │──── execQuery()
+                │     │   sqlite3_prepare_v2 → sqlite3_step loop
+                │     │   dispatch on OutputFormat:
+                │     │     csv/tsv  → format.zig:csvPrintRow
+                │     │     json     → json.zig:printJsonRow
+                │     │     ndjson   → json.zig:printNdjsonRow
+                │     │     xml      → xml.zig:writeXmlRow
+                │     │     html     → format.zig:writeHtmlRow
+                │     │     sql      → format.zig:writeSqlRow
+                │     │     markdown → markdown.zig:writeMarkdown (two-pass)
+                │     │     table    → table.zig:writeTable (two-pass)
+                │
+                stdout_writer / output file / stderr progress
+```
+
+**Exit codes:** 0 = success, 1 = usage error, 2 = parse error, 3 = SQL error.
+
+**Error handling pattern:** Format-specific loaders call `sqlite.zig:fatal()` (writes `"error: ..."` to stderr then `std.process.exit`). SQL errors additionally call `fatalSqlWithContext()` which prints the SQLite error message, lists table columns, and offers Levenshtein-based column name suggestions.
+
+## Integration Points
+
+### External C dependencies (FFI)
+- **SQLite3** (`c` module) — `sqlite3_open`, `sqlite3_prepare_v2`, `sqlite3_step`, `sqlite3_column_*`, `sqlite3_bind_*`, `sqlite3_exec`, etc. Used by every loader and the query executor.
+- **libyaml** (`yaml` module) — `yaml_parser_initialize`, `yaml_parser_set_input_string`, `yaml_parser_parse`, `yaml_event_t`, etc. Used exclusively by `yaml.zig`.
+- **Zig stdlib** — `std.http.Client` for HTTP requests (`http.zig`).
+
+### Import graph
+```
+main.zig
+  ├── args.zig        ── standalone (depends on format.zig)
+  ├── format.zig      ── standalone (depends on json.zig, xml.zig for OutputWriter)
+  ├── sqlite.zig      ── standalone (depends on args.zig for ExitCode)
+  ├── loader.zig      ── depends on csv.zig, sqlite.zig
+  ├── csv.zig         ── standalone
+  ├── json.zig        ── depends on sqlite.zig
+  ├── xml.zig         ── depends on sqlite.zig
+  ├── yaml.zig        ── depends on sqlite.zig
+  ├── http.zig        ── depends on format.zig
+  ├── table.zig       ── depends on sqlite.zig, visual.zig
+  ├── markdown.zig    ── depends on sqlite.zig, visual.zig
+  ├── visual.zig      ── standalone
+  ├── completions.zig ── depends on args.zig (CompletionsShell enum)
+  └── modes/          ── columns, validate, sample, stats, schema
+```
+
+### Build integration
+- `build_options` provides `VERSION` string via build system.
+- `c` module provides C API declarations (generated or hand-written Zig bindings for sqlite3 and libyaml).
+- `yaml` module provides Zig bindings for libyaml (separate from `c`).
+
+### Consumed by
+- `src/modes/` — columns, validate, sample, stats, and schema modes all consume `args.zig` types, `format.zig` enums, and share `sqlite.zig` helpers and format-specific loaders.
+- The `build.zig` file at project root.
+- Test runner discovers `test` blocks in `csv.zig`, `loader.zig`, `xml.zig`, `visual.zig`, `table.zig`.

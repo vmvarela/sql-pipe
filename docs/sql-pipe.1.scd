@@ -82,6 +82,11 @@ OPTIONS
 		TEXT affinity for all columns in the SQLite table. This can improve
 		performance on very large datasets if type inference is not needed.
 
+	*--no-stdin*
+		Do not read from stdin. Prevents hangs in CI pipelines where
+		stdin is a non-TTY pipe without EOF. Use with file arguments
+		or standalone queries that don't need stdin input.
+
 	*-H, --header*
 		Print a header row with column names as the first line of output. Column
 		names are taken from the SQL column alias or original name. The output

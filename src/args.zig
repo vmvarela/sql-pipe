@@ -98,6 +98,8 @@ pub const ParsedArgs = struct {
     has_stdin: bool = false,
     /// Infer column types from the first 100 buffered rows when true.
     type_inference: bool,
+    /// True when --no-stdin flag is set (skip stdin even when piped).
+    no_stdin: bool = false,
     /// CSV field delimiter — 1 to 8 bytes (default: ",").
     delimiter: []const u8,
     /// Emit column names as first output row when true (CSV output only).
@@ -274,6 +276,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --json                       Alias for --output-format json
         \\  --sql-table <name>           Target table name for -O sql INSERT output (default: t)
         \\  --no-type-inference          Treat all columns as TEXT (CSV input only)
+        \\  --no-stdin                   Do not read from stdin (prevent hang in CI)
         \\  -H, --header                 Print column names as the first output row (CSV/TSV/HTML)
         \\  --max-rows <n>               Stop if more than <n> data rows are read (exit 1)
         \\  -v, --verbose                Force row count to stderr (shown automatically on TTY)
@@ -391,6 +394,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var query_file: ?[]const u8 = null;
     var query_file_seen = false;
     var type_inference = true;
+    var no_stdin = false;
     var delimiter: []const u8 = ",";
     var header = false;
     var input_format: InputFormat = .csv;
@@ -450,6 +454,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             delimiter = try parseDelimiter(arg["-d=".len..]);
         } else if (std.mem.eql(u8, arg, "--no-type-inference")) {
             type_inference = false;
+        } else if (std.mem.eql(u8, arg, "--no-stdin")) {
+            no_stdin = true;
         } else if (std.mem.eql(u8, arg, "--header") or std.mem.eql(u8, arg, "-H")) {
             header = true;
         } else if (std.mem.eql(u8, arg, "--json")) {
@@ -820,6 +826,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .query_file = query_file,
         .files = files.items,
         .type_inference = type_inference,
+        .no_stdin = no_stdin,
         .delimiter = delimiter,
         .header = header,
         .input_format = input_format,
