@@ -41,7 +41,9 @@ pub fn runSchema(
     };
     parsed.has_stdin = if (parsed.url != null) false else !(std.Io.File.isTty(std.Io.File.stdin(), io) catch false);
 
-    _ = main_mod.loadPipelineInputs(allocator, io, db, parsed, stderr_writer);
+    const total_rows = main_mod.loadPipelineInputs(allocator, io, db, parsed, stderr_writer);
+    if (total_rows == 0 and (parsed.has_stdin or parsed.files.len > 0 or parsed.url != null))
+        fatal("empty input", stderr_writer, .csv_error, .{});
 
     // Print DDL for each table in creation order
     var seen_first = false;
