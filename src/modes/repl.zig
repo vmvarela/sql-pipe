@@ -23,7 +23,7 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_reader: anytype, pro
     if (builtin.os.tag == .windows) {
         // Write prompt to stderr — keeps stdout clean for piping (B1)
         var err_buf: [256]u8 = undefined;
-        var stderr_w = std.Io.File.writer(std.Io.File.stderr(), io, &err_buf);
+        var stderr_w = std.Io.File.writer(std.Io.File.stderr(), io, &err_buf).interface;
         stderr_w.writeAll(prompt) catch return null;
         stderr_w.flush() catch return null;
 
