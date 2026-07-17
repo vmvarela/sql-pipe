@@ -46,7 +46,7 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_reader: anytype, pro
 
 /// Read a line from stdin on Windows using basic read() method.
 /// Returns slice of the buffer up to newline, or null on EOF/error.
-fn readLineWindows(stdin_reader: anytype, buf: *[]u8) ?[]u8 {
+fn readLineWindows(stdin_reader: anytype, buf: anytype) ?[]u8 {
     var pos: usize = 0;
     while (true) {
         if (pos >= buf.len) return null; // line too long
