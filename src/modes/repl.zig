@@ -238,7 +238,7 @@ pub fn runRepl(
 
     while (true) {
         const prompt = if (ml_buf.items.len > 0) "...> " else "sql> ";
-        const line = readLine(allocator, io, &stdin_r, prompt);
+        const line = readLine(allocator, io, &stdin_r.interface, prompt);
         if (line == null) break;
         defer freeLine(allocator, line);
         const trimmed = std.mem.trim(u8, line.?, " \t\r\n");
