@@ -129,21 +129,6 @@ fn execReplQuery(
     };
 }
 
-fn execDotQuery(
-    allocator: std.mem.Allocator,
-    db: *c.sqlite3,
-    query: []const u8,
-    stdout_writer: *std.Io.Writer,
-    stderr_writer: *std.Io.Writer,
-    parsed: ParsedArgs,
-    use_table: bool,
-    main_table: []const u8,
-) bool {
-    execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
-    stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
-    return true;
-}
-
 fn handleDotCommand(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -176,7 +161,9 @@ fn handleDotCommand(
         return true;
     }
     if (std.mem.eql(u8, cmd, "tables")) {
-        return execDotQuery(allocator, db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", stdout_writer, stderr_writer, parsed, use_table, main_table);
+        execReplQuery(allocator, db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", stdout_writer, stderr_writer, parsed, use_table, main_table);
+        stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
+        return true;
     }
     if (std.mem.eql(u8, cmd, "schema")) {
         var query: [256]u8 = undefined;
@@ -187,7 +174,9 @@ fn handleDotCommand(
             }
         else
             "SELECT sql FROM sqlite_master WHERE type='table'";
-        return execDotQuery(allocator, db, query_str, stdout_writer, stderr_writer, parsed, use_table, main_table);
+        execReplQuery(allocator, db, query_str, stdout_writer, stderr_writer, parsed, use_table, main_table);
+        stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
+        return true;
     }
     if (std.mem.eql(u8, cmd, "read")) {
         if (arg == null or arg.?.len == 0) {
@@ -305,7 +294,7 @@ pub fn runRepl(
             continue;
         }
 
-        historyAdd(null); // Only persist manually
+        historyAdd(line);
         historySave(history_path);
 
         execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
