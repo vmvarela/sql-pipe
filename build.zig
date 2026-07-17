@@ -3556,4 +3556,68 @@ pub fn build(b: *std.Build) void {
     });
     test_repl_incompat_file.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_incompat_file.step);
+
+    // Integration test 204: --repl .help shows commands
+    const test_repl_help = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '.help\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>&1 | grep -q '\.tables'
+    });
+    test_repl_help.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_help.step);
+
+    // Integration test 205: --repl .tables shows table name
+    const test_repl_tables = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '.tables\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin tests/fixtures/customers.csv 2>/dev/null | grep -q 'customers'
+    });
+    test_repl_tables.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_tables.step);
+
+    // Integration test 206: --repl .schema shows CREATE TABLE
+    const test_repl_schema = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '.schema\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin tests/fixtures/customers.csv 2>/dev/null | grep -q 'CREATE TABLE'
+    });
+    test_repl_schema.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_schema.step);
+
+    // Integration test 207: --repl .read file executes queries
+    const test_repl_read = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp); printf 'SELECT 42;\n' > "$tmp"; printf ".read $tmp\n.exit\n" | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null | grep -q '42'; rm -f "$tmp"
+    });
+    test_repl_read.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_read.step);
+
+    // Integration test 208: --repl unknown dot command shows error
+    const test_repl_dot_unknown = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '.bogus\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>&1 | grep -q 'unknown command'
+    });
+    test_repl_dot_unknown.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_dot_unknown.step);
+
+    // Integration test 209: --repl multi-line query
+    const test_repl_multiline = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'SELECT 1\n+ 1;\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null | grep -q '2'
+    });
+    test_repl_multiline.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_multiline.step);
+
+    // Integration test 210: --repl multi-line empty line submit
+    const test_repl_multiline_empty = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'SELECT 1\n\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null | grep -q '1'
+    });
+    test_repl_multiline_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_multiline_empty.step);
+
+    // Integration test 211: --repl .exit works in multi-line mode
+    const test_repl_exit_multiline = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'SELECT 1\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null >/dev/null; test $? -eq 0
+    });
+    test_repl_exit_multiline.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_exit_multiline.step);
 }

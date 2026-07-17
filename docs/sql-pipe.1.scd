@@ -238,6 +238,10 @@ OPTIONS
 
 		Commands:
 		- *.exit*, *.quit*, *.q* — exit the REPL
+		- *.help* — show available commands
+		- *.tables* — list all table names
+		- *.schema* [table] — show CREATE TABLE DDL
+		- *.read* <file> — load and execute queries from a .sql file
 		- *Ctrl-D* (EOF) or *Ctrl-C* — exit the REPL
 
 		Arrow-key history is provided via *linenoise*. The history file is stored

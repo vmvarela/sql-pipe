@@ -76,6 +76,116 @@ fn historySave(path: ?[:0]u8) void {
     }
 }
 
+fn execReplQuery(
+    allocator: std.mem.Allocator,
+    db: *c.sqlite3,
+    query: []const u8,
+    stdout_writer: *std.Io.Writer,
+    stderr_writer: *std.Io.Writer,
+    parsed: ParsedArgs,
+    use_table: bool,
+    main_table: []const u8,
+) void {
+    main_mod.execQuery(
+        allocator, db, query, stdout_writer,
+        parsed.header, parsed.output_format,
+        parsed.xml_root, parsed.xml_row,
+        parsed.sql_table, parsed.html_class,
+        parsed.null_value, use_table,
+    ) catch |err| switch (err) {
+        error.PrepareQueryFailed => {
+            stdout_writer.flush() catch |err_flush| std.log.err("failed to flush stdout: {}", .{err_flush});
+            printSqlError(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+        },
+        else => {
+            stdout_writer.flush() catch |err_flush| std.log.err("failed to flush stdout: {}", .{err_flush});
+            stderr_writer.print("error: {s}\n", .{@errorName(err)}) catch {};
+            stderr_writer.flush() catch |err_flush| std.log.err("failed to flush stderr: {}", .{err_flush});
+        },
+    };
+}
+
+fn execDotQuery(
+    allocator: std.mem.Allocator,
+    db: *c.sqlite3,
+    query: []const u8,
+    stdout_writer: *std.Io.Writer,
+    stderr_writer: *std.Io.Writer,
+    parsed: ParsedArgs,
+    use_table: bool,
+    main_table: []const u8,
+) bool {
+    execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
+    return true;
+}
+
+fn handleDotCommand(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    command: []const u8,
+    db: *c.sqlite3,
+    stdout_writer: *std.Io.Writer,
+    stderr_writer: *std.Io.Writer,
+    parsed: ParsedArgs,
+    use_table: bool,
+    main_table: []const u8,
+    _: ?[:0]u8,
+) bool {
+    const trimmed = std.mem.trim(u8, command, " \t\r\n");
+    if (trimmed.len == 0 or trimmed[0] != '.') return false;
+
+    // Parse: split on first space to get command and optional argument
+    const first_space = std.mem.indexOfAny(u8, trimmed, " \t");
+    const cmd = if (first_space) |pos| trimmed[1..pos] else trimmed[1..];
+    const arg = if (first_space) |pos| std.mem.trim(u8, trimmed[pos+1..], " \t\r\n") else null;
+
+    if (std.mem.eql(u8, cmd, "help")) {
+        stderr_writer.writeAll(
+            \\.help                Show this help
+            \\.tables              List all table names
+            \\.schema [table]      Show CREATE TABLE DDL (all tables if no name given)
+            \\.read <file>         Load and execute queries from file
+            \\.exit, .quit, .q     Exit the REPL
+        ) catch {};
+        stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
+        return true;
+    }
+    if (std.mem.eql(u8, cmd, "tables")) {
+        return execDotQuery(allocator, db, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", stdout_writer, stderr_writer, parsed, use_table, main_table);
+    }
+    if (std.mem.eql(u8, cmd, "schema")) {
+        var query: [256]u8 = undefined;
+        const query_str = if (arg) |table_name|
+            std.fmt.bufPrint(&query, "SELECT sql FROM sqlite_master WHERE type='table' AND name='{s}'", .{table_name}) catch {
+                stderr_writer.print("error: table name too long\n", .{}) catch {};
+                return true;
+            }
+        else
+            "SELECT sql FROM sqlite_master WHERE type='table'";
+        return execDotQuery(allocator, db, query_str, stdout_writer, stderr_writer, parsed, use_table, main_table);
+    }
+    if (std.mem.eql(u8, cmd, "read")) {
+        if (arg == null or arg.?.len == 0) {
+            stderr_writer.print("usage: .read <file>\n", .{}) catch {};
+            return true;
+        }
+        const file_contents = std.Io.Dir.cwd().readFileAlloc(io, arg.?, allocator, .limited(10 * 1024 * 1024)) catch |err| {
+            stderr_writer.print("error reading file '{s}': {s}\n", .{ arg.?, @errorName(err) }) catch {};
+            return true;
+        };
+        defer allocator.free(file_contents);
+        var queries = std.mem.splitScalar(u8, file_contents, ';');
+        while (queries.next()) |query| {
+            const q = std.mem.trim(u8, query, " \t\r\n");
+            if (q.len == 0) continue;
+            execReplQuery(allocator, db, q, stdout_writer, stderr_writer, parsed, use_table, main_table);
+        }
+        return true;
+    }
+    stderr_writer.print("unknown command: {s}\n", .{command}) catch {};
+    return true;
+}
+
 /// runRepl(allocator, io, parsed, stderr_writer, stdout_writer, use_table) → void
 pub fn runRepl(
     allocator: std.mem.Allocator,
@@ -121,56 +231,58 @@ pub fn runRepl(
     stderr_writer.writeAll("Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.\n") catch {};
     stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
 
+    var ml_buf: std.ArrayList(u8) = .empty;
+    defer ml_buf.deinit(allocator);
+
     while (true) {
-        const line = readLine(allocator, io, &stdin_r, "sql> ");
-        if (line == null) break; // EOF / Ctrl-D / Ctrl-C
+        const prompt = if (ml_buf.items.len > 0) "...> " else "sql> ";
+        const line = readLine(allocator, io, &stdin_r, prompt);
+        if (line == null) break;
         defer freeLine(allocator, line);
-
         const trimmed = std.mem.trim(u8, line.?, " \t\r\n");
-        if (trimmed.len == 0) continue;
 
-        if (std.mem.eql(u8, trimmed, ".exit") or
-            std.mem.eql(u8, trimmed, ".quit") or
-            std.mem.eql(u8, trimmed, ".q"))
-        {
-            break;
+        // Multi-line: empty line executes accumulated buffer
+        if (ml_buf.items.len > 0 and trimmed.len == 0) {
+            const query = ml_buf.items;
+            execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
+            ml_buf.clearRetainingCapacity();
+            continue;
         }
 
-        historyAdd(line);
+        if (trimmed.len == 0) continue;
+
+        // Exit commands (always work, even in multi-line)
+        if (std.mem.eql(u8, trimmed, ".exit") or std.mem.eql(u8, trimmed, ".quit") or std.mem.eql(u8, trimmed, ".q")) break;
+
+        // Dot commands only in single-line mode (NOT in multi-line)
+        if (ml_buf.items.len == 0 and trimmed[0] == '.') {
+            if (handleDotCommand(allocator, io, trimmed, db, stdout_writer, stderr_writer, parsed, use_table, main_table, history_path)) continue;
+        }
+
+        // Append to multi-line buffer
+        const ends_with_semicolon = trimmed.len > 0 and trimmed[trimmed.len - 1] == ';';
+        if (ml_buf.items.len > 0) {
+            ml_buf.append(allocator, ' ') catch { break; };
+        }
+        ml_buf.appendSlice(allocator, trimmed) catch { break; };
+
+        if (!ends_with_semicolon) continue;
+
+        // Strip trailing ; and execute
+        const query_len = if (ml_buf.items.len > 0 and ml_buf.items[ml_buf.items.len - 1] == ';')
+            ml_buf.items.len - 1 else ml_buf.items.len;
+        const query = ml_buf.items[0..query_len];
+
+        if (query.len == 0) {
+            ml_buf.clearRetainingCapacity();
+            continue;
+        }
+
+        historyAdd(null); // Only persist manually
         historySave(history_path);
 
-        const query = if (trimmed.len > 0 and trimmed[trimmed.len - 1] == ';')
-            std.mem.trim(u8, trimmed[0 .. trimmed.len - 1], " \t\r\n")
-        else
-            trimmed;
-
-        if (query.len == 0) continue;
-
-        main_mod.execQuery(
-            allocator,
-            db,
-            query,
-            stdout_writer,
-            parsed.header,
-            parsed.output_format,
-            parsed.xml_root,
-            parsed.xml_row,
-            parsed.sql_table,
-            parsed.html_class,
-            parsed.null_value,
-            use_table,
-        ) catch |err| switch (err) {
-            error.PrepareQueryFailed => {
-                stdout_writer.flush() catch |err_flush| std.log.err("failed to flush stdout: {}", .{err_flush});
-                printSqlError(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-            },
-            else => {
-                stdout_writer.flush() catch |err_flush| std.log.err("failed to flush stdout: {}", .{err_flush});
-                stderr_writer.print("error: {s}\n", .{@errorName(err)}) catch {};
-                stderr_writer.flush() catch |err_flush| std.log.err("failed to flush stderr: {}", .{err_flush});
-            },
-        };
-
+        execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
+        ml_buf.clearRetainingCapacity();
         stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
     }
 }

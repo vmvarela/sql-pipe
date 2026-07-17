@@ -523,6 +523,8 @@ $ printf 'SELECT 1+1;\n.exit\n' | sql-pipe --repl --no-stdin
 2
 ```
 
+**Dot commands (phase 2):** `.help`, `.tables`, `.schema [table]`, `.read <file>`. **Multi-line queries:** end lines with Enter, finish with `;`. Empty line in multi-line mode executes the accumulated query.
+
 ### Debug query performance with --explain
 
 ```sh
