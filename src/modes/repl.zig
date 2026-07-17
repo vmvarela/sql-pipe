@@ -18,15 +18,18 @@ const fmtThousands = loader.fmtThousands;
 
 /// Read a line with prompt. Returns heap-allocated null-terminated string, or null on EOF.
 /// Caller must call freeLine() to free.
-fn readLine(allocator: std.mem.Allocator, prompt: []const u8) ?[:0]u8 {
+/// On Windows, stdin_reader must be a persistent reader (created once before the loop).
+fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_reader: anytype, prompt: []const u8) ?[:0]u8 {
     if (builtin.os.tag == .windows) {
-        // ponytail: plain stdin on Windows — no history, no arrows
-        const stdout = std.io.getStdOut().writer();
-        stdout.writeAll(prompt) catch return null;
+        // Write prompt to stderr — keeps stdout clean for piping (B1)
+        var err_buf: [256]u8 = undefined;
+        var stderr_w = std.Io.File.writer(std.Io.File.stderr(), io, &err_buf);
+        stderr_w.writeAll(prompt) catch return null;
+        stderr_w.flush() catch return null;
 
-        const stdin = std.io.getStdIn().reader();
-        var buf: [4096]u8 = undefined;
-        const raw = stdin.readUntilDelimiterOrEof(&buf, '\n') catch return null orelse return null;
+        // ponytail: 8KB line limit; bump if users report truncation (B3)
+        var buf: [8192]u8 = undefined;
+        const raw = stdin_reader.readUntilDelimiterOrEof(&buf, '\n') catch return null orelse return null;
 
         // Strip trailing \r (Windows CRLF)
         const trimmed = if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
@@ -50,22 +53,23 @@ fn freeLine(allocator: std.mem.Allocator, line: ?[:0]u8) void {
     }
 }
 
-fn historyAdd(_: std.mem.Allocator, line: ?[:0]u8) void {
+fn historyAdd(line: ?[:0]u8) void {
     if (builtin.os.tag == .windows) return;
     if (line) |l| {
         _ = linenoise.linenoiseHistoryAdd(@as([*c]const u8, @ptrCast(l)));
     }
 }
 
-fn historyLoad(_: std.mem.Allocator, path: ?[:0]u8) void {
+fn historyLoad(path: ?[:0]u8) void {
     if (builtin.os.tag == .windows) return;
+    // ponytail: SetMaxLen before Load so existing huge files get trimmed (S2)
+    _ = linenoise.linenoiseHistorySetMaxLen(1000);
     if (path) |p| {
-        _ = linenoise.linenoiseHistorySetMaxLen(1000);
         _ = linenoise.linenoiseHistoryLoad(@as([*c]const u8, @ptrCast(p)));
     }
 }
 
-fn historySave(_: std.mem.Allocator, path: ?[:0]u8) void {
+fn historySave(path: ?[:0]u8) void {
     if (builtin.os.tag == .windows) return;
     if (path) |p| {
         _ = linenoise.linenoiseHistorySave(@as([*c]const u8, @ptrCast(p)));
@@ -106,15 +110,19 @@ pub fn runRepl(
     }
     defer if (history_path) |p| allocator.free(p);
 
-    historyLoad(allocator, history_path);
+    historyLoad(history_path);
 
     const main_table = main_mod.mainTableName(parsed);
+
+    // ponytail: persistent stdin reader for Windows — avoids buffer loss across iterations (B2)
+    var stdin_buf: [8192]u8 = undefined;
+    var stdin_r = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
 
     stderr_writer.writeAll("Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.\n") catch {};
     stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
 
     while (true) {
-        const line = readLine(allocator, "sql> ");
+        const line = readLine(allocator, io, &stdin_r, "sql> ");
         if (line == null) break; // EOF / Ctrl-D / Ctrl-C
         defer freeLine(allocator, line);
 
@@ -128,8 +136,8 @@ pub fn runRepl(
             break;
         }
 
-        historyAdd(allocator, line);
-        historySave(allocator, history_path);
+        historyAdd(line);
+        historySave(history_path);
 
         const query = if (trimmed.len > 0 and trimmed[trimmed.len - 1] == ';')
             std.mem.trim(u8, trimmed[0 .. trimmed.len - 1], " \t\r\n")
