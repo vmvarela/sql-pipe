@@ -28,7 +28,9 @@
 #include <stddef.h>
 #include <string.h>
 
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+/* vqtbl1q_u8 (used below) is AArch64-only. On 32-bit ARM, __ARM_NEON__ is
+ * defined but the intrinsic is absent, so gate NEON on __aarch64__. */
+#if defined(__aarch64__)
 #include <arm_neon.h>
 #define SNAPPY_HAVE_NEON 1
 #else
