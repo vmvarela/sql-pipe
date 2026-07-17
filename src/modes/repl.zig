@@ -29,7 +29,7 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_reader: anytype, pro
 
         // ponytail: 8KB line limit; bump if users report truncation (B3)
         var buf: [8192]u8 = undefined;
-        const raw = stdin_reader.readUntilDelimiterOrEof(&buf, '\n') catch return null orelse return null;
+        const raw = readLineWindows(stdin_reader, &buf) catch return null orelse return null;
 
         // Strip trailing \r (Windows CRLF)
         const trimmed = if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
@@ -42,6 +42,23 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_reader: anytype, pro
         if (ptr == null) return null;
         return std.mem.span(ptr);
     }
+}
+
+/// Read a line from stdin on Windows using basic read() method.
+/// Returns slice of the buffer up to newline, or null on EOF/error.
+fn readLineWindows(stdin_reader: anytype, buf: *[]u8) ?[]u8 {
+    var pos: usize = 0;
+    while (true) {
+        if (pos >= buf.len) return null; // line too long
+        const n = stdin_reader.read(buf[pos..pos+1]) catch return null;
+        if (n == 0) {
+            if (pos == 0) return null; // EOF
+            break; // EOF after some data
+        }
+        if (buf[pos] == '\n') break;
+        pos += 1;
+    }
+    return buf[0..pos];
 }
 
 fn freeLine(allocator: std.mem.Allocator, line: ?[:0]u8) void {
@@ -228,7 +245,7 @@ pub fn runRepl(
 
     // ponytail: persistent stdin reader for Windows — avoids buffer loss across iterations (B2)
     var stdin_buf: [8192]u8 = undefined;
-    var stdin_r = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+    const stdin_r = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
 
     stderr_writer.writeAll("Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.\n") catch {};
     stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
@@ -238,7 +255,7 @@ pub fn runRepl(
 
     while (true) {
         const prompt = if (ml_buf.items.len > 0) "...> " else "sql> ";
-        const line = readLine(allocator, io, &stdin_r.interface, prompt);
+        const line = readLine(allocator, io, stdin_r, prompt);
         if (line == null) break;
         defer freeLine(allocator, line);
         const trimmed = std.mem.trim(u8, line.?, " \t\r\n");
