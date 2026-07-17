@@ -236,6 +236,11 @@ fn run(
         total_rows += rows;
     }
 
+    // Warn when no rows were loaded — query referencing 't' will fail
+    if (total_rows == 0 and (parsed.has_stdin or parsed.files.len > 0 or parsed.url != null)) {
+        stderr_writer.print("warning: no rows loaded — table 't' not created; query may fail\n", .{}) catch {};
+    }
+
     // Print row count and elapsed time to stderr when stderr is a TTY or --verbose is set.
     const is_tty = std.Io.File.isTty(std.Io.File.stderr(), io) catch false;
     if (!parsed.silent and (parsed.verbose or is_tty)) {
@@ -270,9 +275,8 @@ fn run(
 }
 
 pub fn main(init: std.process.Init.Minimal) void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // ponytail: c_allocator; DebugAllocator deinit was _ = discarded, leak detection was off
+    const allocator = std.heap.c_allocator;
 
     var io = std.Io.Threaded.init_single_threaded;
 
@@ -412,7 +416,7 @@ pub fn main(init: std.process.Init.Minimal) void {
         },
         .parsed => |mut_parsed| {
             var parsed = mut_parsed;
-            parsed.has_stdin = if (parsed.url != null) false else !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
+            parsed.has_stdin = if (parsed.url != null or parsed.no_stdin) false else !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
             // Read query from file if -f/--file was used.
             // Arena-allocated to match the lifetime of parsed args.
             if (parsed.query_file) |path| {

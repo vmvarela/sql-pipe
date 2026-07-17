@@ -60,6 +60,7 @@ pub fn runValidate(
             const num_cols = cols.len;
             var csv_row_count: usize = 1; // header already read
             var data_row_count: usize = 0;
+            var mismatched_count: usize = 0;
 
             var row_buffer: std.ArrayList([][]u8) = .empty;
             defer {
@@ -89,6 +90,7 @@ pub fn runValidate(
                     continue;
                 }
                 data_row_count += 1;
+                if (rec.len != num_cols) mismatched_count += 1;
                 row_buffer.append(allocator, rec) catch
                     fatal("out of memory while buffering rows", stderr_writer, .csv_error, .{});
             }
@@ -124,6 +126,13 @@ pub fn runValidate(
                 defer csv_reader.freeRecord(record);
                 if (record.len == 0) continue;
                 data_row_count += 1;
+                if (record.len != num_cols) mismatched_count += 1;
+            }
+
+            if (mismatched_count > 0) {
+                stderr_writer.print("warning: {d} rows have mismatched column counts (expected {d})\n", .{ mismatched_count, num_cols }) catch |err| {
+                    std.log.err("failed to write warning: {}", .{err});
+                };
             }
 
             var count_buf: [32]u8 = undefined;

@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
         exe.root_module.addIncludePath(b.path("lib"));
         exe.root_module.addCSourceFile(.{
             .file = b.path("lib/sqlite3.c"),
-            .flags = &.{"-DSQLITE_OMIT_LOAD_EXTENSION=1"},
+            .flags = &.{ "-DSQLITE_OMIT_LOAD_EXTENSION=1", "-DSQLITE_ENABLE_MATH_FUNCTIONS=1" },
         });
     } else {
         exe.root_module.linkSystemLibrary("sqlite3", .{});
@@ -2826,7 +2826,7 @@ pub fn build(b: *std.Build) void {
         xml_unit_tests.root_module.addIncludePath(b.path("lib"));
         xml_unit_tests.root_module.addCSourceFile(.{
             .file = b.path("lib/sqlite3.c"),
-            .flags = &.{"-DSQLITE_OMIT_LOAD_EXTENSION=1"},
+            .flags = &.{ "-DSQLITE_OMIT_LOAD_EXTENSION=1", "-DSQLITE_ENABLE_MATH_FUNCTIONS=1" },
         });
     } else {
         xml_unit_tests.root_module.linkSystemLibrary("sqlite3", .{});
@@ -2862,7 +2862,7 @@ pub fn build(b: *std.Build) void {
         loader_unit_tests.root_module.addIncludePath(b.path("lib"));
         loader_unit_tests.root_module.addCSourceFile(.{
             .file = b.path("lib/sqlite3.c"),
-            .flags = &.{"-DSQLITE_OMIT_LOAD_EXTENSION=1"},
+            .flags = &.{ "-DSQLITE_OMIT_LOAD_EXTENSION=1", "-DSQLITE_ENABLE_MATH_FUNCTIONS=1" },
         });
     } else {
         loader_unit_tests.root_module.linkSystemLibrary("sqlite3", .{});
@@ -3308,4 +3308,52 @@ pub fn build(b: *std.Build) void {
     });
     test_completions_fish_syntax.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_completions_fish_syntax.step);
+
+    // Integration test 176: math functions — sqrt() works (SQLITE_ENABLE_MATH_FUNCTIONS)
+    const test_math_sqrt = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'x\n1\n' | ./zig-out/bin/sql-pipe 'SELECT sqrt(4)' | diff - <(printf '2.0\n')
+    });
+    test_math_sqrt.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_math_sqrt.step);
+
+    // Integration test 177: empty input emits warning to stderr
+    const test_empty_input_warning = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(./zig-out/bin/sql-pipe 'SELECT * FROM t' < /dev/null 2>&1 >/dev/null; echo "EXIT:$?") && echo "$msg" | grep -q 'warning: no rows loaded'
+    });
+    test_empty_input_warning.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_empty_input_warning.step);
+
+    // Integration test 178: --no-stdin skips stdin, standalone query works
+    const test_no_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'name\nAlice\n' | ./zig-out/bin/sql-pipe --no-stdin 'SELECT 1' | diff - <(printf '1\n')
+    });
+    test_no_stdin.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_no_stdin.step);
+
+    // Integration test 179: --validate reports mismatched column counts
+    const test_validate_ragged = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b,c\n1,2,3\n4,5\n6,7,8\n' | ./zig-out/bin/sql-pipe --validate 2>&1) && echo "$msg" | grep -q 'warning:.*mismatched column counts'
+    });
+    test_validate_ragged.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_validate_ragged.step);
+
+    // Integration test 180: leading-zero integers inferred as TEXT, not INTEGER
+    const test_leading_zero_text = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'code,val\n007,1\n008,2\n' | ./zig-out/bin/sql-pipe 'SELECT typeof(code), code FROM t' | diff - <(printf 'text,007\ntext,008\n')
+    });
+    test_leading_zero_text.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_leading_zero_text.step);
+
+    // Integration test 181: standalone query on TTY does NOT emit empty-input warning
+    const test_no_false_warning = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(./zig-out/bin/sql-pipe --no-stdin 'SELECT 1' 2>&1 >/dev/null) && echo "$msg" | grep -q 'warning: no rows loaded' && exit 1 || exit 0
+    });
+    test_no_false_warning.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_no_false_warning.step);
 }
