@@ -293,7 +293,7 @@ pub fn runValidate(
             const opened = source.openInput(io, input_source, stderr_writer);
             defer opened.deinit(io);
             var yaml_reader = std.Io.File.reader(opened.file, io, &yaml_buf);
-            const yaml_db = sqlite_mod.openDb(false, stderr_writer);
+            const yaml_db = sqlite_mod.openDb(false, null, stderr_writer);
             defer _ = c.sqlite3_close(yaml_db);
             const count = yaml_mod.loadYamlInput(allocator, &yaml_reader.interface, yaml_db, "t", null, stderr_writer);
             const cols = sqlite_mod.getTableColumns(allocator, yaml_db, "t", stderr_writer);
