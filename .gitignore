@@ -2,6 +2,8 @@
 zig-out/
 # SQLite amalgamation — generated during build setup, not committed
 lib/
+# Vendored C source (linenoise)
+!lib/linenoise/
 sqlite.zip
 # Nix build output symlink
 result

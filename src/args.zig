@@ -88,6 +88,10 @@ pub const SqlPipeError = error{
     HttpFlagsRequireUrl,
     UrlIncompatibleMode,
     UrlFetchFailed,
+    ReplIncompatibleMode,
+    ReplWithQueryFile,
+    ReplWithOutput,
+    ReplIncompatibleExplain,
 };
 
 pub const ParsedArgs = struct {
@@ -240,8 +244,10 @@ pub const CompletionsArgs = struct {
 };
 
 pub const ArgsResult = union(enum) {
-    /// Normal execution: run the query.
+    /// Normal execution: run the query (requires query positional arg unless --repl is set).
     parsed: ParsedArgs,
+    /// User requested --repl: enter interactive REPL after loading data.
+    repl: ParsedArgs,
     /// User requested --help / -h.
     help,
     /// User requested --version / -V.
@@ -265,6 +271,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\Usage: sql-pipe [OPTIONS] <query>
         \\       sql-pipe [OPTIONS] <file>... <query>
         \\       sql-pipe -f <file> [OPTIONS] [<file>...]
+        \\       sql-pipe --repl [OPTIONS] [<file>...]
         \\
         \\Reads input from stdin and/or file arguments, loads each into an in-memory
         \\SQLite table, runs <query>, and prints results to stdout.
@@ -315,6 +322,11 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\                               Also sets PRAGMA temp_store = FILE for transient structures
         \\  --save <file> / -S <file>    Use <file> as the SQLite database (disk-backed, persisted)
         \\  --explain                    Print SQLite query plan to stderr before executing
+        \\  -r, --repl                   Enter interactive REPL after loading input data.
+        \\                               No query required. Type .exit, .quit, .q, Ctrl-D, or Ctrl-C to quit.
+        \\                               Arrow-key history via linenoise; persisted at $HOME/.sqlpipe_history.
+        \\                               Incompatible with special modes, -f/--file, --explain, and --output.
+        \\                               Compatible with --save, --disk, -O, and file arguments.
         \\  --table                      Force pretty-printed table output (auto-detected on TTY)
         \\  --no-table                   Force CSV output even when stdout is a TTY
         \\  --null-value <string>        Custom NULL representation in output (default: "NULL" for CSV/TSV/table)
@@ -424,6 +436,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var sample_n: usize = 10;
     var stats_mode = false;
     var schema_mode = false;
+    var repl_mode = false;
     var disk = false;
     var save_path: ?[:0]const u8 = null;
     var explain = false;
@@ -534,6 +547,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             stats_mode = true;
         } else if (std.mem.eql(u8, arg, "--schema")) {
             schema_mode = true;
+        } else if (std.mem.eql(u8, arg, "--repl") or std.mem.eql(u8, arg, "-r")) {
+            repl_mode = true;
         } else if (std.mem.eql(u8, arg, "--output")) {
             i += 1;
             if (i >= args.len) return error.InvalidOutputPath;
@@ -662,7 +677,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
 
     // ─── Convert positional args to files + query ──────────────────────────
     const pos = positional_args.items;
-    const is_special_mode = list_columns or validate or sample_mode or stats_mode or schema_mode;
+    const is_special_mode = list_columns or validate or sample_mode or stats_mode or schema_mode or repl_mode;
 
     // Build file list from positional args
     var files: std.ArrayList(FileInput) = .empty;
@@ -850,8 +865,30 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             .type_inference = type_inference,
         } };
 
-    return .{ .parsed = ParsedArgs{
-        .query = query orelse (if (query_file != null) "" else return error.MissingQuery),
+    // --repl validation: reject incompatible flags
+    if (repl_mode) {
+        if (list_columns or validate or sample_mode or stats_mode or schema_mode) {
+            return error.ReplIncompatibleMode;
+        }
+        if (query_file != null) {
+            return error.ReplWithQueryFile;
+        }
+        if (output != null) {
+            return error.ReplWithOutput;
+        }
+        if (explain) {
+            return error.ReplIncompatibleExplain;
+        }
+    }
+
+    // When --repl is set, no query is needed (REPL reads queries interactively).
+    const resolved_query: []const u8 = if (repl_mode)
+        (query orelse "")
+    else
+        query orelse (if (query_file != null) "" else return error.MissingQuery);
+
+    const parsed_args: ParsedArgs = .{
+        .query = resolved_query,
         .query_file = query_file,
         .files = files.items,
         .type_inference = type_inference,
@@ -880,7 +917,13 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .url = url,
         .http_headers = http_headers.items,
         .max_body_size = max_body_size,
-    } };
+    };
+
+    if (repl_mode) {
+        return .{ .repl = parsed_args };
+    } else {
+        return .{ .parsed = parsed_args };
+    }
 }
 
 fn isValidHttpHeader(header: []const u8) bool {

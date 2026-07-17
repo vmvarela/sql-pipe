@@ -428,9 +428,26 @@ pub fn printSqlErrorContext(
     }
 }
 
+/// Print SQL error message with column context to stderr without exiting.
+/// Pre:  errmsg is the SQLite error string; db has table (or PRAGMA silently fails)
+/// Post: stderr has "error: <msg>\n" + optional column list + optional hint
+pub fn printSqlError(
+    allocator: std.mem.Allocator,
+    db: *c.sqlite3,
+    table_name: []const u8,
+    errmsg: []const u8,
+    writer: *std.Io.Writer,
+) void {
+    writer.print("error: {s}\n", .{errmsg}) catch |err| {
+        std.log.err("failed to write error message: {}", .{err});
+    };
+    printSqlErrorContext(allocator, db, table_name, errmsg, writer);
+    writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
+}
+
 /// Print SQL error message with column context then exit with sql_error code.
 /// Pre:  errmsg is the SQLite error string; db has table (or PRAGMA silently fails)
-/// Post: stderr has "error: <msg>\n" + optional column list + optional hint; process exits 3
+/// Post: calls printSqlError then exits with code 3
 pub fn fatalSqlWithContext(
     allocator: std.mem.Allocator,
     db: *c.sqlite3,
@@ -438,10 +455,6 @@ pub fn fatalSqlWithContext(
     errmsg: []const u8,
     writer: *std.Io.Writer,
 ) noreturn {
-    writer.print("error: {s}\n", .{errmsg}) catch |err| {
-        std.log.err("failed to write error message: {}", .{err});
-    };
-    printSqlErrorContext(allocator, db, table_name, errmsg, writer);
-    writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
+    printSqlError(allocator, db, table_name, errmsg, writer);
     std.process.exit(@intFromEnum(ExitCode.sql_error));
 }
