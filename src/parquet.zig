@@ -163,8 +163,11 @@ fn physToColType(phys: u8) sqlite_mod.ColumnType {
 }
 
 /// Read logical type id and param (scale for DECIMAL, time_unit for TIME/TIMESTAMP)
-/// from a C pointer to carquet_logical_type_t by reading raw bytes
-/// (the C struct contains a union, which isn't accessible through Zig's @cImport).
+/// from a C pointer to carquet_logical_type_t by reading raw bytes.
+/// ponytail: carquet_logical_type_t's C union can't be accessed via Zig @cImport.
+/// This assumes 4-byte enum id + unpacked union at offset 4 — valid for clang/gcc
+/// on macOS arm64/x86_64 and Linux x86_64 (LP64 ABI). If carquet exposes typed
+/// accessors in the future, switch to carquet_schema_node_logical_*().
 fn readLogicalType(logical: ?*const carquet_c.carquet_logical_type_t) struct { id: u8, param: i32 } {
     const ptr = logical orelse return .{ .id = 0, .param = 0 };
     const bytes = @as([*]const u8, @ptrCast(ptr));
