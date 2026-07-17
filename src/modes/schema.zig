@@ -19,7 +19,7 @@ pub fn runSchema(
     const db = sqlite_mod.openDb(false, null, stderr_writer);
     defer _ = c.sqlite3_close(db);
 
-    const parsed: args_mod.ParsedArgs = .{
+    var parsed = args_mod.ParsedArgs{
         .query = "",
         .files = args.files,
         .type_inference = args.type_inference,
@@ -39,6 +39,7 @@ pub fn runSchema(
         .disk = false,
         .url = args.url,
     };
+    parsed.has_stdin = if (parsed.url != null) false else !(std.Io.File.isTty(std.Io.File.stdin(), io) catch false);
 
     _ = main_mod.loadPipelineInputs(allocator, io, db, parsed, stderr_writer);
 
