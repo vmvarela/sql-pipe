@@ -54,8 +54,9 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, _: anytype, prompt: []cons
 /// Returns slice of the buffer up to newline, or null on EOF/error.
 fn readLineWindows(buf: anytype) ?[]u8 {
     var pos: usize = 0;
+    const stdin_file = c_stdio.__acrt_iob_func(0); // stdin = __acrt_iob_func(0)
     while (pos < buf.len) {
-        const ch = c_stdio.getc(c_stdio.stdin);
+        const ch = c_stdio.getc(stdin_file);
         if (ch == -1) {
             if (pos == 0) return null; // EOF
             break; // EOF after some data
