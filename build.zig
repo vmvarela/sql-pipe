@@ -90,6 +90,12 @@ pub fn build(b: *std.Build) void {
     // Parquet support via carquet C library (MIT, by Johan Natter).
     // Compression libs (zstd, lz4, zlib) bundled as C source alongside carquet.
     // All statically linked — zero runtime deps.
+    // NetBSD: Zig's bundled libc stdio.h uses GCC extensions @cImport can't
+    // parse. Shadow it with a minimal shim that only declares what carquet needs.
+    if (target.result.os.tag == .netbsd) {
+        exe.root_module.addIncludePath(b.path("lib/carquet/netbsd-shim"));
+    }
+
     exe.root_module.addIncludePath(b.path("lib/carquet/include"));
     exe.root_module.addIncludePath(b.path("lib/carquet/src"));
     exe.root_module.addIncludePath(b.path("lib/zstd"));
