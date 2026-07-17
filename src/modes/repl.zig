@@ -116,6 +116,7 @@ fn execDotQuery(
     main_table: []const u8,
 ) bool {
     execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
+    stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
     return true;
 }
 
@@ -180,6 +181,7 @@ fn handleDotCommand(
             if (q.len == 0) continue;
             execReplQuery(allocator, db, q, stdout_writer, stderr_writer, parsed, use_table, main_table);
         }
+        stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
         return true;
     }
     stderr_writer.print("unknown command: {s}\n", .{command}) catch {};
@@ -246,6 +248,7 @@ pub fn runRepl(
             const query = ml_buf.items;
             execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
             ml_buf.clearRetainingCapacity();
+            stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
             continue;
         }
 
