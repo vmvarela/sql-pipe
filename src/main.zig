@@ -17,6 +17,7 @@ const validate_mode = @import("modes/validate.zig");
 const sample_mode = @import("modes/sample.zig");
 const stats_mode = @import("modes/stats.zig");
 const schema_mode = @import("modes/schema.zig");
+const repl_mode = @import("modes/repl.zig");
 const completions_mod = @import("completions.zig");
 
 const VERSION: []const u8 = build_options.version;
@@ -39,7 +40,7 @@ const InputFormat = format.InputFormat;
 /// Supported output formats (canonical definition lives in format.zig).
 const OutputFormat = format.OutputFormat;
 
-/// execQuery(db, query, allocator, writer, header, output_format, use_table) → !void
+/// execQuery(allocator, db, query, writer, header, output_format, ...) → !void
 /// Pre:  db is open with tables populated
 ///       query is a valid SQL string (not null-terminated)
 ///       allocator is valid
@@ -48,7 +49,7 @@ const OutputFormat = format.OutputFormat;
 /// Post: results are written to writer in the requested output format (or as a pretty table)
 ///       error.PrepareQueryFailed when sqlite3_prepare_v2 returns non-SQLITE_OK
 ///       propagates any writer I/O error
-fn execQuery(
+pub fn execQuery(
     allocator: std.mem.Allocator,
     db: *c.sqlite3,
     query: []const u8,
@@ -174,20 +175,18 @@ fn printQueryPlan(
 ///       query executed, results written to stdout in parsed.output_format
 ///       On error, an "error: ..." message is written to stderr and process
 ///       exits with the appropriate ExitCode (1, 2, or 3)
-fn run(
+/// loadPipelineInputs(allocator, io, db, parsed, stderr_writer) → usize
+/// Pre:  db is open (in-memory or disk-backed)
+/// Post: inputs from URL/files/stdin are loaded into named SQLite tables
+///       returns total number of rows loaded
+///       on fatal input error (bad URL, missing file), exits via fatal()
+pub fn loadPipelineInputs(
     allocator: std.mem.Allocator,
     io: std.Io,
+    db: *c.sqlite3,
     parsed: ParsedArgs,
     stderr_writer: *std.Io.Writer,
-    stdout_writer: *std.Io.Writer,
-    use_table: bool,
-) void {
-    const query = parsed.query;
-
-    const db = sqlite_mod.openDb(parsed.disk, parsed.save_path, stderr_writer);
-    defer _ = c.sqlite3_close(db);
-
-    const start_ts = std.Io.Timestamp.now(io, .awake);
+) usize {
     var total_rows: usize = 0;
 
     // Load from URL if provided
@@ -241,6 +240,32 @@ fn run(
         stderr_writer.print("warning: no rows loaded — table 't' not created; query may fail\n", .{}) catch {};
     }
 
+    return total_rows;
+}
+
+/// mainTableName(parsed) → []const u8
+pub fn mainTableName(parsed: ParsedArgs) []const u8 {
+    if (parsed.url != null) return "t";
+    if (parsed.files.len > 0) return parsed.files[0].table_name;
+    return "t";
+}
+
+fn run(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    parsed: ParsedArgs,
+    stderr_writer: *std.Io.Writer,
+    stdout_writer: *std.Io.Writer,
+    use_table: bool,
+) void {
+    const query = parsed.query;
+
+    const db = sqlite_mod.openDb(parsed.disk, parsed.save_path, stderr_writer);
+    defer _ = c.sqlite3_close(db);
+
+    const start_ts = std.Io.Timestamp.now(io, .awake);
+    const total_rows = loadPipelineInputs(allocator, io, db, parsed, stderr_writer);
+
     // Print row count and elapsed time to stderr when stderr is a TTY or --verbose is set.
     const is_tty = std.Io.File.isTty(std.Io.File.stderr(), io) catch false;
     if (!parsed.silent and (parsed.verbose or is_tty)) {
@@ -260,8 +285,7 @@ fn run(
         stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
     }
 
-    // Determine which table to show column context for on error
-    const main_table: []const u8 = if (parsed.url != null) "t" else if (parsed.files.len > 0) parsed.files[0].table_name else "t";
+    const main_table = mainTableName(parsed);
 
     // Print query plan to stderr when --explain is set
     if (parsed.explain) {
@@ -339,6 +363,10 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.MissingNullValue => fatal("--null-value requires a value", stderr_writer, .usage, .{}),
             error.MissingHtmlClassValue => fatal("--html-class requires a value", stderr_writer, .usage, .{}),
             error.InvalidCompletionsShell => fatal("unknown shell; supported: bash, zsh, fish", stderr_writer, .usage, .{}),
+            error.ReplIncompatibleMode => fatal("--repl cannot be combined with other special modes", stderr_writer, .usage, .{}),
+            error.ReplWithQueryFile => fatal("--repl cannot be combined with -f/--file", stderr_writer, .usage, .{}),
+            error.ReplWithOutput => fatal("--repl cannot be combined with --output", stderr_writer, .usage, .{}),
+            error.ReplIncompatibleExplain => fatal("--repl cannot be combined with --explain", stderr_writer, .usage, .{}),
             else => {},
         }
         printUsage(stderr_writer) catch |werr| std.log.err("failed to write usage: {}", .{werr});
@@ -410,6 +438,43 @@ pub fn main(init: std.process.Init.Minimal) void {
             completions_mod.generateCompletions(comp_args.shell, stdout_writer) catch |err| {
                 std.log.err("failed to write completions: {}", .{err});
             };
+            stdout_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stdout: {}", .{err});
+            };
+            stderr_file_writer.flush() catch |err| {
+                std.log.err("failed to flush stderr: {}", .{err});
+            };
+        },
+        .repl => |mut_parsed| {
+            var parsed = mut_parsed;
+            parsed.has_stdin = if (parsed.url != null or parsed.no_stdin) false else !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
+            // Read query from file if -f/--file was used.
+            if (parsed.query_file) |path| {
+                const contents = std.Io.Dir.cwd().readFileAlloc(io.io(), path, args_arena.allocator(), .limited(10 * 1024 * 1024)) catch |err| {
+                    fatal("cannot read query file '{s}': {s}", stderr_writer, .usage, .{ path, @errorName(err) });
+                };
+                const trimmed = std.mem.trim(u8, contents, " \t\r\n");
+                if (trimmed.len == 0) {
+                    fatal("query file '{s}' is empty", stderr_writer, .usage, .{path});
+                }
+                parsed.query = trimmed;
+            }
+            // `t` is reserved for stdin and URL input.
+            if (parsed.has_stdin or parsed.url != null) {
+                for (parsed.files) |f| {
+                    if (std.mem.eql(u8, f.table_name, "t")) {
+                        fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{});
+                    }
+                }
+            }
+            // Resolve table mode: auto-detect from stdout TTY when not explicitly set.
+            const stdout_is_tty = std.Io.File.isTty(std.Io.File.stdout(), io.io()) catch false;
+            const use_table_repl = switch (parsed.table_mode) {
+                .always => true,
+                .never => false,
+                .auto => stdout_is_tty and (parsed.output_format == .csv or parsed.output_format == .tsv),
+            };
+            repl_mode.runRepl(allocator, io.io(), parsed, stderr_writer, stdout_writer, use_table_repl);
             stdout_file_writer.flush() catch |err| {
                 std.log.err("failed to flush stdout: {}", .{err});
             };

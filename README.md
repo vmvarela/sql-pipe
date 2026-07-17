@@ -370,6 +370,7 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `--disk` | Use a file-backed temporary database instead of `:memory:`. Enables processing datasets larger than available RAM. Cannot be combined with `--save`. |
 | `--no-stdin` | Do not read from stdin. Prevents hangs in CI pipelines where stdin is a non-TTY pipe without EOF. |
 | `--explain` | Print the SQLite query plan to stderr before executing the query. Each line is prefixed with `QUERY PLAN: `. The actual query still runs and results go to stdout. Mutually exclusive with `--columns`, `--validate`, `--sample`, `--stats`, `--schema`, and `--output`. |
+| `-r`, `--repl` | Enter interactive REPL mode after loading input data. Loads input once into SQLite, then presents a `sql>` prompt for interactive queries. Arrow-key history via linenoise, history persisted at `$HOME/.sqlpipe_history`. Type `.exit`, `.quit`, `.q`, Ctrl-D, or Ctrl-C to exit. No query argument required. Cannot be combined with special modes, `-f`/`--file`, `--explain`, or `--output`. Compatible with `--save`, `--disk`, `-O`, and file arguments. |
 | `--xml-root <name>` | Root element name for XML I/O (default: `results`) |
 | `--xml-row <name>` | Row element name for XML I/O (default: `row`) |
 | `--output <file>` | Write results to the given file instead of stdout. Creates or overwrites the file. Exits 1 if the file cannot be created. |
@@ -491,6 +492,36 @@ $ printf 'name,age\nAlice,30\nBob,25\nCarol,35\n' | sql-pipe --stats
 ```
 
 Same as running `SELECT MIN(col), MAX(col), AVG(col), COUNT(*)` per column — but in one command.
+
+### Interactive REPL with --repl
+
+```sh
+$ sql-pipe --repl sales.csv
+```
+
+Loads the file once into SQLite, then enters an interactive prompt:
+
+```
+Loaded 12,543 rows
+Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.
+sql> SELECT region, SUM(revenue) FROM sales GROUP BY region;
++--------+-------------+
+| region | SUM(revenue)|
++--------+-------------+
+| APAC   | 2345999.00  |
+| EMEA   | 3123400.00  |
+| NA     | 1890234.00  |
++--------+-------------+
+sql> .exit
+```
+
+Output respects `-O`/`--json`/`--table` flags. Arrow-key history persists at `$HOME/.sqlpipe_history`.
+Compatible with `--save`/`--disk`. Pipe scripts non-interactively with `--no-stdin`:
+
+```sh
+$ printf 'SELECT 1+1;\n.exit\n' | sql-pipe --repl --no-stdin
+2
+```
 
 ### Debug query performance with --explain
 

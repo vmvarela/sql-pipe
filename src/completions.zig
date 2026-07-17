@@ -79,6 +79,7 @@ fn generateBash(writer: *std.Io.Writer) !void {
         \\      --disk
         \\      --save -S
         \\      --explain
+        \\      --repl -r
         \\      --table --no-table
         \\      --null-value
         \\      --html-class
@@ -131,6 +132,7 @@ fn generateZsh(writer: *std.Io.Writer) !void {
         \\    '--disk[Use file-backed temp database]'
         \\    '(-S --save)'{-S+,--save=}'[Persist DB to file]:file:_files'
         \\    '--explain[Print query plan to stderr]'
+        \\    '(-r --repl)'{-r,--repl}'[Enter interactive REPL mode]'
         \\    '--table[Force table output]'
         \\    '--no-table[Force CSV output]'
         \\    '--null-value=[Custom NULL representation]:string:'
@@ -186,6 +188,7 @@ fn generateFish(writer: *std.Io.Writer) !void {
         \\complete -c sql-pipe -l disk -d "Use file-backed temp database"
         \\complete -c sql-pipe -s S -l save -r -d "Use file as SQLite DB (persisted)"
         \\complete -c sql-pipe -l explain -d "Print query plan to stderr"
+        \\complete -c sql-pipe -s r -l repl -d "Enter interactive REPL mode"
         \\complete -c sql-pipe -l table -d "Force pretty-printed table output"
         \\complete -c sql-pipe -l no-table -d "Force CSV output"
         \\complete -c sql-pipe -l null-value -r -d "Custom NULL representation"

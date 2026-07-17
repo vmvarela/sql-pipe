@@ -14,6 +14,7 @@ SYNOPSIS
 	*sql-pipe* --stats [OPTIONS] [<file>]
 	*sql-pipe* --schema [OPTIONS] [<file>...]
 	*sql-pipe* --explain [OPTIONS] [<file>] <query>
+	*sql-pipe* --repl [OPTIONS] [<file>...]
 	*sql-pipe* --completions <shell>
 
 DESCRIPTION
@@ -229,6 +230,25 @@ OPTIONS
 		attribute. Example: *--html-class 'data-table sortable'* produces
 		*<table class="data-table sortable">*.
 
+	*-r, --repl*
+		Enter an interactive REPL (read-eval-print loop) after loading
+		input data. All input files are loaded into SQLite tables once at startup,
+		then the prompt *sql>* appears for interactive SQL queries. Results
+		respect *-O* / *--json* / *--table* flags.
+
+		Commands:
+		- *.exit*, *.quit*, *.q* — exit the REPL
+		- *Ctrl-D* (EOF) or *Ctrl-C* — exit the REPL
+
+		Arrow-key history is provided via *linenoise*. The history file is stored
+		at *$HOME/.sqlpipe_history*. Only the first SQL statement per line is
+		executed; multi-statement lines are not split in v1.
+
+		No query argument is required. Cannot be combined with *--columns*,
+		*--validate*, *--sample*, *--stats*, *--schema*, *--explain*,
+		*-f* / *--file*, *--output*, or *--completions*. Compatible with
+		*--save*, *--disk*, *-O*, and file arguments.
+
 	*--completions* <shell>
 		Generate a shell completion script and print it to standard
 		output. Supported shells: *bash*, *zsh*, *fish*. The script
@@ -430,6 +450,26 @@ EXAMPLES
 		QUERY PLAN: SCAN t
 		East,100
 		West,200
+
+	Interactive REPL mode (explore data iteratively):
+
+		$ sql-pipe --repl sales.csv
+		Loaded 12,543 rows
+		Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.
+		sql> SELECT region, SUM(revenue) FROM sales GROUP BY region;
+		+--------+-------------+
+		| region | SUM(revenue)|
+		+--------+-------------+
+		| APAC   | 2345999.00  |
+		| EMEA   | 3123400.00  |
+		| NA     | 1890234.00  |
+		+--------+-------------+
+		sql> .exit
+
+	Pipe a script to the REPL for non-interactive use:
+
+		$ printf 'SELECT 1+1;\n.exit\n' | sql-pipe --repl --no-stdin
+		2
 
 	Print inferred CREATE TABLE DDL without running a query:
 
