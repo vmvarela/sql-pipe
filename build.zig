@@ -249,6 +249,30 @@ pub fn build(b: *std.Build) void {
     test_http_input.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_http_input.step);
 
+    // Integration test 3b: per-URL --input-format and --http-header
+    const test_per_url_flags = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\set -euo pipefail
+        \\server="$0"
+        \\port_file=$(mktemp)
+        \\rm -f "$port_file"
+        \\"$server" "$port_file" & server_pid=$!
+        \\cleanup() { kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; rm -f "$port_file"; }
+        \\trap cleanup EXIT
+        \\for _ in $(seq 1 100); do [ -s "$port_file" ] && break; sleep 0.05; done
+        \\[ -s "$port_file" ]
+        \\base="http://127.0.0.1:$(cat "$port_file")"
+        \\bin=./zig-out/bin/sql-pipe
+        \\# Per-URL format: URL1 gets json (auto-detect), URL2 gets csv
+        \\[ "$("$bin" --url "$base/json" --input-format json --url "$base/csv" 'SELECT url0.name FROM url0')" = Ada ]
+        \\# Per-URL headers: headers apply to preceding URL only
+        \\[ "$("$bin" --url "$base/csv" --http-header "X-Test: one" 'SELECT name FROM url0')" = Ada ]
+        \\echo "per-url-flags: OK"
+    });
+    test_per_url_flags.addArtifactArg(http_server);
+    test_per_url_flags.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_per_url_flags.step);
+
     // Integration test 4: --help flag prints usage to stderr and exits 0
     const test_help = b.addSystemCommand(&.{
         "bash", "-c",

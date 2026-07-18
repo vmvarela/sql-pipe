@@ -100,8 +100,6 @@ pub const SqlPipeError = error{
     ReplWithOutput,
     ReplIncompatibleExplain,
     DuplicateUrlTableName,
-    UrlFlagsRequireUrl,
-    UrlFormatRequiresUrl,
     UrlHeaderRequiresUrl,
 };
 
@@ -353,10 +351,12 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  -u, --url <url>              Fetch input data from HTTP/HTTPS URL (repeatable)
         \\                               Each URL becomes a table: url0, url1... or use NAME=URL
         \\                               Can combine with file arguments and stdin
-        \\  --input-format <fmt>         Input format for the LAST --url (repeatable per URL)
+        \\  --input-format <fmt>         Override input format for the preceeding --url
         \\                               csv (default), tsv, json, ndjson, xml, yaml, parquet
-        \\  --http-header <header>       Custom HTTP header for the LAST --url (repeatable)
+        \\                               When used before any --url, sets global format for stdin
+        \\  --http-header <header>       Custom HTTP header for the preceeding --url (repeatable)
         \\                               Format: "Key: Value". Requests with headers don't follow redirects.
+        \\                               Must appear after a --url flag
         \\  --max-body-size <bytes>      Maximum response body size for ALL --url (default: 104857600 = 100MB)
         \\
         \\Exit codes:
@@ -506,17 +506,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             header = true;
         } else if (std.mem.eql(u8, arg, "--json")) {
             output_format = .json;
-        } else if (std.mem.eql(u8, arg, "-I") or std.mem.eql(u8, arg, "--input-format")) {
-            i += 1;
-            if (i >= args.len) return error.InvalidInputFormat;
-            input_format = InputFormat.parse(args[i]) catch return error.InvalidInputFormat;
-            input_format_explicit = true;
-        } else if (std.mem.startsWith(u8, arg, "--input-format=")) {
-            input_format = InputFormat.parse(arg["--input-format=".len..]) catch return error.InvalidInputFormat;
-            input_format_explicit = true;
-        } else if (std.mem.startsWith(u8, arg, "-I=")) {
-            input_format = InputFormat.parse(arg["-I=".len..]) catch return error.InvalidInputFormat;
-            input_format_explicit = true;
         } else if (std.mem.eql(u8, arg, "-O") or std.mem.eql(u8, arg, "--output-format")) {
             i += 1;
             if (i >= args.len) return error.InvalidOutputFormat;
