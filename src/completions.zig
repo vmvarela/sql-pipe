@@ -114,9 +114,9 @@ fn generateZsh(writer: *std.Io.Writer) !void {
         \\    '--no-stdin[Do not read from stdin]'
         \\    '(-H --header)'{-H,--header}'[Print column names as first output row]'
         \\    '--max-rows=[Row limit]:rows:'
-        \\    '(-u --url)'{-u+,--url=}'[Fetch HTTP/HTTPS input into table t]:URL:'
-        \\    '*--http-header=[HTTP request header for --url]:header:'
-        \\    '--max-body-size=[Maximum --url response body size]:bytes:'
+        \\    '(-u --url)'{-u+,--url=}'[Fetch HTTP/HTTPS input (repeatable, NAME=URL)]:URL:'
+        \\    '*--http-header=[HTTP request header for last --url]:header:'
+        \\    '--max-body-size=[Maximum response body size for all --url]:bytes:'
         \\    '(-v --verbose)'{-v,--verbose}'[Force row count to stderr]'
         \\    '(-s --silent)'{-s,--silent}'[Suppress row count output]'
         \\    '--validate[Parse input and print summary]'
@@ -164,13 +164,13 @@ fn generateFish(writer: *std.Io.Writer) !void {
         \\
         \\# Query options
         \\complete -c sql-pipe -l sql-table -r -d "Target table for SQL INSERT"
-\\complete -c sql-pipe -l no-type-inference -d "Treat all columns as TEXT"
-\\complete -c sql-pipe -l no-stdin -d "Do not read from stdin"
-\\complete -c sql-pipe -s H -l header -d "Print column names as first output row"
+        \\complete -c sql-pipe -l no-type-inference -d "Treat all columns as TEXT"
+        \\complete -c sql-pipe -l no-stdin -d "Do not read from stdin"
+        \\complete -c sql-pipe -s H -l header -d "Print column names as first output row"
         \\complete -c sql-pipe -l max-rows -r -d "Stop if more than N data rows read"
-        \\complete -c sql-pipe -s u -l url -r -d "Fetch HTTP/HTTPS input into table t"
-        \\complete -c sql-pipe -l http-header -r -d "HTTP request header for --url"
-        \\complete -c sql-pipe -l max-body-size -r -d "Maximum --url response body size"
+        \\complete -c sql-pipe -s u -l url -r -d "Fetch HTTP/HTTPS input (repeatable, NAME=URL)"
+        \\complete -c sql-pipe -l http-header -r -d "HTTP request header for last --url"
+        \\complete -c sql-pipe -l max-body-size -r -d "Maximum response body size for all --url"
         \\complete -c sql-pipe -s v -l verbose -d "Force row count to stderr"
         \\complete -c sql-pipe -s s -l silent -d "Suppress row count output"
         \\complete -c sql-pipe -l validate -d "Parse input and print summary"

@@ -191,16 +191,16 @@ pub fn loadPipelineInputs(
 ) usize {
     var total_rows: usize = 0;
 
-    // Load from URL if provided
-    if (parsed.url) |url| {
+    // Load each URL into its named table
+    for (parsed.urls, 0..) |url_input, i| {
         var http_status: ?u16 = null;
-        const fetch_result = http_mod.fetchUrl(allocator, io, url, parsed.http_headers, parsed.max_body_size, &http_status) catch |err| switch (err) {
-            error.InvalidUrl => fatal("invalid URL: {s}", stderr_writer, .usage, .{url}),
+        const fetch_result = http_mod.fetchUrl(allocator, io, url_input.url, url_input.headers, parsed.max_body_size, &http_status) catch |err| switch (err) {
+            error.InvalidUrl => fatal("invalid URL: {s}", stderr_writer, .usage, .{url_input.url}),
             error.InvalidHttpHeader => fatal("invalid --http-header value", stderr_writer, .usage, .{}),
             error.UrlFetchFailed => if (http_status) |status|
-                fatal("failed to fetch URL: {s} (HTTP {d})", stderr_writer, .usage, .{ url, status })
+                fatal("failed to fetch URL: {s} (HTTP {d})", stderr_writer, .usage, .{ url_input.url, status })
             else
-                fatal("failed to fetch URL: {s}", stderr_writer, .usage, .{url}),
+                fatal("failed to fetch URL: {s}", stderr_writer, .usage, .{url_input.url}),
             else => fatal("URL fetch failed: {s}", stderr_writer, .usage, .{@errorName(err)}),
         };
         defer allocator.free(fetch_result.body);
@@ -208,10 +208,15 @@ pub fn loadPipelineInputs(
         // Create reader from fetched body
         var body_reader = std.Io.Reader.fixed(fetch_result.body);
 
-        // Use detected format unless -I explicitly provided
-        const input_format = if (parsed.input_format_explicit) parsed.input_format else fetch_result.format;
+        // Use detected format unless -I explicitly provided for this URL or globally
+        const input_format = if (url_input.format) |fmt| fmt else if (parsed.input_format_explicit) parsed.input_format else fetch_result.format;
 
-        const rows = loadInput(allocator, io, db, "t", input_format, &body_reader, parsed, stderr_writer);
+        const table_name = url_input.table_name orelse blk: {
+            var buf: [16]u8 = undefined;
+            const written = std.fmt.bufPrint(&buf, "url{}", .{i}) catch unreachable;
+            break :blk allocator.dupeZ(u8, written) catch unreachable;
+        };
+        const rows = loadInput(allocator, io, db, table_name, input_format, &body_reader, parsed, stderr_writer);
         total_rows += rows;
     }
 
@@ -229,17 +234,18 @@ pub fn loadPipelineInputs(
         total_rows += rows;
     }
 
-    // Load stdin as `t` if piped (and no URL was provided)
-    if (parsed.has_stdin and parsed.url == null) {
+    // Load stdin as `stdin` if piped (and URLs/files exist), else `t`
+    if (parsed.has_stdin) {
         var stdin_buf: [4096]u8 = undefined;
         var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
-        const rows = loadInput(allocator, io, db, "t", parsed.input_format, &stdin_reader.interface, parsed, stderr_writer);
+        const stdin_table = if (parsed.urls.len > 0 or parsed.files.len > 0) "stdin" else "t";
+        const rows = loadInput(allocator, io, db, stdin_table, parsed.input_format, &stdin_reader.interface, parsed, stderr_writer);
         total_rows += rows;
     }
 
-    // Warn when no rows were loaded — query referencing 't' will fail
-    if (total_rows == 0 and (parsed.has_stdin or parsed.files.len > 0 or parsed.url != null)) {
-        stderr_writer.print("warning: no rows loaded — table 't' not created; query may fail\n", .{}) catch {};
+    // Warn when no rows were loaded — query referencing tables will fail
+    if (total_rows == 0 and (parsed.has_stdin or parsed.files.len > 0 or parsed.urls.len > 0)) {
+        stderr_writer.print("warning: no rows loaded — tables not created; query may fail\n", .{}) catch {};
     }
 
     return total_rows;
@@ -247,7 +253,10 @@ pub fn loadPipelineInputs(
 
 /// mainTableName(parsed) → []const u8
 pub fn mainTableName(parsed: ParsedArgs) []const u8 {
-    if (parsed.url != null) return "t";
+    if (parsed.urls.len > 0) {
+        if (parsed.urls[0].table_name) |name| return name;
+        return "url0";
+    }
     if (parsed.files.len > 0) return parsed.files[0].table_name;
     return "t";
 }
@@ -449,7 +458,7 @@ pub fn main(init: std.process.Init.Minimal) void {
         },
         .repl => |mut_parsed| {
             var parsed = mut_parsed;
-            parsed.has_stdin = if (parsed.url != null or parsed.no_stdin) false else !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
+            parsed.has_stdin = if (parsed.no_stdin) false else !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
             // Read query from file if -f/--file was used.
             if (parsed.query_file) |path| {
                 const contents = std.Io.Dir.cwd().readFileAlloc(io.io(), path, args_arena.allocator(), .limited(10 * 1024 * 1024)) catch |err| {
@@ -461,11 +470,17 @@ pub fn main(init: std.process.Init.Minimal) void {
                 }
                 parsed.query = trimmed;
             }
-            // `t` is reserved for stdin and URL input.
-            if (parsed.has_stdin or parsed.url != null) {
+            // `stdin` is reserved for stdin input when URLs/files exist.
+            if (parsed.has_stdin or parsed.urls.len > 0) {
                 for (parsed.files) |f| {
-                    if (std.mem.eql(u8, f.table_name, "t")) {
+                    if (std.mem.eql(u8, f.table_name, "stdin")) {
                         fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{});
+                    }
+                }
+                for (parsed.urls) |url_input| {
+                    const table_name = url_input.table_name orelse "url0";
+                    if (std.mem.eql(u8, table_name, "stdin")) {
+                        fatal("duplicate table name — URL table name conflicts with stdin", stderr_writer, .usage, .{});
                     }
                 }
             }
@@ -486,7 +501,7 @@ pub fn main(init: std.process.Init.Minimal) void {
         },
         .parsed => |mut_parsed| {
             var parsed = mut_parsed;
-            parsed.has_stdin = if (parsed.url != null or parsed.no_stdin) false else !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
+            parsed.has_stdin = if (parsed.no_stdin) false else !(std.Io.File.isTty(std.Io.File.stdin(), io.io()) catch false);
             // Read query from file if -f/--file was used.
             // Arena-allocated to match the lifetime of parsed args.
             if (parsed.query_file) |path| {
@@ -499,11 +514,17 @@ pub fn main(init: std.process.Init.Minimal) void {
                 }
                 parsed.query = trimmed;
             }
-            // `t` is reserved for stdin and URL input.
-            if (parsed.has_stdin or parsed.url != null) {
+            // `stdin` is reserved for stdin input when URLs/files exist.
+            if (parsed.has_stdin or parsed.urls.len > 0) {
                 for (parsed.files) |f| {
-                    if (std.mem.eql(u8, f.table_name, "t")) {
+                    if (std.mem.eql(u8, f.table_name, "stdin")) {
                         fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{});
+                    }
+                }
+                for (parsed.urls) |url_input| {
+                    const table_name = url_input.table_name orelse "url0";
+                    if (std.mem.eql(u8, table_name, "stdin")) {
+                        fatal("duplicate table name — URL table name conflicts with stdin", stderr_writer, .usage, .{});
                     }
                 }
             }

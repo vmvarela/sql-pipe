@@ -22,6 +22,7 @@ pub fn runSchema(
     var parsed = args_mod.ParsedArgs{
         .query = "",
         .files = args.files,
+        .urls = args.urls,
         .type_inference = args.type_inference,
         .delimiter = args.delimiter,
         .header = false,
@@ -37,12 +38,11 @@ pub fn runSchema(
         .xml_row_input = null,
         .json_path = null,
         .disk = false,
-        .url = args.url,
     };
-    parsed.has_stdin = if (parsed.url != null) false else !(std.Io.File.isTty(std.Io.File.stdin(), io) catch false);
+    parsed.has_stdin = if (parsed.urls.len > 0) false else !(std.Io.File.isTty(std.Io.File.stdin(), io) catch false);
 
     const total_rows = main_mod.loadPipelineInputs(allocator, io, db, parsed, stderr_writer);
-    if (total_rows == 0 and (parsed.has_stdin or parsed.files.len > 0 or parsed.url != null))
+    if (total_rows == 0 and (parsed.has_stdin or parsed.files.len > 0 or parsed.urls.len > 0))
         fatal("empty input", stderr_writer, .csv_error, .{});
 
     // Print DDL for each table in creation order
