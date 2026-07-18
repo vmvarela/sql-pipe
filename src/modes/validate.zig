@@ -24,19 +24,19 @@ const source = @import("source.zig");
 pub fn runValidate(
     allocator: std.mem.Allocator,
     io: std.Io,
-    args: args_mod.ValidateArgs,
+    parsed: args_mod.ParsedArgs,
     stderr_writer: *std.Io.Writer,
     stdout_writer: *std.Io.Writer,
 ) void {
     // Determine input source: file argument or stdin
-    const input_source: union(enum) { file: []const u8, stdin } = if (args.files.len > 0)
-        .{ .file = args.files[0].path }
+    const input_source: union(enum) { file: []const u8, stdin } = if (parsed.files.len > 0)
+        .{ .file = parsed.files[0].path }
     else
         .stdin;
 
-    switch (args.input_format) {
+    switch (parsed.input_format) {
         .csv, .tsv => {
-            const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
+            const col_delim: []const u8 = if (parsed.input_format == .tsv) "\t" else parsed.delimiter;
             var read_buf: [4096]u8 = undefined;
             const opened = source.openInput(io, input_source, stderr_writer);
             defer opened.deinit(io);
@@ -97,7 +97,7 @@ pub fn runValidate(
                     fatal("out of memory while buffering rows", stderr_writer, .csv_error, .{});
             }
 
-            const types: []ColumnType = if (args.type_inference) blk: {
+            const types: []ColumnType = if (parsed.type_inference) blk: {
                 break :blk inferTypes(allocator, row_buffer.items, num_cols) catch
                     fatal("out of memory during type inference", stderr_writer, .csv_error, .{});
             } else blk: {
@@ -172,11 +172,11 @@ pub fn runValidate(
             defer allocator.free(input);
             if (input.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
-            var parsed = std.json.parseFromSlice(std.json.Value, allocator, input, .{}) catch
+            var json_parsed = std.json.parseFromSlice(std.json.Value, allocator, input, .{}) catch
                 fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
-            defer parsed.deinit();
+            defer json_parsed.deinit();
 
-            const fj = json_mod.firstJsonObject(parsed.value, args.json_path, stderr_writer);
+            const fj = json_mod.firstJsonObject(json_parsed.value, parsed.json_path, stderr_writer);
             const first_obj = fj.first_obj orelse
                 fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});
             const array = fj.array;
@@ -330,7 +330,7 @@ pub fn runValidate(
             defer opened.deinit(io);
             var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
 
-            const summary = xml_mod.summarizeXml(allocator, &source_reader.interface, args.xml_root_input, args.xml_row_input, stderr_writer);
+            const summary = xml_mod.summarizeXml(allocator, &source_reader.interface, parsed.xml_root_input, parsed.xml_row_input, stderr_writer);
             defer {
                 for (summary.col_names) |name| allocator.free(name);
                 allocator.free(summary.col_names);

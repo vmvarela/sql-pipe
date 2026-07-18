@@ -12,33 +12,14 @@ const fatal = sqlite_mod.fatal;
 pub fn runSchema(
     allocator: std.mem.Allocator,
     io: std.Io,
-    args: args_mod.SchemaArgs,
+    parsed_in: args_mod.ParsedArgs,
     stderr_writer: *std.Io.Writer,
     stdout_writer: *std.Io.Writer,
 ) void {
+    var parsed = parsed_in;
     const db = sqlite_mod.openDb(false, null, stderr_writer);
     defer _ = c.sqlite3_close(db);
 
-    var parsed = args_mod.ParsedArgs{
-        .query = "",
-        .files = args.files,
-        .urls = args.urls,
-        .type_inference = args.type_inference,
-        .delimiter = args.delimiter,
-        .header = false,
-        .input_format = args.input_format,
-        .output_format = .csv,
-        .max_rows = null,
-        .verbose = false,
-        .silent = true,
-        .output = null,
-        .xml_root = "results",
-        .xml_row = "row",
-        .xml_root_input = null,
-        .xml_row_input = null,
-        .json_path = null,
-        .disk = false,
-    };
     parsed.has_stdin = if (parsed.urls.len > 0) false else !(std.Io.File.isTty(std.Io.File.stdin(), io) catch false);
 
     const total_rows = main_mod.loadPipelineInputs(allocator, io, db, parsed, stderr_writer);

@@ -22,19 +22,19 @@ const source = @import("source.zig");
 pub fn runColumns(
     allocator: std.mem.Allocator,
     io: std.Io,
-    args: args_mod.ColumnsArgs,
+    parsed: args_mod.ParsedArgs,
     stderr_writer: *std.Io.Writer,
     stdout_writer: *std.Io.Writer,
 ) void {
     // Determine input source: file argument or stdin
-    const input_source: union(enum) { file: []const u8, stdin } = if (args.files.len > 0)
-        .{ .file = args.files[0].path }
+    const input_source: union(enum) { file: []const u8, stdin } = if (parsed.files.len > 0)
+        .{ .file = parsed.files[0].path }
     else
         .stdin;
 
-    switch (args.input_format) {
+    switch (parsed.input_format) {
         .csv, .tsv => {
-            const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
+            const col_delim: []const u8 = if (parsed.input_format == .tsv) "\t" else parsed.delimiter;
             var read_buf: [4096]u8 = undefined;
             const opened = source.openInput(io, input_source, stderr_writer);
             defer opened.deinit(io);
@@ -57,7 +57,7 @@ pub fn runColumns(
                 allocator.free(cols);
             }
 
-            if (args.verbose) {
+            if (parsed.verbose) {
                 var row_buffer: std.ArrayList([][]u8) = .empty;
                 defer {
                     for (row_buffer.items) |row| csv_reader.freeRecord(row);
@@ -108,16 +108,16 @@ pub fn runColumns(
             defer allocator.free(input);
             if (input.len == 0) fatal("empty input", stderr_writer, .csv_error, .{});
 
-            var parsed = std.json.parseFromSlice(std.json.Value, allocator, input, .{}) catch
+            var json_parsed = std.json.parseFromSlice(std.json.Value, allocator, input, .{}) catch
                 fatal("failed to parse JSON input", stderr_writer, .csv_error, .{});
-            defer parsed.deinit();
+            defer json_parsed.deinit();
 
-            const first_obj = json_mod.firstJsonObject(parsed.value, args.json_path, stderr_writer).first_obj orelse
+            const first_obj = json_mod.firstJsonObject(json_parsed.value, parsed.json_path, stderr_writer).first_obj orelse
                 fatal("empty JSON array: cannot determine column names", stderr_writer, .csv_error, .{});
 
             var ki = first_obj.iterator();
             while (ki.next()) |entry| {
-                if (args.verbose) {
+                if (parsed.verbose) {
                     stdout_writer.print("{s} TEXT\n", .{entry.key_ptr.*}) catch |err| {
                         std.log.err("failed to write output: {}", .{err});
                     };
@@ -150,18 +150,18 @@ pub fn runColumns(
                     continue;
                 }
 
-                var parsed = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch
+                var json_parsed = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch
                     fatal("line 1: failed to parse NDJSON", stderr_writer, .csv_error, .{});
-                defer parsed.deinit();
+                defer json_parsed.deinit();
 
-                const obj = switch (parsed.value) {
+                const obj = switch (json_parsed.value) {
                     .object => |o| o,
                     else => fatal("line 1: NDJSON element must be a JSON object", stderr_writer, .csv_error, .{}),
                 };
 
                 var ki = obj.iterator();
                 while (ki.next()) |entry| {
-                    if (args.verbose) {
+                    if (parsed.verbose) {
                         stdout_writer.print("{s} TEXT\n", .{entry.key_ptr.*}) catch |err| {
                             std.log.err("failed to write output: {}", .{err});
                         };
@@ -188,7 +188,7 @@ pub fn runColumns(
                 allocator.free(cols);
             }
             for (cols) |col| {
-                if (args.verbose) {
+                if (parsed.verbose) {
                     stdout_writer.print("{s} TEXT\n", .{col}) catch |err| {
                         std.log.err("failed to write output: {}", .{err});
                     };
@@ -205,13 +205,13 @@ pub fn runColumns(
             defer opened.deinit(io);
             var source_reader = std.Io.File.reader(opened.file, io, &read_buf);
 
-            const names = xml_mod.getXmlColumnNames(allocator, &source_reader.interface, args.xml_root_input, args.xml_row_input, stderr_writer);
+            const names = xml_mod.getXmlColumnNames(allocator, &source_reader.interface, parsed.xml_root_input, parsed.xml_row_input, stderr_writer);
             defer {
                 for (names) |name| allocator.free(name);
                 allocator.free(names);
             }
             for (names) |name| {
-                if (args.verbose) {
+                if (parsed.verbose) {
                     stdout_writer.print("{s} TEXT\n", .{name}) catch |err| {
                         std.log.err("failed to write output: {}", .{err});
                     };
@@ -230,7 +230,7 @@ pub fn runColumns(
             const parquet_db = sqlite_mod.openDb(false, null, stderr_writer);
             defer _ = c.sqlite3_close(parquet_db);
             _ = parquet_mod.loadParquetInput(allocator, io, parquet_db, "t", &parquet_reader.interface, null, stderr_writer);
-            if (args.verbose) {
+            if (parsed.verbose) {
                 const info = sqlite_mod.getTableColumnsWithTypes(allocator, parquet_db, "t", stderr_writer);
                 defer {
                     for (info.names) |n| allocator.free(n);
