@@ -208,8 +208,8 @@ pub fn loadPipelineInputs(
         // Create reader from fetched body
         var body_reader = std.Io.Reader.fixed(fetch_result.body);
 
-        // Use detected format unless -I explicitly provided for this URL
-        const input_format = if (url_input.format) |fmt| fmt else fetch_result.format;
+        // Use detected format unless -I explicitly provided for this URL or globally
+        const input_format = if (url_input.format) |fmt| fmt else if (parsed.input_format_explicit) parsed.input_format else fetch_result.format;
 
         const table_name = url_input.table_name orelse blk: {
             var buf: [16]u8 = undefined;

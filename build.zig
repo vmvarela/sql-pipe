@@ -226,7 +226,7 @@ pub fn build(b: *std.Build) void {
         \\base="http://127.0.0.1:$(cat "$port_file")"
         \\bin=./zig-out/bin/sql-pipe
         \\[ "$("$bin" --url "$base/csv" 'SELECT name FROM url0')" = Ada ]
-        \\[ "$("$bin" --url "$base/json" 'SELECT name FROM url0')" = Ada ]
+        \\[ "$("$bin" --url "$base/json" -I json 'SELECT name FROM url0')" = Ada ]
         \\[ "$("$bin" --url "$base/fallback.csv" 'SELECT name FROM url0')" = Ada ]
         \\[ "$("$bin" --url "$base/override" -I json 'SELECT name FROM url0')" = Ada ]
         \\[ "$("$bin" --url "$base/headers" --http-header 'X-Test: one' --http-header 'X-Other: two' 'SELECT name FROM url0')" = Ada ]
