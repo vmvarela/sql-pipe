@@ -19,7 +19,7 @@ CLI tool that pipes structured data (CSV, TSV, JSON, NDJSON, XML, YAML) into an 
 | `lib/` | Vendored C deps: SQLite amalgamation (`sqlite3.c/h`), libyaml subset | (vendored) |
 | `tests/` | Test fixtures (CSV, JSON, NDJSON, XML sample data) + HTTP test server | (fixtures) |
 | `docs/` | Man page source (`sql-pipe.1.scd`) | — |
-| `packaging/` | nfpm, chocolatey, winget packaging configs | — |
+| `packaging/` | nfpm, winget packaging configs | — |
 | `.github/` | CI workflows, labeler, release drafter, dependabot | — |
 
 ## Architecture Overview

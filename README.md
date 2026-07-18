@@ -112,12 +112,6 @@ nix profile install github:vmvarela/nix-packages#sql-pipe
 nix-env -if https://github.com/vmvarela/nix-packages/archive/main.tar.gz
 ```
 
-**Windows (Chocolatey):**
-
-```powershell
-choco install sql-pipe
-```
-
 **Windows (WinGet):**
 
 ```powershell
