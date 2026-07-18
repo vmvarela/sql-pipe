@@ -34,6 +34,13 @@ pub const FileInput = struct {
     format: InputFormat,
 };
 
+pub const UrlInput = struct {
+    url: []const u8,
+    table_name: ?[]const u8,
+    format: ?InputFormat,
+    headers: []const []const u8,
+};
+
 pub const SqlPipeError = error{
     MissingQuery,
     InvalidDelimiter,
@@ -92,6 +99,10 @@ pub const SqlPipeError = error{
     ReplWithQueryFile,
     ReplWithOutput,
     ReplIncompatibleExplain,
+    DuplicateUrlTableName,
+    UrlFlagsRequireUrl,
+    UrlFormatRequiresUrl,
+    UrlHeaderRequiresUrl,
 };
 
 pub const ParsedArgs = struct {
@@ -101,6 +112,8 @@ pub const ParsedArgs = struct {
     query_file: ?[]const u8 = null,
     /// Input files as positional arguments; empty when reading from stdin only.
     files: []const FileInput = &.{},
+    /// URLs to fetch input data from (repeatable); empty when not using HTTP input.
+    urls: []const UrlInput = &.{},
     /// True when stdin has piped data (not a TTY).
     has_stdin: bool = false,
     /// Infer column types from the first 100 buffered rows when true.
@@ -150,12 +163,8 @@ pub const ParsedArgs = struct {
     sql_table: []const u8 = "t",
     /// CSS class name for the HTML <table> element (default: "" = no class).
     html_class: []const u8 = "",
-    /// Custom string for NULL values in output (default: "NULL" for CSV/TSV/table, "" for markdown).
+    /// Custom string for NULL values in output (default: "NULL" for CSV/TSV/table).
     null_value: ?[]const u8 = null,
-    /// URL to fetch input data from (when --url is used).
-    url: ?[]const u8 = null,
-    /// Custom HTTP headers for --url (repeatable, format: "Key: Value").
-    http_headers: []const []const u8 = &.{},
     /// Maximum response body size in bytes for --url (default: 100MB).
     max_body_size: usize = 100 * 1024 * 1024,
 };
@@ -210,27 +219,27 @@ pub const SampleArgs = struct {
 pub const StatsArgs = struct {
     /// Input files as positional arguments; empty when reading from stdin only.
     files: []const FileInput = &.{},
+    /// URLs to fetch input data from (repeatable); empty when not using HTTP input.
+    urls: []const UrlInput = &.{},
     /// CSV field delimiter — 1 to 8 bytes (default: ",").
     delimiter: []const u8,
     /// Input format (default: csv).
     input_format: InputFormat,
     /// Infer column types from buffered rows when true; show all TEXT when false.
     type_inference: bool,
-    /// URL to fetch input from (supports --url).
-    url: ?[]const u8 = null,
 };
 
 pub const SchemaArgs = struct {
     /// Input files as positional arguments; empty when reading from stdin only.
     files: []const FileInput = &.{},
+    /// URLs to fetch input data from (repeatable); empty when not using HTTP input.
+    urls: []const UrlInput = &.{},
     /// CSV field delimiter — 1 to 8 bytes (default: ",").
     delimiter: []const u8,
     /// Input format (default: csv).
     input_format: InputFormat,
     /// Infer column types from buffered rows when true; show all TEXT when false.
     type_inference: bool,
-    /// URL to fetch input from (supports --url).
-    url: ?[]const u8 = null,
 };
 
 pub const CompletionsShell = enum {
@@ -341,11 +350,14 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  -V, --version                Show version and exit
         \\
         \\HTTP Input:
-        \\  -u, --url <url>              Fetch input data from HTTP/HTTPS URL
-        \\                               Ignores stdin; can combine with file arguments
-        \\  --http-header <header>       Custom HTTP header for --url (repeatable, format: "Key: Value")
-        \\                               Requests with --http-header do not follow redirects
-        \\  --max-body-size <bytes>      Maximum response body size for --url (default: 104857600 = 100MB)
+        \\  -u, --url <url>              Fetch input data from HTTP/HTTPS URL (repeatable)
+        \\                               Each URL becomes a table: url0, url1... or use NAME=URL
+        \\                               Can combine with file arguments and stdin
+        \\  --input-format <fmt>         Input format for the LAST --url (repeatable per URL)
+        \\                               csv (default), tsv, json, ndjson, xml, yaml, parquet
+        \\  --http-header <header>       Custom HTTP header for the LAST --url (repeatable)
+        \\                               Format: "Key: Value". Requests with headers don't follow redirects.
+        \\  --max-body-size <bytes>      Maximum response body size for ALL --url (default: 104857600 = 100MB)
         \\
         \\Exit codes:
         \\  0  Success
@@ -373,19 +385,28 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\
         \\HTTP Examples:
         \\  # Fetch CSV directly from URL
-        \\  sql-pipe --url https://example.com/data.csv 'SELECT * FROM t'
+        \\  sql-pipe --url https://example.com/data.csv 'SELECT * FROM url0'
         \\
         \\  # Fetch JSON from API with auto-detection
-        \\  sql-pipe --url "https://api.github.com/repos/owner/repo/issues" 'SELECT * FROM t'
+        \\  sql-pipe --url "https://api.github.com/repos/owner/repo/issues" 'SELECT * FROM url0'
         \\
         \\  # With custom headers (e.g., Authorization)
-        \\  sql-pipe --url https://api.example.com/data.json --http-header "Authorization: Bearer token" 'SELECT * FROM t'
+        \\  sql-pipe --url https://api.example.com/data.json --http-header "Authorization: Bearer token" 'SELECT * FROM url0'
         \\
         \\  # Explicit format override with -I
-        \\  sql-pipe --url https://example.com/data --input-format csv 'SELECT * FROM t'
+        \\  sql-pipe --url https://example.com/data --input-format csv 'SELECT * FROM url0'
+        \\
+        \\  # Multiple URLs with joins
+        \\  sql-pipe --url https://api.example.com/users.json --url https://api.example.com/orders.json 'SELECT * FROM url0 JOIN url1 ON url0.id = url1.user_id'
+        \\
+        \\  # Named URLs for clearer queries
+        \\  sql-pipe --url users=https://api.example.com/users.json --url orders=https://api.example.com/orders.json 'SELECT * FROM users JOIN orders ON users.id = orders.user_id'
         \\
         \\  # Combine URL with file arguments (joins)
-        \\  sql-pipe --url https://api.example.com/orders.json orders.csv 'SELECT * FROM t JOIN orders ON t.id = orders.id'
+        \\  sql-pipe --url https://api.example.com/orders.json orders.csv 'SELECT * FROM url0 JOIN orders ON url0.id = orders.id'
+        \\
+        \\  # Per-URL format and headers
+        \\  sql-pipe --url https://api.example.com/data.json --input-format json --http-header "Accept: application/json" --url https://example.com/data.csv 'SELECT * FROM url0 JOIN url1 ON url0.id = url1.id'
         \\
     );
 }
@@ -451,8 +472,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var positional_args: std.ArrayList([]const u8) = .empty;
     defer positional_args.deinit(allocator);
 
-    var url: ?[]const u8 = null;
-    var http_headers: std.ArrayList([]const u8) = .empty;
+    var urls: std.ArrayList(UrlInput) = .empty;
+    var current_url_idx: ?usize = null;
     var max_body_size: usize = 100 * 1024 * 1024;
     var max_body_size_set = false;
 
@@ -647,23 +668,149 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             i += 1;
             if (i >= args.len) return error.InvalidUrl;
             if (args[i].len == 0) return error.InvalidUrl;
-            url = args[i];
+            const url_val = args[i];
+            // Check for NAME=URL syntax
+            const eq_pos = std.mem.indexOfScalar(u8, url_val, '=');
+            if (eq_pos) |pos| {
+                if (pos > 0) {
+                    const name = url_val[0..pos];
+                    const url = url_val[pos + 1..];
+                    if (url.len == 0) return error.InvalidUrl;
+                    try urls.append(allocator, .{
+                        .url = url,
+                        .table_name = name,
+                        .format = null,
+                        .headers = &.{},
+                    });
+                } else {
+                    try urls.append(allocator, .{
+                        .url = url_val,
+                        .table_name = null,
+                        .format = null,
+                        .headers = &.{},
+                    });
+                }
+            } else {
+                try urls.append(allocator, .{
+                    .url = url_val,
+                    .table_name = null,
+                    .format = null,
+                    .headers = &.{},
+                });
+            }
+            current_url_idx = urls.items.len - 1;
         } else if (std.mem.startsWith(u8, arg, "--url=")) {
             const val = arg["--url=".len..];
             if (val.len == 0) return error.InvalidUrl;
-            url = val;
+            const eq_pos = std.mem.indexOfScalar(u8, val, '=');
+            if (eq_pos) |pos| {
+                if (pos > 0) {
+                    const name = val[0..pos];
+                    const url = val[pos + 1..];
+                    if (url.len == 0) return error.InvalidUrl;
+                    try urls.append(allocator, .{
+                        .url = url,
+                        .table_name = name,
+                        .format = null,
+                        .headers = &.{},
+                    });
+                } else {
+                    try urls.append(allocator, .{
+                        .url = val,
+                        .table_name = null,
+                        .format = null,
+                        .headers = &.{},
+                    });
+                }
+            } else {
+                try urls.append(allocator, .{
+                    .url = val,
+                    .table_name = null,
+                    .format = null,
+                    .headers = &.{},
+                });
+            }
+            current_url_idx = urls.items.len - 1;
         } else if (std.mem.startsWith(u8, arg, "-u=")) {
             const val = arg["-u=".len..];
             if (val.len == 0) return error.InvalidUrl;
-            url = val;
+            const eq_pos = std.mem.indexOfScalar(u8, val, '=');
+            if (eq_pos) |pos| {
+                if (pos > 0) {
+                    const name = val[0..pos];
+                    const url = val[pos + 1..];
+                    if (url.len == 0) return error.InvalidUrl;
+                    try urls.append(allocator, .{
+                        .url = url,
+                        .table_name = name,
+                        .format = null,
+                        .headers = &.{},
+                    });
+                } else {
+                    try urls.append(allocator, .{
+                        .url = val,
+                        .table_name = null,
+                        .format = null,
+                        .headers = &.{},
+                    });
+                }
+            } else {
+                try urls.append(allocator, .{
+                    .url = val,
+                    .table_name = null,
+                    .format = null,
+                    .headers = &.{},
+                });
+            }
+            current_url_idx = urls.items.len - 1;
+        } else if (std.mem.eql(u8, arg, "--input-format") or std.mem.eql(u8, arg, "-I")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidInputFormat;
+            const fmt = InputFormat.parse(args[i]) catch return error.InvalidInputFormat;
+            if (current_url_idx) |idx| {
+                urls.items[idx].format = fmt;
+            } else {
+                input_format = fmt;
+                input_format_explicit = true;
+            }
+        } else if (std.mem.startsWith(u8, arg, "--input-format=")) {
+            const fmt = InputFormat.parse(arg["--input-format=".len..]) catch return error.InvalidInputFormat;
+            if (current_url_idx) |idx| {
+                urls.items[idx].format = fmt;
+            } else {
+                input_format = fmt;
+                input_format_explicit = true;
+            }
+        } else if (std.mem.startsWith(u8, arg, "-I=")) {
+            const fmt = InputFormat.parse(arg["-I=".len..]) catch return error.InvalidInputFormat;
+            if (current_url_idx) |idx| {
+                urls.items[idx].format = fmt;
+            } else {
+                input_format = fmt;
+                input_format_explicit = true;
+            }
         } else if (std.mem.eql(u8, arg, "--http-header")) {
             i += 1;
             if (i >= args.len or !isValidHttpHeader(args[i])) return error.InvalidHttpHeader;
-            try http_headers.append(allocator, args[i]);
+            if (current_url_idx) |idx| {
+                var headers: std.ArrayList([]const u8) = .empty;
+                for (urls.items[idx].headers) |h| try headers.append(allocator, h);
+                try headers.append(allocator, args[i]);
+                urls.items[idx].headers = headers.items;
+            } else {
+                return error.UrlHeaderRequiresUrl;
+            }
         } else if (std.mem.startsWith(u8, arg, "--http-header=")) {
             const val = arg["--http-header=".len..];
             if (!isValidHttpHeader(val)) return error.InvalidHttpHeader;
-            try http_headers.append(allocator, val);
+            if (current_url_idx) |idx| {
+                var headers: std.ArrayList([]const u8) = .empty;
+                for (urls.items[idx].headers) |h| try headers.append(allocator, h);
+                try headers.append(allocator, val);
+                urls.items[idx].headers = headers.items;
+            } else {
+                return error.UrlHeaderRequiresUrl;
+            }
         } else if (std.mem.eql(u8, arg, "--max-body-size")) {
             i += 1;
             if (i >= args.len) return error.InvalidMaxBodySize;
@@ -812,10 +959,34 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (table_mode == .always and output_format != .csv and output_format != .tsv)
         return error.TableWithNonCsv;
 
-    if (url != null and (list_columns or validate or sample_mode))
+    // URL validation
+    if (urls.items.len > 0 and (list_columns or validate or sample_mode))
         return error.UrlIncompatibleMode;
-    if (url == null and (http_headers.items.len > 0 or max_body_size_set))
+    if (urls.items.len == 0 and max_body_size_set)
         return error.HttpFlagsRequireUrl;
+
+    // Check for duplicate table names across URLs, files, and stdin
+    {
+        var seen = std.StringHashMap(void).init(allocator);
+        defer seen.deinit();
+        for (files.items) |f| {
+            const gop = try seen.getOrPut(f.table_name);
+            if (gop.found_existing) return error.DuplicateTableName;
+        }
+        for (urls.items, 0..) |url_input, url_idx| {
+            const table_name = url_input.table_name orelse blk: {
+                var buf: [16]u8 = undefined;
+                const written = std.fmt.bufPrint(&buf, "url{}", .{url_idx}) catch unreachable;
+                break :blk allocator.dupeZ(u8, written) catch unreachable;
+            };
+            const gop = try seen.getOrPut(table_name);
+            if (gop.found_existing) return error.DuplicateUrlTableName;
+        }
+        // Check stdin table name
+        const stdin_table = if (urls.items.len > 0 or files.items.len > 0) "stdin" else "t";
+        const gop = try seen.getOrPut(stdin_table);
+        if (gop.found_existing) return error.DuplicateTableName;
+    }
 
     // --columns mode: list headers and exit
     if (list_columns)
@@ -855,20 +1026,20 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (stats_mode)
         return .{ .stats = StatsArgs{
             .files = files.items,
+            .urls = urls.items,
             .delimiter = delimiter,
             .input_format = effective_input_format,
             .type_inference = type_inference,
-            .url = url,
         } };
 
     // --schema mode: print inferred CREATE TABLE DDL and exit
     if (schema_mode)
         return .{ .schema = SchemaArgs{
             .files = files.items,
+            .urls = urls.items,
             .delimiter = delimiter,
             .input_format = effective_input_format,
             .type_inference = type_inference,
-            .url = url,
         } };
 
     // --repl validation: reject incompatible flags
@@ -897,6 +1068,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .query = resolved_query,
         .query_file = query_file,
         .files = files.items,
+        .urls = urls.items,
         .type_inference = type_inference,
         .no_stdin = no_stdin,
         .delimiter = delimiter,
@@ -920,8 +1092,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .sql_table = sql_table,
         .html_class = html_class,
         .null_value = null_value,
-        .url = url,
-        .http_headers = http_headers.items,
         .max_body_size = max_body_size,
     };
 

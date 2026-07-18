@@ -225,24 +225,24 @@ pub fn build(b: *std.Build) void {
         \\[ -s "$port_file" ]
         \\base="http://127.0.0.1:$(cat "$port_file")"
         \\bin=./zig-out/bin/sql-pipe
-        \\[ "$("$bin" --url "$base/csv" 'SELECT name FROM t')" = Ada ]
-        \\[ "$("$bin" --url "$base/json" 'SELECT name FROM t')" = Ada ]
-        \\[ "$("$bin" --url "$base/fallback.csv" 'SELECT name FROM t')" = Ada ]
-        \\[ "$("$bin" --url "$base/override" -I json 'SELECT name FROM t')" = Ada ]
-        \\[ "$("$bin" --url "$base/headers" --http-header 'X-Test: one' --http-header 'X-Other: two' 'SELECT name FROM t')" = Ada ]
-        \\[ "$("$bin" --url "$base/redirect" 'SELECT name FROM t')" = Ada ]
+        \\[ "$("$bin" --url "$base/csv" 'SELECT name FROM url0')" = Ada ]
+        \\[ "$("$bin" --url "$base/json" 'SELECT name FROM url0')" = Ada ]
+        \\[ "$("$bin" --url "$base/fallback.csv" 'SELECT name FROM url0')" = Ada ]
+        \\[ "$("$bin" --url "$base/override" -I json 'SELECT name FROM url0')" = Ada ]
+        \\[ "$("$bin" --url "$base/headers" --http-header 'X-Test: one' --http-header 'X-Other: two' 'SELECT name FROM url0')" = Ada ]
+        \\[ "$("$bin" --url "$base/redirect" 'SELECT name FROM url0')" = Ada ]
         \\! "$bin" --url "$base/redirect-with-header" --http-header 'X-Test: one' 'SELECT 1' >/dev/null 2>"$err_file"
         \\grep -q 'failed to fetch URL' "$err_file"
-        \\[ "$("$bin" --url "$base/hits" 'SELECT hits FROM t')" = 0 ]
-        \\[ "$("$bin" --url "$base/redirect-chain/5" 'SELECT name FROM t')" = Ada ]
+        \\[ "$("$bin" --url "$base/hits" 'SELECT hits FROM url0')" = 0 ]
+        \\[ "$("$bin" --url "$base/redirect-chain/5" 'SELECT name FROM url0')" = Ada ]
         \\! "$bin" --url "$base/redirect-chain/6" 'SELECT 1' >/dev/null 2>"$err_file"
         \\grep -q 'failed to fetch URL' "$err_file"
         \\! "$bin" --url "$base/missing" 'SELECT 1' >/dev/null 2>"$err_file"
         \\grep -q "failed to fetch URL: $base/missing (HTTP 404)" "$err_file"
-        \\[ "$("$bin" --url "$base/empty" 'SELECT count(*) FROM t')" = 0 ]
+        \\[ "$("$bin" --url "$base/empty" 'SELECT count(*) FROM url0')" = 0 ]
         \\! "$bin" --url "$base/large" --max-body-size 8 'SELECT 1' >/dev/null 2>"$err_file"
         \\grep -q 'failed to fetch URL' "$err_file"
-        \\join_query='SELECT t.name, customers.name FROM t JOIN customers ON t.id = customers.id'
+        \\join_query='SELECT url0.name, customers.name FROM url0 JOIN customers ON url0.id = customers.id'
         \\printf 'id,name\n99,Wrong\n' | "$bin" --url "$base/csv" tests/fixtures/customers.csv "$join_query" | diff - <(printf 'Ada,Alice\n')
     });
     test_http_input.addArtifactArg(http_server);
@@ -1766,7 +1766,7 @@ pub fn build(b: *std.Build) void {
         \\dir=$(mktemp -d)
         \\printf 'uid,name\n1,Alice\n2,Bob\n' > "$dir/users.csv"
         \\result=$(printf 'user_id,amount\n1,150\n2,80\n' \
-        \\    | ./zig-out/bin/sql-pipe "$dir/users.csv" 'SELECT t.amount, u.name FROM t JOIN users u ON t.user_id = u.uid ORDER BY u.name')
+        \\    | ./zig-out/bin/sql-pipe "$dir/users.csv" 'SELECT stdin.amount, u.name FROM stdin JOIN users u ON stdin.user_id = u.uid ORDER BY u.name')
         \\rm -rf "$dir"
         \\[ "$result" = "$(printf '150,Alice\n80,Bob')" ]
     });
@@ -1837,12 +1837,12 @@ pub fn build(b: *std.Build) void {
     test_file_no_input.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_file_no_input.step);
 
-    // Integration test 155j: File named t.csv conflicts with stdin table t
+    // Integration test 155j: File named stdin.csv conflicts with stdin table stdin
     const test_file_t_conflict = b.addSystemCommand(&.{
         "bash", "-c",
         \\dir=$(mktemp -d)
-        \\printf 'a,b\n1,2\n' > "$dir/t.csv"
-        \\msg=$(printf 'x,y\n3,4\n' | ./zig-out/bin/sql-pipe "$dir/t.csv" 'SELECT * FROM t' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\printf 'a,b\n1,2\n' > "$dir/stdin.csv"
+        \\msg=$(printf 'x,y\n3,4\n' | ./zig-out/bin/sql-pipe "$dir/stdin.csv" 'SELECT * FROM stdin' 2>&1 >/dev/null; echo "EXIT:$?")
         \\rm -rf "$dir"
         \\echo "$msg" | grep -q 'duplicate table name' && echo "$msg" | grep -q 'EXIT:1'
     });
