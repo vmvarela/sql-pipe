@@ -355,16 +355,17 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `--http-header <header>` | Request header for `--url`, in `Key: Value` form. Repeat for multiple headers. Requests with headers do not follow redirects; headerless requests follow up to five. |
 | `--max-body-size <bytes>` | Maximum `--url` response body size (default: `104857600`, 100MB). |
 | `--validate` | Parse the entire input and print a summary (`OK: <n> rows, <m> columns (col TYPE, ...)`) to stdout. Exit 0 on success, exit 2 on parse error. No query required. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format` (csv, tsv, json, ndjson, yaml, xml). JSON/NDJSON/YAML/XML columns are reported as TEXT. |
-| `--columns` | Read the input header, print each column name on its own line, and exit 0. Supports CSV, TSV, JSON, NDJSON, YAML, and XML input. With `-v`/`--verbose`, also shows the inferred type per column (`name INTEGER`). Respects `--delimiter` and `--tsv`. Mutually exclusive with a query argument. |
-| `--sample [<n>]` | Print a schema comment block to stderr and the first `<n>` data rows to stdout as CSV (default: `n=10`). The schema block lists each column name and its inferred type, prefixed with `#`. Implies `--header`. Compatible with `--delimiter` and `--tsv`. Mutually exclusive with `--json` and a query argument. No query required. |
-| `--stats` | Load input and print per-column statistics (column name, type, non-null count, min, max, mean) as a formatted table. Mean is blank for non-numeric columns. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, and `--output`. |
+| `--columns` | **Deprecated.** Use `--inspect columns` instead. Read the input header, print each column name on its own line, and exit 0. Supports CSV, TSV, JSON, NDJSON, YAML, and XML input. With `-v`/`--verbose`, also shows the inferred type per column (`name INTEGER`). Respects `--delimiter` and `--tsv`. Mutually exclusive with a query argument. |
+| `--sample [<n>]` | **Deprecated.** Use `--inspect sample` instead. Print a schema comment block to stderr and the first `<n>` data rows to stdout as CSV (default: `n=10`). The schema block lists each column name and its inferred type, prefixed with `#`. Implies `--header`. Compatible with `--delimiter` and `--tsv`. Mutually exclusive with `--json` and a query argument. No query required. |
+| `--stats` | **Deprecated.** Use `--inspect stats` instead. Load input and print per-column statistics (column name, type, non-null count, min, max, mean) as a formatted table. Mean is blank for non-numeric columns. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, and `--output`. |
 | `--profile` | Alias for `--stats` |
-| `--schema` | Load input and print the inferred `CREATE TABLE` DDL to stdout. One DDL block per input file; stdin uses table `t`. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, `--stats`, `--output`, `--save`, and `-f`/`--file`. |
+| `--schema` | **Deprecated.** Use `--inspect schema` instead. Load input and print the inferred `CREATE TABLE` DDL to stdout. One DDL block per input file; stdin uses table `t`. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format`. Mutually exclusive with a query, `--columns`, `--validate`, `--sample`, `--stats`, `--output`, `--save`, and `-f`/`--file`. |
+| `--inspect <mode>` | Inspect input data without running a query. `<mode>` is one of: `columns` (list column names, one per line; with `-v` shows inferred types), `validate` (parse entire input, print summary: `OK: <n> rows, <m> columns`), `sample` [`<n>`] (print schema comment block and first `<n>` rows as CSV, default 10), `stats` (per-column statistics: type, non-null count, min, max, mean), `schema` (print inferred CREATE TABLE DDL). Mutually exclusive with a query argument, `--output`, `--explain`, and other inspect modes. Compatible with `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format` (csv, tsv, json, ndjson, yaml, xml, parquet). `--sample` implies `--header`. `--sample` and `--stats` are mutually exclusive with `--json` output. |
 | `-S`, `--save <file>` | Use `<file>` as the SQLite database instead of an in-memory database. The file persists after sql-pipe exits and can be queried with `sqlite3`. Implies disk-backed behavior; cannot be combined with `--disk` or special modes (`--columns`, `--validate`, `--sample`, `--stats`, `--schema`, `--explain`). |
 | `--disk` | Use a file-backed temporary database instead of `:memory:`. Enables processing datasets larger than available RAM. Cannot be combined with `--save`. |
 | `--no-stdin` | Do not read from stdin. Prevents hangs in CI pipelines where stdin is a non-TTY pipe without EOF. |
 | `--explain` | Print the SQLite query plan to stderr before executing the query. Each line is prefixed with `QUERY PLAN: `. The actual query still runs and results go to stdout. Mutually exclusive with `--columns`, `--validate`, `--sample`, `--stats`, `--schema`, and `--output`. |
-| `-r`, `--repl` | Enter interactive REPL mode after loading input data. Loads input once into SQLite, then presents a `sql>` prompt for interactive queries. Arrow-key history via linenoise, history persisted at `$HOME/.sqlpipe_history`. Type `.exit`, `.quit`, `.q`, Ctrl-D, or Ctrl-C to exit. No query argument required. Cannot be combined with special modes, `-f`/`--file`, `--explain`, or `--output`. Compatible with `--save`, `--disk`, `-O`, and file arguments. |
+| `-r`, `--repl` | Enter interactive REPL mode after loading input data. Loads input once into SQLite, then presents a `sql>` prompt for interactive queries. Type `.exit`, `.quit`, `.q`, Ctrl-D, or Ctrl-C to exit. No query argument required. Cannot be combined with special modes, `-f`/`--file`, `--explain`, or `--output`. Compatible with `--save`, `--disk`, `-O`, and file arguments. |
 | `--xml-root <name>` | Root element name for XML I/O (default: `results`) |
 | `--xml-row <name>` | Row element name for XML I/O (default: `row`) |
 | `--output <file>` | Write results to the given file instead of stdout. Creates or overwrites the file. Exits 1 if the file cannot be created. |
@@ -487,6 +488,55 @@ $ printf 'name,age\nAlice,30\nBob,25\nCarol,35\n' | sql-pipe --stats
 
 Same as running `SELECT MIN(col), MAX(col), AVG(col), COUNT(*)` per column — but in one command.
 
+Same as running `SELECT MIN(col), MAX(col), AVG(col), COUNT(*)` per column — but in one command.
+
+### Inspect data without queries (--inspect)
+
+```sh
+# List column names
+$ sql-pipe --inspect columns data.csv
+id
+name
+age
+
+# With verbose: show inferred types
+$ sql-pipe --inspect columns -v data.csv
+id INTEGER
+name TEXT
+age INTEGER
+
+# Validate input (parse check)
+$ sql-pipe --inspect validate data.csv
+OK: 1000 rows, 5 columns (id INTEGER, name TEXT, age INTEGER, ...)
+
+# Sample first 5 rows with schema
+$ sql-pipe --inspect sample 5 data.csv
+# id INTEGER
+# name TEXT
+# age INTEGER
+id,name,age
+1,Alice,30
+2,Bob,25
+3,Carol,35
+4,David,40
+5,Eve,28
+
+# Per-column statistics
+$ sql-pipe --inspect stats data.csv
+┌────────┬─────────┬──────────┬─────┬─────┬──────┐
+│ column │ type    │ non-null │ min │ max │ mean │
+├────────┼─────────┼──────────┼─────┼─────┼──────┤
+│ age    │ INTEGER │        3 │ 25  │ 35  │ 30.0 │
+│ name   │ TEXT    │        3 │ Alice│Carol│      │
+└────────┴─────────┴──────────┴─────┴─────┴──────┘
+
+# Inferred CREATE TABLE DDL
+$ sql-pipe --inspect schema data.csv
+CREATE TABLE t (id INTEGER, name TEXT, age INTEGER);
+```
+
+All `--inspect` modes support `--delimiter`, `--tsv`, `--no-type-inference`, `-I`/`--input-format` (csv, tsv, json, ndjson, yaml, xml, parquet). `--inspect sample` implies `--header`. `--inspect sample` and `--inspect stats` are mutually exclusive with `--json` output.
+
 ### Interactive REPL with --repl
 
 ```sh
@@ -509,15 +559,14 @@ sql> SELECT region, SUM(revenue) FROM sales GROUP BY region;
 sql> .exit
 ```
 
-Output respects `-O`/`--json`/`--table` flags. Arrow-key history persists at `$HOME/.sqlpipe_history`.
-Compatible with `--save`/`--disk`. Pipe scripts non-interactively with `--no-stdin`:
+Output respects `-O`/`--json`/`--table` flags. No history persistence (no arrow-key history). Compatible with `--save`/`--disk`. Pipe scripts non-interactively with `--no-stdin`:
 
 ```sh
 $ printf 'SELECT 1+1;\n.exit\n' | sql-pipe --repl --no-stdin
 2
 ```
 
-**Dot commands (phase 2):** `.help`, `.tables`, `.schema [table]`, `.read <file>`. **Multi-line queries:** end lines with Enter, finish with `;`. Empty line in multi-line mode executes the accumulated query.
+**Dot commands:** `.help`, `.tables`, `.schema [table]`, `.read <file>`. **Multi-line queries:** end lines with Enter, finish with `;`. Empty line in multi-line mode executes the accumulated query.
 
 ### Debug query performance with --explain
 

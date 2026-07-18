@@ -101,6 +101,12 @@ pub const SqlPipeError = error{
     ReplIncompatibleExplain,
     DuplicateUrlTableName,
     UrlHeaderRequiresUrl,
+    InspectWithQuery,
+    InspectWithOutput,
+    InspectWithExplain,
+    InspectSampleWithJson,
+    InvalidInspectMode,
+    ExplainWithOutput,
 };
 
 pub const ParsedArgs = struct {
@@ -165,79 +171,10 @@ pub const ParsedArgs = struct {
     null_value: ?[]const u8 = null,
     /// Maximum response body size in bytes for --url (default: 100MB).
     max_body_size: usize = 100 * 1024 * 1024,
-};
-
-pub const ColumnsArgs = struct {
-    /// Input files as positional arguments; empty when reading from stdin only.
-    files: []const FileInput = &.{},
-    /// CSV field delimiter — 1 to 8 bytes (default: ",").
-    delimiter: []const u8,
-    /// Show inferred type alongside name when true.
-    verbose: bool,
-    /// Input format (default: csv).
-    input_format: InputFormat,
-    /// Root element to navigate to for XML input; null = use actual document root.
-    xml_root_input: ?[]const u8,
-    /// Row tag filter for XML input; null = accept any direct child element as a row.
-    xml_row_input: ?[]const u8,
-    /// Dot-separated path to the JSON array (e.g. "results.items"); null = expect top-level array.
-    json_path: ?[]const u8,
-};
-
-pub const ValidateArgs = struct {
-    /// Input files as positional arguments; empty when reading from stdin only.
-    files: []const FileInput = &.{},
-    /// CSV field delimiter — 1 to 8 bytes (default: ",").
-    delimiter: []const u8,
-    /// Infer column types from the first 100 buffered rows when true.
-    type_inference: bool,
-    /// Input format (default: csv).
-    input_format: InputFormat,
-    /// Root element to navigate to for XML input; null = use actual document root.
-    xml_root_input: ?[]const u8,
-    /// Row tag filter for XML input; null = accept any direct child element as a row.
-    xml_row_input: ?[]const u8,
-    /// Dot-separated path to the JSON array (e.g. "results.items"); null = expect top-level array.
-    json_path: ?[]const u8,
-};
-
-pub const SampleArgs = struct {
-    /// Input files as positional arguments; empty when reading from stdin only.
-    files: []const FileInput = &.{},
-    /// CSV field delimiter — 1 to 8 bytes (default: ",").
-    delimiter: []const u8,
-    /// Input format (default: csv).
-    input_format: InputFormat,
-    /// Number of sample rows to print (default: 10).
-    n: usize,
-    /// Infer column types from buffered rows when true; show all TEXT when false.
-    type_inference: bool,
-};
-
-pub const StatsArgs = struct {
-    /// Input files as positional arguments; empty when reading from stdin only.
-    files: []const FileInput = &.{},
-    /// URLs to fetch input data from (repeatable); empty when not using HTTP input.
-    urls: []const UrlInput = &.{},
-    /// CSV field delimiter — 1 to 8 bytes (default: ",").
-    delimiter: []const u8,
-    /// Input format (default: csv).
-    input_format: InputFormat,
-    /// Infer column types from buffered rows when true; show all TEXT when false.
-    type_inference: bool,
-};
-
-pub const SchemaArgs = struct {
-    /// Input files as positional arguments; empty when reading from stdin only.
-    files: []const FileInput = &.{},
-    /// URLs to fetch input data from (repeatable); empty when not using HTTP input.
-    urls: []const UrlInput = &.{},
-    /// CSV field delimiter — 1 to 8 bytes (default: ",").
-    delimiter: []const u8,
-    /// Input format (default: csv).
-    input_format: InputFormat,
-    /// Infer column types from buffered rows when true; show all TEXT when false.
-    type_inference: bool,
+    /// When set, run in --inspect mode instead of normal query mode.
+    inspect_args: ?InspectArgs = null,
+    /// Number of sample rows to print when in --inspect sample mode (default: 10).
+    sample_n: usize = 10,
 };
 
 pub const CompletionsShell = enum {
@@ -254,6 +191,24 @@ pub const CompletionsArgs = struct {
     shell: CompletionsShell,
 };
 
+pub const InspectMode = enum {
+    columns,
+    validate,
+    sample,
+    stats,
+    schema,
+
+    pub fn parse(s: []const u8) error{InvalidInspectMode}!InspectMode {
+        return std.meta.stringToEnum(InspectMode, s) orelse error.InvalidInspectMode;
+    }
+};
+
+pub const InspectArgs = struct {
+    mode: InspectMode,
+    sample_n: usize = 10,
+    deprecated: bool = false,
+};
+
 pub const ArgsResult = union(enum) {
     /// Normal execution: run the query (requires query positional arg unless --repl is set).
     parsed: ParsedArgs,
@@ -263,16 +218,8 @@ pub const ArgsResult = union(enum) {
     help,
     /// User requested --version / -V.
     version,
-    /// User requested --columns: list column names and exit.
-    columns: ColumnsArgs,
-    /// User requested --validate: parse input and print summary.
-    validate: ValidateArgs,
-    /// User requested --sample: print schema + first n rows and exit.
-    sample: SampleArgs,
-    /// User requested --stats: compute per-column statistics.
-    stats: StatsArgs,
-    /// User requested --schema: print inferred CREATE TABLE DDL.
-    schema: SchemaArgs,
+    /// User requested --inspect or old flag: run one of the inspect modes.
+    inspect: ParsedArgs,
     /// User requested --completions: generate shell completion script.
     completions: CompletionsArgs,
 };
@@ -307,23 +254,13 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\                               With --columns: show inferred type per column
         \\  -s, --silent                 Suppress row count output unconditionally
         \\                               Cannot be combined with -v/--verbose
-        \\  --validate                   Parse the entire input and print a summary to stdout
-        \\                               (OK: <n> rows, <m> columns (<col> <TYPE>, ...))
-        \\                               Exit 0 on success, exit 2 on parse error. No query required.
-        \\                               Compatible with --delimiter, --tsv, --no-type-inference, -I.
-        \\  --columns                    List column names from input header (one per line) and exit
-        \\                               Combine with -v/--verbose to include inferred types
-        \\                               Cannot be combined with --output or a query argument
-        \\  --sample [<n>]               Print schema to stderr and first <n> rows to stdout (default: 10)
-        \\                               Schema lists column names and inferred types, prefixed with #
-        \\                               Implies --header. Compatible with --delimiter and --tsv.
-        \\                               Incompatible with --json and with a query argument.
-        \\  --stats                      Compute per-column statistics (type, non-null, min, max, mean)
-        \\  --profile                    Alias for --stats
-        \\  --schema                     Print inferred CREATE TABLE DDL to stdout and exit
-        \\                               No query required. One DDL block per input file; stdin uses table `t`.
-        \\                               Compatible with --delimiter, --tsv, --no-type-inference, -I.
-        \\                               Mutually exclusive with --explain and query arguments.
+        \\  --inspect <mode>             Inspect mode: columns, validate, sample, stats, schema
+        \\                               columns — list column names (use -v for types)
+        \\                               validate — parse and print summary (exit 2 on error)
+        \\                               sample [n] — print schema to stderr and n rows to stdout (default: 10)
+        \\                               stats — per-column statistics (type, non-null, min, max, mean)
+        \\                               schema — print inferred CREATE TABLE DDL
+        \\  --sample [<n>]               (deprecated) Print schema and first <n> rows, use --inspect sample
         \\  --output <file>              Write results to file instead of stdout
         \\  --xml-root <name>            Root element name for XML I/O (default: results)
         \\  --xml-row <name>             Row element name for XML I/O (default: row)
@@ -448,8 +385,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var max_rows: ?usize = null;
     var verbose = false;
     var silent = false;
-    var list_columns = false;
-    var validate = false;
     var output: ?[]const u8 = null;
     var xml_root: []const u8 = "results";
     var xml_row: []const u8 = "row";
@@ -457,10 +392,9 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var xml_row_input: ?[]const u8 = null;
     var null_value: ?[]const u8 = null;
     var json_path: ?[]const u8 = null;
-    var sample_mode = false;
-    var sample_n: usize = 10;
-    var stats_mode = false;
-    var schema_mode = false;
+    var inspect_mode: ?InspectMode = null;
+    var inspect_sample_n: usize = 10;
+    var inspect_deprecated = false;
     var repl_mode = false;
     var disk = false;
     var save_path: ?[:0]const u8 = null;
@@ -532,19 +466,30 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             verbose = true;
         } else if (std.mem.eql(u8, arg, "--silent") or std.mem.eql(u8, arg, "-s")) {
             silent = true;
+        } else if (std.mem.eql(u8, arg, "--inspect")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidInspectMode;
+            const mode = InspectMode.parse(args[i]) catch return error.InvalidInspectMode;
+            inspect_mode = mode;
+        } else if (std.mem.startsWith(u8, arg, "--inspect=")) {
+            const mode = InspectMode.parse(arg["--inspect=".len..]) catch return error.InvalidInspectMode;
+            inspect_mode = mode;
         } else if (std.mem.eql(u8, arg, "--columns")) {
-            list_columns = true;
+            inspect_mode = .columns;
+            inspect_deprecated = true;
         } else if (std.mem.eql(u8, arg, "--validate")) {
-            validate = true;
+            inspect_mode = .validate;
+            inspect_deprecated = true;
         } else if (std.mem.eql(u8, arg, "--sample")) {
-            sample_mode = true;
+            inspect_mode = .sample;
+            inspect_deprecated = true;
             // Peek at next arg: if it is a positive integer, consume it as the sample count
             if (i + 1 < args.len) {
                 const next = args[i + 1];
                 if (next.len > 0 and next[0] != '-') {
                     if (std.fmt.parseUnsigned(usize, next, 10)) |n| {
                         if (n == 0) return error.InvalidSampleCount;
-                        sample_n = n;
+                        inspect_sample_n = n;
                         i += 1;
                     } else |_| {
                         // Not a number — keep default (10)
@@ -555,12 +500,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             const val = arg["--sample=".len..];
             const n = std.fmt.parseUnsigned(usize, val, 10) catch return error.InvalidSampleCount;
             if (n == 0) return error.InvalidSampleCount;
-            sample_n = n;
-            sample_mode = true;
+            inspect_sample_n = n;
+            inspect_mode = .sample;
+            inspect_deprecated = true;
         } else if (std.mem.eql(u8, arg, "--stats") or std.mem.eql(u8, arg, "--profile")) {
-            stats_mode = true;
+            inspect_mode = .stats;
+            inspect_deprecated = true;
         } else if (std.mem.eql(u8, arg, "--schema")) {
-            schema_mode = true;
+            inspect_mode = .schema;
+            inspect_deprecated = true;
         } else if (std.mem.eql(u8, arg, "--repl") or std.mem.eql(u8, arg, "-r")) {
             repl_mode = true;
         } else if (std.mem.eql(u8, arg, "--output")) {
@@ -817,7 +765,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
 
     // ─── Convert positional args to files + query ──────────────────────────
     const pos = positional_args.items;
-    const is_special_mode = list_columns or validate or sample_mode or stats_mode or schema_mode or repl_mode;
+    const is_special_mode = inspect_mode != null or repl_mode;
 
     // Build file list from positional args
     var files: std.ArrayList(FileInput) = .empty;
@@ -870,60 +818,24 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (output_format != .csv and output_format != .tsv and output_format != .html and header)
         return error.IncompatibleFlags;
 
-    // --output is mutually exclusive with --columns (--columns always writes to stdout)
-    if (output != null and list_columns)
-        return error.OutputWithColumns;
+    // --inspect is mutually exclusive with query, output, and explain
+    if (inspect_mode != null and (query != null or query_file != null))
+        return error.InspectWithQuery;
+    if (inspect_mode != null and output != null)
+        return error.InspectWithOutput;
+    if (inspect_mode != null and explain)
+        return error.InspectWithExplain;
 
-    // --output is mutually exclusive with --validate (--validate always writes to stdout)
-    if (output != null and validate)
-        return error.OutputWithValidate;
+    // --explain is mutually exclusive with --output (even outside inspect mode)
+    if (explain and output != null)
+        return error.ExplainWithOutput;
 
-    // --output is mutually exclusive with --sample (--sample always writes to stdout)
-    if (output != null and sample_mode)
-        return error.SampleWithOutput;
-
-    // --validate is mutually exclusive with --columns
-    if (validate and list_columns)
-        return error.ValidateWithColumns;
-
-    // --columns is mutually exclusive with a query argument (positional or -f)
-    if (list_columns and (query != null or query_file != null))
-        return error.ColumnsWithQuery;
-
-    // --validate is mutually exclusive with a query argument (positional or -f)
-    if (validate and (query != null or query_file != null))
-        return error.ValidateWithQuery;
-
-    // --sample is mutually exclusive with a query argument (positional or -f)
-    if (sample_mode and (query != null or query_file != null))
-        return error.SampleWithQuery;
-
-    // --sample is mutually exclusive with --json / json output format
-    if (sample_mode and (output_format == .json or output_format == .ndjson))
-        return error.SampleWithJson;
-
-    // --sample is mutually exclusive with --columns
-    if (sample_mode and list_columns)
-        return error.SampleWithColumns;
-
-    // --sample is mutually exclusive with --validate
-    if (sample_mode and validate)
-        return error.SampleWithValidate;
-
-    // --stats is mutually exclusive with --columns, --validate, --sample, query, and --output
-    if (stats_mode and (list_columns or validate or sample_mode or query != null or query_file != null or output != null))
-        return error.StatsWithFlags;
-
-    // --explain is mutually exclusive with mode flags and --output
-    if (explain and (list_columns or validate or sample_mode or stats_mode or schema_mode or output != null))
-        return error.ExplainWithFlags;
-
-    // --schema is mutually exclusive with mode flags, query, output, and --explain
-    if (schema_mode and (explain or list_columns or validate or sample_mode or stats_mode or query != null or query_file != null or output != null))
-        return error.SchemaWithFlags;
+    // --inspect sample is incompatible with JSON output format
+    if (inspect_mode == .sample and (output_format == .json or output_format == .ndjson))
+        return error.InspectSampleWithJson;
 
     // --save is incompatible with special modes
-    if (save_path != null and (list_columns or validate or sample_mode or stats_mode or schema_mode or explain))
+    if (save_path != null and inspect_mode != null)
         return error.SaveIncompatibleMode;
 
     // --save implies disk-backed behavior; both together is redundant
@@ -948,9 +860,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (table_mode == .always and output_format != .csv and output_format != .tsv)
         return error.TableWithNonCsv;
 
-    // URL validation
-    if (urls.items.len > 0 and (list_columns or validate or sample_mode))
-        return error.UrlIncompatibleMode;
+    // URL validation: columns, validate, sample inspect modes don't support URL input
+    if (urls.items.len > 0 and inspect_mode != null) {
+        const is_url_compat = switch (inspect_mode.?) {
+            .stats, .schema => true,
+            .columns, .validate, .sample => false,
+        };
+        if (!is_url_compat) return error.UrlIncompatibleMode;
+    }
     if (urls.items.len == 0 and max_body_size_set)
         return error.HttpFlagsRequireUrl;
 
@@ -977,63 +894,44 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         if (gop.found_existing) return error.DuplicateTableName;
     }
 
-    // --columns mode: list headers and exit
-    if (list_columns)
-        return .{ .columns = ColumnsArgs{
+    // --inspect mode: dispatch to the appropriate inspect sub-mode
+    if (inspect_mode) |mode| {
+        return .{ .inspect = ParsedArgs{
+            .query = "",
             .files = files.items,
+            .urls = urls.items,
+            .type_inference = type_inference,
+            .no_stdin = no_stdin,
             .delimiter = delimiter,
+            .header = header,
+            .input_format = effective_input_format,
+            .input_format_explicit = input_format_explicit,
+            .output_format = output_format,
+            .max_rows = max_rows,
             .verbose = verbose,
-            .input_format = effective_input_format,
+            .silent = silent,
+            .output = output,
+            .xml_root = xml_root,
+            .xml_row = xml_row,
             .xml_root_input = xml_root_input,
             .xml_row_input = xml_row_input,
             .json_path = json_path,
+            .disk = disk,
+            .save_path = save_path,
+            .explain = explain,
+            .table_mode = table_mode,
+            .sql_table = sql_table,
+            .html_class = html_class,
+            .null_value = null_value,
+            .max_body_size = max_body_size,
+            .inspect_args = InspectArgs{ .mode = mode, .sample_n = inspect_sample_n, .deprecated = inspect_deprecated },
+            .sample_n = inspect_sample_n,
         } };
-
-    // --validate mode: parse CSV and print summary
-    if (validate)
-        return .{ .validate = ValidateArgs{
-            .files = files.items,
-            .delimiter = delimiter,
-            .type_inference = type_inference,
-            .input_format = effective_input_format,
-            .xml_root_input = xml_root_input,
-            .xml_row_input = xml_row_input,
-            .json_path = json_path,
-        } };
-
-    // --sample mode: print schema + first n rows and exit
-    if (sample_mode)
-        return .{ .sample = SampleArgs{
-            .files = files.items,
-            .delimiter = delimiter,
-            .input_format = effective_input_format,
-            .n = sample_n,
-            .type_inference = type_inference,
-        } };
-
-    // --stats mode: compute per-column statistics and exit
-    if (stats_mode)
-        return .{ .stats = StatsArgs{
-            .files = files.items,
-            .urls = urls.items,
-            .delimiter = delimiter,
-            .input_format = effective_input_format,
-            .type_inference = type_inference,
-        } };
-
-    // --schema mode: print inferred CREATE TABLE DDL and exit
-    if (schema_mode)
-        return .{ .schema = SchemaArgs{
-            .files = files.items,
-            .urls = urls.items,
-            .delimiter = delimiter,
-            .input_format = effective_input_format,
-            .type_inference = type_inference,
-        } };
+    }
 
     // --repl validation: reject incompatible flags
     if (repl_mode) {
-        if (list_columns or validate or sample_mode or stats_mode or schema_mode) {
+        if (inspect_mode != null) {
             return error.ReplIncompatibleMode;
         }
         if (query_file != null) {

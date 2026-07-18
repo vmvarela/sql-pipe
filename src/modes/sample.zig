@@ -17,17 +17,17 @@ const source = @import("source.zig");
 pub fn runSample(
     allocator: std.mem.Allocator,
     io: std.Io,
-    args: args_mod.SampleArgs,
+    parsed: args_mod.ParsedArgs,
     stderr_writer: *std.Io.Writer,
     stdout_writer: *std.Io.Writer,
 ) void {
     // Determine input source: file argument or stdin
-    const input_source: union(enum) { file: []const u8, stdin } = if (args.files.len > 0)
-        .{ .file = args.files[0].path }
+    const input_source: union(enum) { file: []const u8, stdin } = if (parsed.files.len > 0)
+        .{ .file = parsed.files[0].path }
     else
         .stdin;
 
-    switch (args.input_format) {
+    switch (parsed.input_format) {
         // ponytail: --sample for non-CSV formats requires loading into SQLite first;
         // CSV/TSV stream directly. Upgrade: open temp DB, load Parquet/JSON/etc.,
         // print schema via getTableColumnsWithTypes, SELECT LIMIT n for rows.
@@ -38,7 +38,7 @@ pub fn runSample(
             .{},
         ),
         .csv, .tsv => {
-            const col_delim: []const u8 = if (args.input_format == .tsv) "\t" else args.delimiter;
+            const col_delim: []const u8 = if (parsed.input_format == .tsv) "\t" else parsed.delimiter;
             var read_buf: [4096]u8 = undefined;
             const opened = source.openInput(io, input_source, stderr_writer);
             defer opened.deinit(io);
@@ -62,7 +62,7 @@ pub fn runSample(
             }
 
             // Buffer max(inference_buffer_size, n) rows for type inference
-            const buf_size = @max(inference_buffer_size, args.n);
+            const buf_size = @max(inference_buffer_size, parsed.sample_n);
             var row_buffer: std.ArrayList([][]u8) = .empty;
             defer {
                 for (row_buffer.items) |row| csv_reader.freeRecord(row);
@@ -89,7 +89,7 @@ pub fn runSample(
                     fatal("out of memory while buffering rows", stderr_writer, .csv_error, .{});
             }
 
-            const types: []ColumnType = if (args.type_inference) blk: {
+            const types: []ColumnType = if (parsed.type_inference) blk: {
                 break :blk inferTypes(allocator, row_buffer.items, cols.len) catch
                     fatal("out of memory during type inference", stderr_writer, .csv_error, .{});
             } else blk: {
@@ -139,7 +139,7 @@ pub fn runSample(
                 fatal("failed to write header newline", stderr_writer, .csv_error, .{});
 
             // ─── Print first n data rows to stdout ────────────────────────────────
-            const rows_to_print = @min(args.n, row_buffer.items.len);
+            const rows_to_print = @min(parsed.sample_n, row_buffer.items.len);
             for (row_buffer.items[0..rows_to_print]) |row| {
                 var col_idx: usize = 0;
                 while (col_idx < cols.len) : (col_idx += 1) {

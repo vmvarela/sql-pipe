@@ -9,9 +9,10 @@ SYNOPSIS
 	*sql-pipe* --url <url> [OPTIONS] [<file>...] <query>
 	*sql-pipe* -f <file> [OPTIONS] [<file>...]
 	*sql-pipe* -f <file> [OPTIONS]
+	*sql-pipe* --inspect <mode> [OPTIONS] [<file>]
 	*sql-pipe* --columns [OPTIONS] [<file>]
 	*sql-pipe* --sample [<n>] [OPTIONS] [<file>]
-	*sql-pipe* --stats [OPTIONS] [<file>]
+	*sql-pipe* --stats [OPTIONS] [<file>...]
 	*sql-pipe* --schema [OPTIONS] [<file>...]
 	*sql-pipe* --explain [OPTIONS] [<file>] <query>
 	*sql-pipe* --repl [OPTIONS] [<file>...]
@@ -151,54 +152,69 @@ OPTIONS
 		Row element name used when reading or writing XML (default: *row*).
 		Each result row is emitted as *<name><col>value</col>...</name>*.
 
-	*--validate*
-		Parse the entire input without executing a SQL query. On success,
-		prints a one-line summary to standard output:
-		*OK: <n> rows, <m> columns (<col> <TYPE>, ...)* and exits 0.
-		On parse error, prints the error message and exits 2. Compatible
-		with *--delimiter*, *--tsv*, *--no-type-inference*, and
+*--validate* [DEPRECATED]
+		Use *--inspect validate* instead. Parse the entire input without
+		executing a SQL query. On success, prints a one-line summary to
+		standard output: *OK: <n> rows, <m> columns (<col> <TYPE>, ...)* and
+		exits 0. On parse error, prints the error message and exits 2.
+		Compatible with *--delimiter*, *--tsv*, *--no-type-inference*, and
 		*-I* / *--input-format* (csv, tsv, json, ndjson, yaml, xml). JSON,
 		NDJSON, YAML, and XML columns are reported as TEXT. Mutually
 		exclusive with a query argument.
 
-	*--columns*
-		Read the input header, print each column name on its own line to
-		standard output, and exit with code 0. Supported for CSV, TSV,
-		JSON, NDJSON, YAML, and XML input. When combined with *-v* / *--verbose*,
-		also shows the inferred type (INTEGER, REAL, DATE, DATETIME, or TEXT) for each column
+	*--columns* [DEPRECATED]
+		Use *--inspect columns* instead. Read the input header, print each
+		column name on its own line to standard output, and exit with code 0.
+		Supported for CSV, TSV, JSON, NDJSON, YAML, and XML input. When
+		combined with *-v* / *--verbose*, also shows the inferred type
+		(INTEGER, REAL, DATE, DATETIME, or TEXT) for each column
 		(CSV/TSV only; other formats always show TEXT), using the first 100
 		data rows for inference. Respects *--delimiter* and *--tsv*.
 		Mutually exclusive with a query argument.
 
-	*--sample* [<n>]
-		Print a schema comment block to standard error and the first <n> data
-		rows to standard output as delimited text (default: 10 rows if no value
-		is given). The schema block lists each column name and its inferred
-		type (INTEGER, REAL, DATE, DATETIME, or TEXT), each line prefixed with *#* so it
-		is ignored by downstream CSV parsers. Column header is always printed as
-		the first output row (implies *--header*). Type inference reads up to
-		100 rows or <n> rows, whichever is larger, before emitting output.
-		Compatible with *--delimiter* and *--tsv*. Mutually exclusive with
-		*--json*, *--columns*, *--validate*, and a query argument. CSV and TSV
-		input only.
+	*--sample* [<n>] [DEPRECATED]
+		Use *--inspect sample* instead. Print a schema comment block to
+		standard error and the first <n> data rows to standard output as
+		delimited text (default: 10 rows if no value is given). The schema
+		block lists each column name and its inferred type (INTEGER, REAL,
+		DATE, DATETIME, or TEXT), each line prefixed with *#* so it is
+		ignored by downstream CSV parsers. Column header is always printed
+		as the first output row (implies *--header*). Type inference reads
+		up to 100 rows or <n> rows, whichever is larger, before emitting
+		output. Compatible with *--delimiter* and *--tsv*. Mutually
+		exclusive with *--json*, *--columns*, *--validate*, and a query
+		argument. CSV and TSV input only.
 
-	*--stats*
-		Load input and print per-column statistics (column name, type,
-		non-null count, min, max, mean) as a formatted table. Mean is blank
-		for non-numeric columns. Compatible with *--delimiter*, *--tsv*,
-		*--no-type-inference*, and *-I* / *--input-format* (csv, tsv, json,
-		ndjson, yaml, xml). Mutually exclusive with a query argument,
-		*--columns*, *--validate*, *--sample*, and *--output*.
-		Alias: *--profile*.
+	*--stats* [DEPRECATED]
+		Use *--inspect stats* instead. Load input and print per-column
+		statistics (column name, type, non-null count, min, max, mean) as a
+		formatted table. Mean is blank for non-numeric columns. Compatible
+		with *--delimiter*, *--tsv*, *--no-type-inference*, and *-I* /
+		*--input-format* (csv, tsv, json, ndjson, yaml, xml). Mutually
+		exclusive with a query argument, *--columns*, *--validate*,
+		*--sample*, and *--output*. Alias: *--profile*.
 
-	*--schema*
-		Load input and print the inferred CREATE TABLE DDL to standard
-		output. Each input file generates one DDL block; stdin uses table
-		name *t*. No query is required. Compatible with *--delimiter*,
-		*--tsv*, *--no-type-inference*, and *-I* / *--input-format* (csv,
-		tsv, json, ndjson, yaml, xml). Mutually exclusive with a query argument,
-		*--columns*, *--validate*, *--sample*, *--stats*, *--explain*,
-		and *--output*.
+	*--schema* [DEPRECATED]
+		Use *--inspect schema* instead. Load input and print the inferred
+		CREATE TABLE DDL to standard output. Each input file generates one
+		DDL block; stdin uses table *t*. No query is required. Compatible
+		with *--delimiter*, *--tsv*, *--no-type-inference*, and *-I* /
+		*--input-format* (csv, tsv, json, ndjson, yaml, xml). Mutually
+		exclusive with a query argument, *--columns*, *--validate*,
+		*--sample*, *--stats*, *--explain*, and *--output*.
+
+	*--inspect* <mode>
+		Inspect input data without running a query. *<mode>* is one of:
+		*columns* (list column names, one per line; with *-v* shows inferred types),
+		*validate* (parse entire input, print summary: OK: <n> rows, <m> columns),
+		*sample* [<n>] (print schema comment block and first <n> rows as CSV, default 10),
+		*stats* (per-column statistics: type, non-null count, min, max, mean),
+		*schema* (print inferred CREATE TABLE DDL).
+		Mutually exclusive with a query argument, *--output*, *--explain*, and
+		other inspect modes. Compatible with *--delimiter*, *--tsv*, *--no-type-inference*,
+		*-I* / *--input-format* (csv, tsv, json, ndjson, yaml, xml, parquet).
+		*--sample* implies *--header*. *--sample* and *--stats* are mutually exclusive
+		with *--json* output.
 
 	*--output* <file>
 		Write results to <file> instead of standard output. Creates or
@@ -240,12 +256,12 @@ OPTIONS
 		- *.read* <file> — load and execute queries from a .sql file
 		- *Ctrl-D* (EOF) or *Ctrl-C* — exit the REPL
 
-		Arrow-key history is provided via *linenoise*. The history file is stored
-		at *$HOME/.sqlpipe_history*. Only the first SQL statement per line is
-		executed; multi-statement lines are not split in v1.
+		No history persistence (no arrow-key history). Multi-line queries:
+		end lines with Enter, finish with *;*. Empty line in multi-line mode
+		executes the accumulated query.
 
-		No query argument is required. Cannot be combined with *--columns*,
-		*--validate*, *--sample*, *--stats*, *--schema*, *--explain*,
+		No query argument is required. Cannot be combined with *--inspect*,
+		*--columns*, *--validate*, *--sample*, *--stats*, *--schema*, *--explain*,
 		*-f* / *--file*, *--output*, or *--completions*. Compatible with
 		*--save*, *--disk*, *-O*, and file arguments.
 
