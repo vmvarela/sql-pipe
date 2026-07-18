@@ -18,7 +18,7 @@ const fmtThousands = loader.fmtThousands;
 
 /// Read a line from stdin on Windows using C stdio getc().
 /// Returns slice of the buffer up to newline, or null on EOF/error.
-fn readLineWindows(buf: [8192]u8) ?[]u8 {
+fn readLineWindows(buf: *[8192]u8) ?[]u8 {
     var pos: usize = 0;
     const stdin_file = c_stdio.__acrt_iob_func(0); // stdin = __acrt_iob_func(0)
     while (pos < buf.len) {
