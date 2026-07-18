@@ -38,7 +38,7 @@ fn readLineWindows(buf: [8192]u8) ?[]u8 {
 /// Caller must call freeLine() to free.
 /// On Windows, uses C stdio getc(stdin) directly.
 /// On Unix, uses std.Io.Reader for line reading.
-fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_r: ?*std.Io.Reader, prompt: []const u8) ?[:0]u8 {
+fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_r: anytype, prompt: []const u8) ?[:0]u8 {
     // Write prompt to stderr — keeps stdout clean for piping
     // ponytail: File.Writer must outlive its .interface (drain uses @fieldParentPtr)
     var err_buf: [256]u8 = undefined;
@@ -69,9 +69,8 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_r: ?*std.Io.Reader, 
         // ponytail: 8KB line limit; warn if truncated
         var line_buf: [8192]u8 = undefined;
         var pos: usize = 0;
-        const stdin_reader = stdin_r.?;
         while (pos < line_buf.len) {
-            const byte = stdin_reader.interface.takeByte() catch |err| switch (err) {
+            const byte = stdin_r.interface.takeByte() catch |err| switch (err) {
                 error.EndOfStream => {
                     if (pos == 0) return null; // EOF before any data
                     break; // EOF after some data
@@ -224,7 +223,7 @@ pub fn runRepl(
     // ponytail: persistent stdin reader for Unix — Windows uses C stdio getc() directly
     // Must be var and passed as pointer so internal buffer state survives across readLine calls.
     var stdin_buf: [8192]u8 = undefined;
-    const stdin_r: ?*std.Io.Reader = if (builtin.os.tag != .windows) @ptrCast(?*std.Io.Reader, &std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf).interface) else null;
+    var stdin_r = if (builtin.os.tag != .windows) std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf) else {};
 
     stderr_writer.writeAll("Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.\n") catch {};
     stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
@@ -234,7 +233,7 @@ pub fn runRepl(
 
     while (true) {
         const prompt = if (ml_buf.items.len > 0) "...> " else "sql> ";
-        const line = readLine(allocator, io, stdin_r, prompt);
+        const line = readLine(allocator, io, &stdin_r, prompt);
         if (line == null) break;
         defer freeLine(allocator, line);
         const trimmed = std.mem.trim(u8, line.?, " \t\r\n");
