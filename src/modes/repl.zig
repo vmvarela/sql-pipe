@@ -6,11 +6,6 @@ const main_mod = @import("../main.zig");
 const loader = @import("../loader.zig");
 const builtin = @import("builtin");
 
-// ponytail: linenoise on Unix, plain stdin on Windows — same API, different backend
-const linenoise = if (builtin.os.tag != .windows) @cImport({
-    @cInclude("linenoise.h");
-}) else struct {};
-
 // ponytail: C stdio for Windows stdin reading (Zig 0.16 I/O API is inconsistent on Windows)
 const c_stdio = if (builtin.os.tag == .windows) @cImport({
     @cInclude("stdio.h");
@@ -21,38 +16,9 @@ const fatal = sqlite_mod.fatal;
 const printSqlError = sqlite_mod.printSqlError;
 const fmtThousands = loader.fmtThousands;
 
-/// Read a line with prompt. Returns heap-allocated null-terminated string, or null on EOF.
-/// Caller must call freeLine() to free.
-/// On Windows, uses C stdio getc(stdin) directly.
-/// On Unix, uses linenoise for interactive editing.
-fn readLine(allocator: std.mem.Allocator, io: std.Io, _: anytype, prompt: []const u8) ?[:0]u8 {
-    if (builtin.os.tag == .windows) {
-        // Write prompt to stderr — keeps stdout clean for piping (B1)
-        var err_buf: [256]u8 = undefined;
-        var stderr_w = std.Io.File.writer(std.Io.File.stderr(), io, &err_buf).interface;
-        stderr_w.writeAll(prompt) catch return null;
-        stderr_w.flush() catch return null;
-
-        // ponytail: 8KB line limit; bump if users report truncation (B3)
-        var buf: [8192]u8 = undefined;
-        const raw = readLineWindows(&buf) orelse return null;
-
-        // Strip trailing \r (Windows CRLF)
-        const trimmed = if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
-
-        const copy = allocator.allocSentinel(u8, trimmed.len, 0) catch return null;
-        @memcpy(copy[0..trimmed.len], trimmed);
-        return copy;
-    } else {
-        const ptr = linenoise.linenoise(@as([*c]const u8, @ptrCast(prompt)));
-        if (ptr == null) return null;
-        return std.mem.span(ptr);
-    }
-}
-
 /// Read a line from stdin on Windows using C stdio getc().
 /// Returns slice of the buffer up to newline, or null on EOF/error.
-fn readLineWindows(buf: anytype) ?[]u8 {
+fn readLineWindows(buf: *[8192]u8) ?[]u8 {
     var pos: usize = 0;
     const stdin_file = c_stdio.__acrt_iob_func(0); // stdin = __acrt_iob_func(0)
     while (pos < buf.len) {
@@ -68,36 +34,65 @@ fn readLineWindows(buf: anytype) ?[]u8 {
     return buf[0..pos];
 }
 
-fn freeLine(allocator: std.mem.Allocator, line: ?[:0]u8) void {
-    if (line == null) return;
+/// Read a line with prompt. Returns heap-allocated null-terminated string, or null on EOF.
+/// Caller must call freeLine() to free.
+/// On Windows, uses C stdio getc(stdin) directly.
+/// On Unix, uses std.Io.Reader for line reading.
+fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_r: anytype, prompt: []const u8) ?[:0]u8 {
+    // Write prompt to stderr — keeps stdout clean for piping
+    // ponytail: File.Writer must outlive its .interface (drain uses @fieldParentPtr)
+    var err_buf: [256]u8 = undefined;
+    var err_file_writer = std.Io.File.writer(std.Io.File.stderr(), io, &err_buf);
+    const err_writer = &err_file_writer.interface;
+    err_writer.writeAll(prompt) catch return null;
+    err_writer.flush() catch return null;
+
     if (builtin.os.tag == .windows) {
-        allocator.free(line.?);
+        // ponytail: 8KB line limit; warn if truncated
+        var buf: [8192]u8 = undefined;
+        const raw = readLineWindows(&buf) orelse return null;
+
+        // Strip trailing \r (Windows CRLF)
+        const trimmed = if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
+
+        if (raw.len == buf.len) {
+            err_writer.print("warning: input line truncated at 8192 bytes\n", .{}) catch {};
+            err_writer.flush() catch {};
+        }
+
+        const copy = allocator.allocSentinel(u8, trimmed.len, 0) catch return null;
+        @memcpy(copy[0..trimmed.len], trimmed);
+        return copy;
     } else {
-        linenoise.linenoiseFree(@ptrCast(line.?));
+        // Read line via the persistent stdin reader (passed as optional pointer to
+        // preserve internal buffer state across calls).
+        // ponytail: 8KB line limit; warn if truncated
+        var line_buf: [8192]u8 = undefined;
+        var pos: usize = 0;
+        while (pos < line_buf.len) {
+            const byte = stdin_r.interface.takeByte() catch |err| switch (err) {
+                error.EndOfStream => {
+                    if (pos == 0) return null; // EOF before any data
+                    break; // EOF after some data
+                },
+                else => return null,
+            };
+            if (byte == '\n') break;
+            line_buf[pos] = byte;
+            pos += 1;
+        }
+        if (pos == line_buf.len) {
+            err_writer.print("warning: input line truncated at 8192 bytes\n", .{}) catch {};
+            err_writer.flush() catch {};
+        }
+        const copy = allocator.allocSentinel(u8, pos, 0) catch return null;
+        @memcpy(copy[0..pos], line_buf[0..pos]);
+        return copy;
     }
 }
 
-fn historyAdd(line: ?[:0]u8) void {
-    if (builtin.os.tag == .windows) return;
-    if (line) |l| {
-        _ = linenoise.linenoiseHistoryAdd(@as([*c]const u8, @ptrCast(l)));
-    }
-}
-
-fn historyLoad(path: ?[:0]u8) void {
-    if (builtin.os.tag == .windows) return;
-    // ponytail: SetMaxLen before Load so existing huge files get trimmed (S2)
-    _ = linenoise.linenoiseHistorySetMaxLen(1000);
-    if (path) |p| {
-        _ = linenoise.linenoiseHistoryLoad(@as([*c]const u8, @ptrCast(p)));
-    }
-}
-
-fn historySave(path: ?[:0]u8) void {
-    if (builtin.os.tag == .windows) return;
-    if (path) |p| {
-        _ = linenoise.linenoiseHistorySave(@as([*c]const u8, @ptrCast(p)));
-    }
+fn freeLine(allocator: std.mem.Allocator, line: ?[:0]u8) void {
+    if (line) |l| allocator.free(l);
 }
 
 fn execReplQuery(
@@ -139,7 +134,6 @@ fn handleDotCommand(
     parsed: ParsedArgs,
     use_table: bool,
     main_table: []const u8,
-    _: ?[:0]u8,
 ) bool {
     const trimmed = std.mem.trim(u8, command, " \t\r\n");
     if (trimmed.len == 0 or trimmed[0] != '.') return false;
@@ -224,24 +218,12 @@ pub fn runRepl(
         stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
     }
 
-    // History path — only used on Unix
-    var history_path: ?[:0]u8 = null;
-    if (builtin.os.tag != .windows) {
-        const home_env = std.c.getenv("HOME");
-        const home: []const u8 = if (home_env) |h| std.mem.span(h) else ".";
-        if (std.fmt.allocPrintSentinel(allocator, "{s}/.sqlpipe_history", .{home}, 0)) |p| {
-            history_path = p;
-        } else |_| {}
-    }
-    defer if (history_path) |p| allocator.free(p);
-
-    historyLoad(history_path);
-
     const main_table = main_mod.mainTableName(parsed);
 
     // ponytail: persistent stdin reader for Unix — Windows uses C stdio getc() directly
+    // Must be var and passed as pointer so internal buffer state survives across readLine calls.
     var stdin_buf: [8192]u8 = undefined;
-    const stdin_r = if (builtin.os.tag != .windows) std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf) else undefined;
+    var stdin_r = if (builtin.os.tag != .windows) std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf) else {};
 
     stderr_writer.writeAll("Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.\n") catch {};
     stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
@@ -251,7 +233,7 @@ pub fn runRepl(
 
     while (true) {
         const prompt = if (ml_buf.items.len > 0) "...> " else "sql> ";
-        const line = readLine(allocator, io, stdin_r, prompt);
+        const line = readLine(allocator, io, &stdin_r, prompt);
         if (line == null) break;
         defer freeLine(allocator, line);
         const trimmed = std.mem.trim(u8, line.?, " \t\r\n");
@@ -272,7 +254,7 @@ pub fn runRepl(
 
         // Dot commands only in single-line mode (NOT in multi-line)
         if (ml_buf.items.len == 0 and trimmed[0] == '.') {
-            if (handleDotCommand(allocator, io, trimmed, db, stdout_writer, stderr_writer, parsed, use_table, main_table, history_path)) continue;
+            if (handleDotCommand(allocator, io, trimmed, db, stdout_writer, stderr_writer, parsed, use_table, main_table)) continue;
         }
 
         // Append to multi-line buffer
@@ -284,7 +266,7 @@ pub fn runRepl(
 
         if (!ends_with_semicolon) continue;
 
-        // Strip trailing ; and execute
+        // Strip trailing ; and execute (B5)
         const query_len = if (ml_buf.items.len > 0 and ml_buf.items[ml_buf.items.len - 1] == ';')
             ml_buf.items.len - 1 else ml_buf.items.len;
         const query = ml_buf.items[0..query_len];
@@ -293,9 +275,6 @@ pub fn runRepl(
             ml_buf.clearRetainingCapacity();
             continue;
         }
-
-        historyAdd(line);
-        historySave(history_path);
 
         execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
         ml_buf.clearRetainingCapacity();

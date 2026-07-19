@@ -81,12 +81,6 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"), .flags = &.{} });
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"), .flags = &.{} });
 
-    // Bundle linenoise — line-editing library for REPL (Unix only)
-    if (target.result.os.tag != .windows) {
-        exe.root_module.addIncludePath(b.path("lib/linenoise"));
-        exe.root_module.addCSourceFile(.{ .file = b.path("lib/linenoise/linenoise.c"), .flags = &.{} });
-    }
-
     // Parquet support via carquet C library (MIT, by Johan Natter).
     // Compression libs (zstd, lz4, zlib) bundled as C source alongside carquet.
     // All statically linked — zero runtime deps.
@@ -636,7 +630,7 @@ pub fn build(b: *std.Build) void {
     const test_output_with_columns = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --columns --output /tmp/out.csv 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --output cannot be combined with --columns' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --inspect cannot be combined with --output' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_output_with_columns.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_output_with_columns.step);
@@ -1015,20 +1009,13 @@ pub fn build(b: *std.Build) void {
     const test_validate_output_conflict = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate --output /tmp/x 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --output cannot be combined with --validate' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --inspect cannot be combined with --output' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_validate_output_conflict.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_validate_output_conflict.step);
 
-    // Integration test 83: --validate --columns exits 1 with error
-    const test_validate_columns_conflict = b.addSystemCommand(&.{
-        "bash", "-c",
-        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --validate --columns 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --validate cannot be combined with --columns' && echo "$msg" | grep -q 'EXIT:1'
-    });
-    test_validate_columns_conflict.step.dependOn(b.getInstallStep());
-    test_step.dependOn(&test_validate_columns_conflict.step);
-
+    // ponytail: --validate --columns both map to --inspect, last wins, no error
+    
     // Integration test 84: --validate on invalid NDJSON exits 2
     const test_validate_ndjson_error = b.addSystemCommand(&.{
         "bash", "-c",
@@ -1105,7 +1092,7 @@ pub fn build(b: *std.Build) void {
     const test_sample_with_output = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --sample 5 --output /tmp/sp_test_out.csv 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --sample cannot be combined with --output' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --inspect cannot be combined with --output' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_sample_with_output.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_sample_with_output.step);
@@ -2054,6 +2041,16 @@ pub fn build(b: *std.Build) void {
     test_schema_semicolon.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_schema_semicolon.step);
 
+    // Integration test: --schema ignores --max-rows (regression test for PR 213)
+    // Should show all 5 rows in schema even with --max-rows 2
+    const test_schema_ignores_max_rows = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,val\n1,10\n2,20\n3,30\n4,40\n5,50\n' | ./zig-out/bin/sql-pipe --schema --max-rows 2)
+        \\echo "$result" | grep -q 'INTEGER'
+    });
+    test_schema_ignores_max_rows.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_ignores_max_rows.step);
+
     // Integration test 176d: --schema with single file argument
     const test_schema_file = b.addSystemCommand(&.{
         "bash", "-c",
@@ -2115,41 +2112,7 @@ pub fn build(b: *std.Build) void {
     test_schema_json.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_schema_json.step);
 
-    // Integration test 176i: --schema is mutually exclusive with --columns
-    const test_schema_excl_columns = b.addSystemCommand(&.{
-        "bash", "-c",
-        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema --columns 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'EXIT:1'
-    });
-    test_schema_excl_columns.step.dependOn(b.getInstallStep());
-    test_step.dependOn(&test_schema_excl_columns.step);
-
-    // Integration test 176j: --schema is mutually exclusive with --validate
-    const test_schema_excl_validate = b.addSystemCommand(&.{
-        "bash", "-c",
-        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema --validate 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'EXIT:1'
-    });
-    test_schema_excl_validate.step.dependOn(b.getInstallStep());
-    test_step.dependOn(&test_schema_excl_validate.step);
-
-    // Integration test 176k: --schema is mutually exclusive with --sample
-    const test_schema_excl_sample = b.addSystemCommand(&.{
-        "bash", "-c",
-        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema --sample 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'EXIT:1'
-    });
-    test_schema_excl_sample.step.dependOn(b.getInstallStep());
-    test_step.dependOn(&test_schema_excl_sample.step);
-
-    // Integration test 176l: --schema is mutually exclusive with --stats
-    const test_schema_excl_stats = b.addSystemCommand(&.{
-        "bash", "-c",
-        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --schema --stats 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'EXIT:1'
-    });
-    test_schema_excl_stats.step.dependOn(b.getInstallStep());
-    test_step.dependOn(&test_schema_excl_stats.step);
+    // ponytail: --schema --columns/--validate/--sample/--stats all map to --inspect, last wins, no error
 
     // Integration test 176m: --schema with a non-file positional arg exits 2 (tried as file)
     const test_schema_excl_query = b.addSystemCommand(&.{
@@ -2969,6 +2932,16 @@ pub fn build(b: *std.Build) void {
     test_stats_basic.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_stats_basic.step);
 
+    // Integration test: --stats ignores --max-rows (regression test for PR 213)
+    // Should show stats for all 5 rows even with --max-rows 2
+    const test_stats_ignores_max_rows = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,val\n1,10\n2,20\n3,30\n4,40\n5,50\n' | ./zig-out/bin/sql-pipe --stats --max-rows 2 2>/dev/null)
+        \\echo "$result" | grep -q '5' && echo "$result" | grep -q '30'
+    });
+    test_stats_ignores_max_rows.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_ignores_max_rows.step);
+
     // Integration test: --profile alias works
     const test_stats_alias = b.addSystemCommand(&.{
         "bash", "-c",
@@ -2978,38 +2951,14 @@ pub fn build(b: *std.Build) void {
     test_stats_alias.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_stats_alias.step);
 
-    // Integration test: --stats cannot be combined with --columns, --validate, --sample, query, --output
-    const test_stats_with_columns = b.addSystemCommand(&.{
-        "bash", "-c",
-        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats --columns 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
-    });
-    test_stats_with_columns.step.dependOn(b.getInstallStep());
-    test_step.dependOn(&test_stats_with_columns.step);
-
-    // Integration test: --stats cannot be combined with --validate
-    const test_stats_with_validate = b.addSystemCommand(&.{
-        "bash", "-c",
-        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats --validate 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
-    });
-    test_stats_with_validate.step.dependOn(b.getInstallStep());
-    test_step.dependOn(&test_stats_with_validate.step);
-
-    // Integration test: --stats cannot be combined with --sample
-    const test_stats_with_sample = b.addSystemCommand(&.{
-        "bash", "-c",
-        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats --sample 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
-    });
-    test_stats_with_sample.step.dependOn(b.getInstallStep());
-    test_step.dependOn(&test_stats_with_sample.step);
+    // ponytail: --stats --columns/--validate/--sample all map to --inspect, last wins, no error
+    // The following tests check --stats + query/output which still error
 
     // Integration test: --stats cannot be combined with query argument (-f)
     const test_stats_with_query = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats -f /dev/null 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --inspect cannot be combined with a query argument' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_stats_with_query.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_stats_with_query.step);
@@ -3018,7 +2967,7 @@ pub fn build(b: *std.Build) void {
     const test_stats_with_output = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --stats --output /tmp/sp_test_out.csv 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --stats is incompatible' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --inspect cannot be combined with --output' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_stats_with_output.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_stats_with_output.step);
@@ -3222,47 +3171,45 @@ pub fn build(b: *std.Build) void {
     test_explain_exit_0.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_explain_exit_0.step);
 
-    // Integration test: --explain + --columns → error exit 1
+    // Integration test: --explain + --inspect modes → error exit 1
+    // (old --columns/--validate/--sample/--stats/--schema flags)
     const test_explain_with_columns = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --columns 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --inspect cannot be combined with --explain' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_explain_with_columns.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_explain_with_columns.step);
 
-    // Integration test: --explain + --validate → error exit 1
     const test_explain_with_validate = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --validate 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --inspect cannot be combined with --explain' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_explain_with_validate.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_explain_with_validate.step);
 
-    // Integration test: --explain + --sample → error exit 1
     const test_explain_with_sample = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --sample 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --inspect cannot be combined with --explain' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_explain_with_sample.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_explain_with_sample.step);
 
-    // Integration test: --explain + --stats → error exit 1
     const test_explain_with_stats = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --stats 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --inspect cannot be combined with --explain' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_explain_with_stats.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_explain_with_stats.step);
 
-    // Integration test: --explain + --output → error exit 1
+    // Integration test: --explain + --output → error exit 1 (explain non-inspect path)
     const test_explain_with_output = b.addSystemCommand(&.{
         "bash", "-c",
         \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --explain --output /tmp/sp_test_out.csv 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'error: --explain cannot be combined' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'error: --explain cannot be combined with --output' && echo "$msg" | grep -q 'EXIT:1'
     });
     test_explain_with_output.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_explain_with_output.step);

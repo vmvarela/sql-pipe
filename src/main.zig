@@ -13,11 +13,7 @@ const yaml_mod = @import("yaml.zig");
 const http_mod = @import("http.zig");
 const parquet_mod = @import("parquet.zig");
 
-const columns_mode = @import("modes/columns.zig");
-const validate_mode = @import("modes/validate.zig");
-const sample_mode = @import("modes/sample.zig");
-const stats_mode = @import("modes/stats.zig");
-const schema_mode = @import("modes/schema.zig");
+const inspect_mode = @import("modes/inspect.zig");
 const repl_mode = @import("modes/repl.zig");
 const completions_mod = @import("completions.zig");
 
@@ -336,24 +332,20 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InvalidMaxBodySize => fatal("--max-body-size requires a positive integer", stderr_writer, .usage, .{}),
             error.HttpFlagsRequireUrl => fatal("--http-header and --max-body-size require --url", stderr_writer, .usage, .{}),
             error.UrlIncompatibleMode => fatal("--url cannot be combined with --columns, --validate, or --sample", stderr_writer, .usage, .{}),
+            error.InvalidInspectMode => fatal("unknown inspect mode; supported: columns, validate, sample, stats, schema", stderr_writer, .usage, .{}),
+            error.MissingInspectMode => fatal("--inspect requires a mode argument (columns, validate, sample, stats, schema)", stderr_writer, .usage, .{}),
+            error.InspectWithQuery => fatal("--inspect cannot be combined with a query argument", stderr_writer, .usage, .{}),
+            error.InspectWithOutput => fatal("--inspect cannot be combined with --output", stderr_writer, .usage, .{}),
+            error.InspectWithExplain => fatal("--inspect cannot be combined with --explain", stderr_writer, .usage, .{}),
+            error.InspectSampleWithJson => fatal("--inspect sample cannot be combined with --json or a JSON output format", stderr_writer, .usage, .{}),
+            error.ExplainWithOutput => fatal("--explain cannot be combined with --output", stderr_writer, .usage, .{}),
             error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),
             error.InvalidMaxRows => fatal("--max-rows must be a positive integer", stderr_writer, .usage, .{}),
             error.InvalidInputFormat => fatal("unknown input format; supported: csv, tsv, json, ndjson, xml, yaml, parquet", stderr_writer, .usage, .{}),
             error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml, markdown (md), html, sql", stderr_writer, .usage, .{}),
-            error.ColumnsWithQuery => fatal("--columns cannot be combined with a query argument", stderr_writer, .usage, .{}),
-            error.ValidateWithQuery => fatal("--validate cannot be combined with a query argument", stderr_writer, .usage, .{}),
+            // ponytail: ColumnsWithQuery, ValidateWithQuery handled by InspectWithQuery above
             error.InvalidOutputPath => fatal("--output requires a non-empty file path", stderr_writer, .usage, .{}),
-            error.OutputWithColumns => fatal("--output cannot be combined with --columns", stderr_writer, .usage, .{}),
-            error.OutputWithValidate => fatal("--output cannot be combined with --validate", stderr_writer, .usage, .{}),
-            error.ValidateWithColumns => fatal("--validate cannot be combined with --columns", stderr_writer, .usage, .{}),
-            error.SampleWithQuery => fatal("--sample cannot be combined with a query argument", stderr_writer, .usage, .{}),
-            error.SampleWithJson => fatal("--sample cannot be combined with --json or a JSON output format", stderr_writer, .usage, .{}),
-            error.SampleWithColumns => fatal("--sample cannot be combined with --columns", stderr_writer, .usage, .{}),
-            error.SampleWithValidate => fatal("--sample cannot be combined with --validate", stderr_writer, .usage, .{}),
-            error.SampleWithOutput => fatal("--sample cannot be combined with --output", stderr_writer, .usage, .{}),
             error.InvalidSampleCount => fatal("--sample requires a positive integer value", stderr_writer, .usage, .{}),
-            error.StatsWithFlags => fatal("--stats is incompatible with --columns, --validate, --sample, --output, and query arguments", stderr_writer, .usage, .{}),
-            error.SchemaWithFlags => fatal("--schema is incompatible with --columns, --validate, --sample, --stats, --explain, --output, and query arguments", stderr_writer, .usage, .{}),
             error.MissingQuery => {
                 stderr_writer.writeAll("error: no SQL query provided\n") catch |werr| std.log.err("failed to write error: {}", .{werr});
                 // Fall through to printUsage + exit below
@@ -367,7 +359,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InvalidXmlName => fatal("--xml-root and --xml-row must be valid XML element names (letter/underscore first, then letters/digits/-/._/:)", stderr_writer, .usage, .{}),
             error.DuplicateTableName => fatal("duplicate table name — file arguments must have unique basenames", stderr_writer, .usage, .{}),
             error.TableWithNonCsv => fatal("--table requires CSV or TSV output format (not compatible with --json, -O json, etc.)", stderr_writer, .usage, .{}),
-            error.ExplainWithFlags => fatal("--explain cannot be combined with --columns, --validate, --sample, --stats, --schema, or --output", stderr_writer, .usage, .{}),
+            // ponytail: ExplainWithFlags handled by InspectWithExplain above
             error.InvalidSavePath => fatal("--save requires a non-empty file path", stderr_writer, .usage, .{}),
             error.SaveIncompatibleMode => fatal("--save cannot be combined with special modes", stderr_writer, .usage, .{}),
             error.SaveIncompatibleDisk => fatal("--save implies --disk; remove --disk", stderr_writer, .usage, .{}),
@@ -400,44 +392,15 @@ pub fn main(init: std.process.Init.Minimal) void {
             stderr_writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
             std.process.exit(@intFromEnum(ExitCode.success));
         },
-        .columns => |col_args| {
-            columns_mode.runColumns(allocator, io.io(), col_args, stderr_writer, stdout_writer);
-            stdout_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stdout: {}", .{err});
-            };
-            stderr_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stderr: {}", .{err});
-            };
-        },
-        .validate => |val_args| {
-            validate_mode.runValidate(allocator, io.io(), val_args, stderr_writer, stdout_writer);
-            stdout_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stdout: {}", .{err});
-            };
-            stderr_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stderr: {}", .{err});
-            };
-        },
-        .sample => |sample_args| {
-            sample_mode.runSample(allocator, io.io(), sample_args, stderr_writer, stdout_writer);
-            stdout_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stdout: {}", .{err});
-            };
-            stderr_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stderr: {}", .{err});
-            };
-        },
-        .stats => |stats_args| {
-            stats_mode.runStats(allocator, io.io(), stats_args, stderr_writer, stdout_writer);
-            stdout_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stdout: {}", .{err});
-            };
-            stderr_file_writer.flush() catch |err| {
-                std.log.err("failed to flush stderr: {}", .{err});
-            };
-        },
-        .schema => |schema_args| {
-            schema_mode.runSchema(allocator, io.io(), schema_args, stderr_writer, stdout_writer);
+        .inspect => |parsed| {
+            const inspect_args = parsed.inspect_args orelse unreachable;
+            // Print deprecation warning if old flag was used
+            if (inspect_args.deprecated) {
+                const mode_str = @tagName(inspect_args.mode);
+                stderr_writer.print("warning: --{s} is deprecated, use --inspect {s}\n", .{ mode_str, mode_str }) catch {};
+                stderr_writer.flush() catch {};
+            }
+            inspect_mode.runInspect(allocator, io.io(), inspect_args.mode, parsed, stderr_writer, stdout_writer);
             stdout_file_writer.flush() catch |err| {
                 std.log.err("failed to flush stdout: {}", .{err});
             };
