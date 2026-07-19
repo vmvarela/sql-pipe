@@ -17,6 +17,7 @@ pub fn runSchema(
     stdout_writer: *std.Io.Writer,
 ) void {
     var parsed = parsed_in;
+    parsed.max_rows = null;
     const db = sqlite_mod.openDb(false, null, stderr_writer);
     defer _ = c.sqlite3_close(db);
 

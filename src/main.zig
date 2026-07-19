@@ -333,6 +333,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.HttpFlagsRequireUrl => fatal("--http-header and --max-body-size require --url", stderr_writer, .usage, .{}),
             error.UrlIncompatibleMode => fatal("--url cannot be combined with --columns, --validate, or --sample", stderr_writer, .usage, .{}),
             error.InvalidInspectMode => fatal("unknown inspect mode; supported: columns, validate, sample, stats, schema", stderr_writer, .usage, .{}),
+            error.MissingInspectMode => fatal("--inspect requires a mode argument (columns, validate, sample, stats, schema)", stderr_writer, .usage, .{}),
             error.InspectWithQuery => fatal("--inspect cannot be combined with a query argument", stderr_writer, .usage, .{}),
             error.InspectWithOutput => fatal("--inspect cannot be combined with --output", stderr_writer, .usage, .{}),
             error.InspectWithExplain => fatal("--inspect cannot be combined with --explain", stderr_writer, .usage, .{}),

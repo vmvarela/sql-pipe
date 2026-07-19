@@ -488,8 +488,6 @@ $ printf 'name,age\nAlice,30\nBob,25\nCarol,35\n' | sql-pipe --stats
 
 Same as running `SELECT MIN(col), MAX(col), AVG(col), COUNT(*)` per column — but in one command.
 
-Same as running `SELECT MIN(col), MAX(col), AVG(col), COUNT(*)` per column — but in one command.
-
 ### Inspect data without queries (--inspect)
 
 ```sh

@@ -85,8 +85,13 @@ fn generateBash(writer: *std.Io.Writer) !void {
         \\      --null-value
         \\      --html-class
         \\      --completions
+        \\      --columns
         \\      --file -f
         \\      --help -h
+        \\      --profile
+        \\      --schema
+        \\      --stats
+        \\      --validate
         \\      --version -V
         \\    ' -- "$cur"))
         \\  else
@@ -121,6 +126,11 @@ fn generateZsh(writer: *std.Io.Writer) !void {
         \\    '(-v --verbose)'{-v,--verbose}'[Force row count to stderr]'
         \\    '(-s --silent)'{-s,--silent}'[Suppress row count output]'
         \\    '--inspect:Inspect mode:(columns validate sample stats schema)'
+        \\    '--columns[Inspect columns (deprecated)]'
+        \\    '--validate[Validate input (deprecated)]'
+        \\    '--stats[Print stats (deprecated)]'
+        \\    '--profile[Print profile (deprecated)]'
+        \\    '--schema[Print schema (deprecated)]'
         \\    '--sample::Number of rows:(1 5 10 25 50 100 500 1000)'
         \\    '--output=[Write results to file]:file:_files'
         \\    '--xml-root=[Root element name]:name:'
@@ -171,6 +181,11 @@ fn generateFish(writer: *std.Io.Writer) !void {
         \\complete -c sql-pipe -s v -l verbose -d "Force row count to stderr"
         \\complete -c sql-pipe -s s -l silent -d "Suppress row count output"
         \\complete -c sql-pipe -l inspect -r -f -a "columns validate sample stats schema" -d "Inspect mode"
+        \\complete -c sql-pipe -l columns -d "Inspect columns (deprecated)"
+        \\complete -c sql-pipe -l validate -d "Validate input (deprecated)"
+        \\complete -c sql-pipe -l stats -d "Print stats (deprecated)"
+        \\complete -c sql-pipe -l profile -d "Print profile (deprecated)"
+        \\complete -c sql-pipe -l schema -d "Print schema (deprecated)"
         \\complete -c sql-pipe -l sample -r -f -a "1 5 10 25 50 100 500 1000" -d "Print schema and sample rows"
         \\
         \\# Output options

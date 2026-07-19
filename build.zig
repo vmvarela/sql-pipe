@@ -2041,6 +2041,16 @@ pub fn build(b: *std.Build) void {
     test_schema_semicolon.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_schema_semicolon.step);
 
+    // Integration test: --schema ignores --max-rows (regression test for PR 213)
+    // Should show all 5 rows in schema even with --max-rows 2
+    const test_schema_ignores_max_rows = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,val\n1,10\n2,20\n3,30\n4,40\n5,50\n' | ./zig-out/bin/sql-pipe --schema --max-rows 2)
+        \\echo "$result" | grep -q 'INTEGER'
+    });
+    test_schema_ignores_max_rows.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_schema_ignores_max_rows.step);
+
     // Integration test 176d: --schema with single file argument
     const test_schema_file = b.addSystemCommand(&.{
         "bash", "-c",
@@ -2921,6 +2931,16 @@ pub fn build(b: *std.Build) void {
     });
     test_stats_basic.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_stats_basic.step);
+
+    // Integration test: --stats ignores --max-rows (regression test for PR 213)
+    // Should show stats for all 5 rows even with --max-rows 2
+    const test_stats_ignores_max_rows = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,val\n1,10\n2,20\n3,30\n4,40\n5,50\n' | ./zig-out/bin/sql-pipe --stats --max-rows 2 2>/dev/null)
+        \\echo "$result" | grep -q '5' && echo "$result" | grep -q '30'
+    });
+    test_stats_ignores_max_rows.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_stats_ignores_max_rows.step);
 
     // Integration test: --profile alias works
     const test_stats_alias = b.addSystemCommand(&.{

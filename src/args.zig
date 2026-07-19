@@ -106,6 +106,7 @@ pub const SqlPipeError = error{
     InspectWithExplain,
     InspectSampleWithJson,
     InvalidInspectMode,
+    MissingInspectMode,
     ExplainWithOutput,
 };
 
@@ -468,7 +469,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             silent = true;
         } else if (std.mem.eql(u8, arg, "--inspect")) {
             i += 1;
-            if (i >= args.len) return error.InvalidInspectMode;
+            if (i >= args.len) return error.MissingInspectMode;
             const mode = InspectMode.parse(args[i]) catch return error.InvalidInspectMode;
             inspect_mode = mode;
         } else if (std.mem.startsWith(u8, arg, "--inspect=")) {
