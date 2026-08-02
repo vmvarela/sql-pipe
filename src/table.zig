@@ -22,10 +22,10 @@ const visual = @import("visual.zig");
 /// Memory: uses an arena allocator internally; all memory is freed on return.
 pub fn writeTable(
     allocator: std.mem.Allocator,
-    writer: *std.Io.Writer,
     stmt: *c.sqlite3_stmt,
     col_count: c_int,
     null_value: ?[]const u8,
+    writer: *std.Io.Writer,
 ) (std.mem.Allocator.Error || error{WriteFailed, StepFailed})!void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -281,7 +281,7 @@ test "isNumericString" {
 
 test "writeTable parameter order" {
     // Verify the public API compiles with the correct parameter order:
-    // writeTable(allocator, writer, stmt, col_count, null_value)
+    // writeTable(allocator, stmt, col_count, null_value, writer)
     // We can't easily call writeTable in a unit test without a database,
     // but we can verify the type signature.
     try std.testing.expect(true);

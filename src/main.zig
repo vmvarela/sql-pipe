@@ -29,44 +29,58 @@ const printUsage = args_mod.printUsage;
 const loadCsvInput = loader.loadCsvInput;
 const fmtThousands = loader.fmtThousands;
 
-/// Buffer writer that captures all output to an ArrayList for checksum computation.
-/// Uses std.Io.Writer.Allocating for dynamic allocation.
-const BufferWriter = std.Io.Writer.Allocating;
-
-/// Compute SHA-256 checksum of bytes and return hex string (allocated).
-fn computeChecksum(allocator: std.mem.Allocator, data: []const u8) ![]const u8 {
-    var hash: [32]u8 = undefined;
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(data);
-    hasher.final(&hash);
-
-    // Convert to hex
-    var hex_buf: [64]u8 = undefined;
-    const hex_chars = "0123456789abcdef";
-    for (hash, 0..) |byte, i| {
-        hex_buf[2 * i] = hex_chars[byte >> 4];
-        hex_buf[2 * i + 1] = hex_chars[byte & 0x0F];
-    }
-    return try allocator.dupe(u8, hex_buf[0..]);
-}
-
-/// Write buffered output to stdout and emit checksum to stderr.
-fn emitChecksum(
+/// Run a write function directly against stdout, or buffer its output and emit
+/// a SHA-256 checksum of that output to stderr when checksum is true.
+/// `pre_args` are spliced around the writer argument in write_fn's parameter
+/// list (write_fn must take a *std.Io.Writer as its last parameter).
+fn writeWithChecksum(
     allocator: std.mem.Allocator,
-    buffer_writer: *BufferWriter,
     stdout_writer: *std.Io.Writer,
     stderr_writer: *std.Io.Writer,
+    checksum: bool,
+    pre_args: anytype,
+    comptime write_fn: anytype,
 ) !void {
+    if (!checksum) {
+        try @call(.auto, write_fn, pre_args ++ .{stdout_writer});
+        return;
+    }
+
+    // ponytail: buffers full result set in memory for SHA-256; for GB-scale
+    // output, wrap writer in a hashing tee writer (O(1) memory).
+    var buffer_writer = std.Io.Writer.Allocating.init(allocator);
+    defer buffer_writer.deinit();
+    try @call(.auto, write_fn, pre_args ++ .{&buffer_writer.writer});
+
     const buffer = buffer_writer.toArrayList();
-    const hex_str = try computeChecksum(allocator, buffer.items);
-    defer allocator.free(hex_str);
 
-    // Write buffered output to actual stdout writer
+    // Compute SHA-256 of buffered output and convert to hex.
+    var hash: [32]u8 = undefined;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(buffer.items);
+    hasher.final(&hash);
+    const hex = std.fmt.bytesToHex(hash, .lower);
+
+    // Write buffered output to stdout, then emit checksum to stderr.
     try stdout_writer.writeAll(buffer.items);
-
-    // Emit checksum to stderr
-    try stderr_writer.print("checksum: {s}\n", .{hex_str});
+    try stderr_writer.print("checksum: {s}\n", .{&hex});
     try stderr_writer.flush();
+}
+
+/// Stream all result rows through the format OutputWriter (writer is last param
+/// so it can be passed to writeWithChecksum).
+fn writeStreaming(
+    out_writer: *format.OutputWriter,
+    allocator: std.mem.Allocator,
+    stmt: *c.sqlite3_stmt,
+    col_count: c_int,
+    writer: *std.Io.Writer,
+) !void {
+    try out_writer.begin(allocator, stmt, col_count, writer);
+    while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+        try out_writer.writeRow(stmt, writer);
+    }
+    try out_writer.end(writer);
 }
 
 const progress_interval = loader.progress_interval;
@@ -115,27 +129,13 @@ pub fn execQuery(
 
     // Table mode: buffer all rows and print a formatted table
     if (use_table) {
-        if (checksum) {
-            var buffer_writer = BufferWriter.init(allocator);
-            defer buffer_writer.deinit();
-            try table.writeTable(allocator, &buffer_writer.writer, stmt.?, col_count, null_value);
-            try emitChecksum(allocator, &buffer_writer, writer, stderr_writer);
-        } else {
-            try table.writeTable(allocator, writer, stmt.?, col_count, null_value);
-        }
+        try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{allocator, stmt.?, col_count, null_value}, table.writeTable);
         return;
     }
 
     // Markdown output: two-pass writer (not streaming)
     if (output_format == .markdown) {
-        if (checksum) {
-            var buffer_writer = BufferWriter.init(allocator);
-            defer buffer_writer.deinit();
-            try markdown.writeMarkdown(allocator, &buffer_writer.writer, stmt.?, col_count, null_value);
-            try emitChecksum(allocator, &buffer_writer, writer, stderr_writer);
-        } else {
-            try markdown.writeMarkdown(allocator, writer, stmt.?, col_count, null_value);
-        }
+        try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{allocator, stmt.?, col_count, null_value}, markdown.writeMarkdown);
         return;
     }
 
@@ -149,24 +149,7 @@ pub fn execQuery(
     });
     defer out_writer.deinit(allocator);
 
-    if (checksum) {
-        var buffer_writer = BufferWriter.init(allocator);
-        defer buffer_writer.deinit();
-
-        try out_writer.begin(allocator, stmt.?, col_count, &buffer_writer.writer);
-        while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-            try out_writer.writeRow(stmt.?, &buffer_writer.writer);
-        }
-        try out_writer.end(&buffer_writer.writer);
-
-        try emitChecksum(allocator, &buffer_writer, writer, stderr_writer);
-    } else {
-        try out_writer.begin(allocator, stmt.?, col_count, writer);
-        while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-            try out_writer.writeRow(stmt.?, writer);
-        }
-        try out_writer.end(writer);
-    }
+    try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt.?, col_count }, writeStreaming);
 }
 
 /// loadInput(allocator, io, db, table_name, input_format, reader, parsed, stderr_writer) → usize
@@ -597,38 +580,4 @@ pub fn main(init: std.process.Init.Minimal) void {
             };
         },
     }
-}
-
-test "computeChecksum - empty buffer" {
-    const allocator = std.testing.allocator;
-    const result = try computeChecksum(allocator, "");
-    defer allocator.free(result);
-    // SHA-256 of empty string
-    try std.testing.expectEqualStrings(result, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-}
-
-test "computeChecksum - simple string" {
-    const allocator = std.testing.allocator;
-    const result = try computeChecksum(allocator, "hello");
-    defer allocator.free(result);
-    // SHA-256 of "hello"
-    try std.testing.expectEqualStrings(result, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
-}
-
-test "computeChecksum - multi-line output" {
-    const allocator = std.testing.allocator;
-    const input = "Bob\nAlice\n";
-    const result = try computeChecksum(allocator, input);
-    defer allocator.free(result);
-    // SHA-256 of "Bob\nAlice\n"
-    try std.testing.expectEqualStrings(result, "081a774cb12f7bd5ea746c3b516da7b5bb8d6e7f62a30c6416f1e79c8958aef7");
-}
-
-test "computeChecksum - JSON output" {
-    const allocator = std.testing.allocator;
-    const input = "[{\"name\":\"Bob\",\"age\":25},{\"name\":\"Alice\",\"age\":30}]\n";
-    const result = try computeChecksum(allocator, input);
-    defer allocator.free(result);
-    // SHA-256 of the JSON string
-    try std.testing.expectEqualStrings(result, "22969ee30b434160d184c0b2819a52fb81ada7943ff3d33faef50177697e1d63");
 }
