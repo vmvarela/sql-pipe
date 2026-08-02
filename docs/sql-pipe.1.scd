@@ -253,8 +253,10 @@ OPTIONS
 
 		The entire result set is buffered in memory to compute the checksum.
 		For very large result sets, this may consume significant RAM.
-		Consider using *--max-rows* to limit the result size if memory is
-		a concern.
+		Add a *LIMIT* clause to your query to bound the result size.
+		*--max-rows* caps input rows, not output rows. Note:
+		*--checksum* defeats *--disk* — the result set always buffers in
+		RAM regardless of database backing.
 
 	*-r, --repl*
 		Enter an interactive REPL (read-eval-print loop) after loading

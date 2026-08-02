@@ -600,7 +600,7 @@ Alice
 
 The SHA-256 hash of the result set is printed to stderr as `checksum: <hash>`. The hash covers only stdout output (the result set), so it works correctly with `--output`, `--verbose`, `--explain`, and other flags that write to stderr. Skipped in inspect modes (`--columns`, `--validate`, `--sample`, `--stats`, `--schema`).
 
-> **Note:** The entire result set is buffered in memory to compute the checksum. For very large result sets, this may consume significant RAM. Consider using `--max-rows` to limit the result size if memory is a concern.
+> **Note:** The entire result set is buffered in memory to compute the checksum. For very large result sets, this may consume significant RAM. Add a `LIMIT` clause to your query to bound the result size. `--max-rows` caps input rows, not output rows. Note: `--checksum` defeats `--disk` — the result set always buffers in RAM regardless of database backing.
 
 ## Real-world examples
 
