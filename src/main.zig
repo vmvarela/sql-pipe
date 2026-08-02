@@ -17,6 +17,34 @@ const inspect_mode = @import("modes/inspect.zig");
 const repl_mode = @import("modes/repl.zig");
 const completions_mod = @import("completions.zig");
 
+// Windows console UTF-8 setup (Issue #201)
+const windows = @import("std").os.windows;
+const DWORD = windows.DWORD;
+const HANDLE = windows.HANDLE;
+const BOOL = windows.BOOL;
+const UINT = windows.UINT;
+const LPDWORD = *DWORD;
+
+const STD_OUTPUT_HANDLE: DWORD = @bitCast(@as(i32, -11));
+const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;
+
+extern "kernel32" fn SetConsoleOutputCP(wCodePageID: UINT) callconv(.winapi) BOOL;
+extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+extern "kernel32" fn GetConsoleMode(hConsoleHandle: HANDLE, lpMode: LPDWORD) callconv(.winapi) BOOL;
+extern "kernel32" fn SetConsoleMode(hConsoleHandle: HANDLE, dwMode: DWORD) callconv(.winapi) BOOL;
+
+/// Best-effort UTF-8 + VT support for the Windows console (Issue #201).
+/// No-op on non-Windows: body eliminated at compile time.
+fn setupConsoleOutput() void {
+    if (@import("builtin").os.tag == .windows) {
+        _ = SetConsoleOutputCP(65001);
+        const handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        var mode: DWORD = 0;
+        _ = GetConsoleMode(handle, &mode);
+        _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+}
+
 const VERSION: []const u8 = build_options.version;
 
 const SqlPipeError = args_mod.SqlPipeError;
@@ -373,6 +401,9 @@ fn run(
 pub fn main(init: std.process.Init.Minimal) void {
     // ponytail: c_allocator; DebugAllocator deinit was _ = discarded, leak detection was off
     const allocator = std.heap.c_allocator;
+
+    // Windows: enable UTF-8 output + VT processing for box-drawing chars (Issue #201)
+    setupConsoleOutput();
 
     var io = std.Io.Threaded.init_single_threaded;
 
