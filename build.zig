@@ -195,6 +195,18 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&test_no_infer.step);
     test_step.dependOn(&test_real.step);
 
+    // Portable SHA-256 checksum verification tool (replaces sha256sum/awk)
+    const checksum_verify = b.addExecutable(.{
+        .name = "checksum-verify",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/checksum_verify.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(checksum_verify);
+    test_step.dependOn(&checksum_verify.step);
+
     // HTTP input integration test (issue #171): server is a build-only fixture.
     const http_server = b.addExecutable(.{
         .name = "http-server",
@@ -3750,7 +3762,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum 'SELECT name FROM t ORDER BY age' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf 'Bob\nAlice\n' | sha256sum | awk '{print $1}')
+        \\expected=$(printf 'Bob\nAlice\n' | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3762,7 +3774,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum --json 'SELECT name, age FROM t ORDER BY age' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf '[{"name":"Bob","age":25},{"name":"Alice","age":30}]\n' | sha256sum | awk '{print $1}')
+        \\expected=$(printf '[{"name":"Bob","age":25},{"name":"Alice","age":30}]\n' | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3774,7 +3786,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum -O tsv 'SELECT name, age FROM t ORDER BY age' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf 'Bob\t25\nAlice\t30' | sha256sum | awk '{print $1}')
+        \\expected=$(printf 'Bob\t25\nAlice\t30' | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3786,7 +3798,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum --table 'SELECT * FROM t' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf '%s' "$stdout" | sha256sum | awk '{print $1}')
+        \\expected=$(printf '%s' "$stdout" | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3798,7 +3810,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum -O markdown 'SELECT * FROM t ORDER BY name' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf '%s' "$stdout" | sha256sum | awk '{print $1}')
+        \\expected=$(printf '%s' "$stdout" | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3811,7 +3823,7 @@ pub fn build(b: *std.Build) void {
         \\tmp=$(mktemp)
         \\printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum --output "$tmp" 'SELECT name FROM t ORDER BY age' 2>/tmp/checksum_err
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(sha256sum "$tmp" | awk '{print $1}')
+        \\expected=$(cat "$tmp" | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f "$tmp" /tmp/checksum_err
     });
@@ -3823,7 +3835,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum --header 'SELECT name, age FROM t ORDER BY age' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf 'name,age\nBob,25\nAlice,30\n' | sha256sum | awk '{print $1}')
+        \\expected=$(printf 'name,age\nBob,25\nAlice,30\n' | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3835,7 +3847,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum -O sql 'SELECT * FROM t ORDER BY name' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf '%s' "$stdout" | sha256sum | awk '{print $1}')
+        \\expected=$(printf '%s' "$stdout" | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3847,7 +3859,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum -O html 'SELECT * FROM t ORDER BY name' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf '%s' "$stdout" | sha256sum | awk '{print $1}')
+        \\expected=$(printf '%s' "$stdout" | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3859,7 +3871,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum -O xml 'SELECT * FROM t ORDER BY name' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf '%s' "$stdout" | sha256sum | awk '{print $1}')
+        \\expected=$(printf '%s' "$stdout" | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3871,7 +3883,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum -O ndjson 'SELECT name, age FROM t ORDER BY age' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf '{"name":"Bob","age":25}\n{"name":"Alice","age":30}\n' | sha256sum | awk '{print $1}')
+        \\expected=$(printf '{"name":"Bob","age":25}\n{"name":"Alice","age":30}\n' | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3883,7 +3895,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe --checksum 'SELECT name FROM t WHERE age > 100' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf '' | sha256sum | awk '{print $1}')
+        \\expected=$(printf '' | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3895,7 +3907,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,age\nAlice,30\nBob,25\n' | ./zig-out/bin/sql-pipe --checksum --disk 'SELECT name FROM t WHERE age > 27' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf 'Alice\n' | sha256sum | awk '{print $1}')
+        \\expected=$(printf 'Alice\n' | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });
@@ -3907,7 +3919,7 @@ pub fn build(b: *std.Build) void {
         "bash", "-c",
         \\stdout=$(printf 'name,score\nAlice,30\nBob,\n' | ./zig-out/bin/sql-pipe --checksum --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name' 2>/tmp/checksum_err)
         \\checksum=$(grep 'checksum:' /tmp/checksum_err | sed 's/.*checksum: //')
-        \\expected=$(printf '%s' "$stdout" | sha256sum | awk '{print $1}')
+        \\expected=$(printf '%s' "$stdout" | ./zig-out/bin/checksum-verify)
         \\[ "$checksum" = "$expected" ]
         \\rm -f /tmp/checksum_err
     });

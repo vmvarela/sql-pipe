@@ -251,6 +251,11 @@ OPTIONS
 		*--sample*, *--stats*, *--schema*) since they do not produce result
 		sets.
 
+		The entire result set is buffered in memory to compute the checksum.
+		For very large result sets, this may consume significant RAM.
+		Consider using *--max-rows* to limit the result size if memory is
+		a concern.
+
 	*-r, --repl*
 		Enter an interactive REPL (read-eval-print loop) after loading
 		input data. All input files are loaded into SQLite tables once at startup,
