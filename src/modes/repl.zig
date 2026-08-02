@@ -106,11 +106,11 @@ fn execReplQuery(
     main_table: []const u8,
 ) void {
     main_mod.execQuery(
-        allocator, db, query, stdout_writer,
+        allocator, db, query, stdout_writer, stderr_writer,
         parsed.header, parsed.output_format,
         parsed.xml_root, parsed.xml_row,
         parsed.sql_table, parsed.html_class,
-        parsed.null_value, use_table,
+        parsed.null_value, use_table, parsed.checksum,
     ) catch |err| switch (err) {
         error.PrepareQueryFailed => {
             stdout_writer.flush() catch |err_flush| std.log.err("failed to flush stdout: {}", .{err_flush});

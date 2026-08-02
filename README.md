@@ -373,6 +373,7 @@ When `-f` is used, all positional arguments are treated as data files (no positi
 | `--no-table` | Force CSV output even when stdout is a TTY |
 | `--null-value <string>` | Custom NULL representation in CSV/TSV/table output (default: `NULL`). JSON always uses native `null`. |
 | `--html-class <class>` | CSS class name for the HTML `<table>` element (`-O html` only) |
+| `--checksum` | Compute the SHA-256 hash of the result set and print it to stderr as `checksum: <hash>`. The hash covers only stdout output (the result set), not stderr messages. Works with all output formats, `--output`, `--disk`, `--save`, `--repl`, `--explain`, and `--verbose`. Skipped in inspect modes (`--columns`, `--validate`, `--sample`, `--stats`, `--schema`) since they don't produce result sets. |
 | `-f`, `--file <file>` | Read SQL query from file instead of command line |
 | `-v`, `--verbose` | Print `Loaded <n> rows in <t>s` to stderr after loading (always on TTY; forced with flag) |
 | `-s`, `--silent` | Suppress `Loaded <n> rows in <t>s` and the progress counter from stderr unconditionally. Cannot be combined with `-v`/`--verbose` |
@@ -587,6 +588,19 @@ West,200
 ```
 
 Useful for understanding how SQLite handles complex JOINs, aggregations, and subqueries — plan goes to stderr so stdout stays machine-parseable.
+
+### Verify result integrity with --checksum
+
+```sh
+$ printf 'name,age\nAlice,30\nBob,25\n' | sql-pipe --checksum 'SELECT name FROM t ORDER BY age'
+checksum: 081a774cb12f7bd5ea746c3b516da7b5bb8d6e7f62a30c6416f1e79c8958aef7
+Bob
+Alice
+```
+
+The SHA-256 hash of the result set is printed to stderr as `checksum: <hash>`. The hash covers only stdout output (the result set), so it works correctly with `--output`, `--verbose`, `--explain`, and other flags that write to stderr. Skipped in inspect modes (`--columns`, `--validate`, `--sample`, `--stats`, `--schema`).
+
+> **Note:** The entire result set is buffered in memory to compute the checksum. For very large result sets, this may consume significant RAM. Add a `LIMIT` clause to your query to bound the result size. `--max-rows` caps input rows, not output rows. Note: `--checksum` defeats `--disk` — the result set always buffers in RAM regardless of database backing.
 
 ## Real-world examples
 

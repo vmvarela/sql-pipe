@@ -28,6 +28,63 @@ const printUsage = args_mod.printUsage;
 
 const loadCsvInput = loader.loadCsvInput;
 const fmtThousands = loader.fmtThousands;
+
+/// Run a write function directly against stdout, or buffer its output and emit
+/// a SHA-256 checksum of that output to stderr when checksum is true.
+/// `pre_args` are spliced around the writer argument in write_fn's parameter
+/// list (write_fn must take a *std.Io.Writer as its last parameter).
+fn writeWithChecksum(
+    allocator: std.mem.Allocator,
+    stdout_writer: *std.Io.Writer,
+    stderr_writer: *std.Io.Writer,
+    checksum: bool,
+    pre_args: anytype,
+    comptime write_fn: anytype,
+) !void {
+    if (!checksum) {
+        try @call(.auto, write_fn, pre_args ++ .{stdout_writer});
+        return;
+    }
+
+    // ponytail: buffers full result set in memory for SHA-256; for GB-scale
+    // output, wrap writer in a hashing tee writer (O(1) memory). Note that
+    // --checksum defeats --disk: all output buffers in RAM regardless.
+    // Upgrade path: tee writer (O(1) memory) covers both --disk and --checksum.
+    var buffer_writer = std.Io.Writer.Allocating.init(allocator);
+    try @call(.auto, write_fn, pre_args ++ .{&buffer_writer.writer});
+
+    var buffer = buffer_writer.toArrayList();
+    defer buffer.deinit(allocator);
+
+    // Compute SHA-256 of buffered output and convert to hex.
+    var hash: [32]u8 = undefined;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(buffer.items);
+    hasher.final(&hash);
+    const hex = std.fmt.bytesToHex(hash, .lower);
+
+    // Write buffered output to stdout, then emit checksum to stderr.
+    try stdout_writer.writeAll(buffer.items);
+    try stderr_writer.print("checksum: {s}\n", .{&hex});
+    try stderr_writer.flush();
+}
+
+/// Stream all result rows through the format OutputWriter (writer is last param
+/// so it can be passed to writeWithChecksum).
+fn writeStreaming(
+    out_writer: *format.OutputWriter,
+    allocator: std.mem.Allocator,
+    stmt: *c.sqlite3_stmt,
+    col_count: c_int,
+    writer: *std.Io.Writer,
+) !void {
+    try out_writer.begin(allocator, stmt, col_count, writer);
+    while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
+        try out_writer.writeRow(stmt, writer);
+    }
+    try out_writer.end(writer);
+}
+
 const progress_interval = loader.progress_interval;
 const fatal = sqlite_mod.fatal;
 
@@ -51,6 +108,7 @@ pub fn execQuery(
     db: *c.sqlite3,
     query: []const u8,
     writer: *std.Io.Writer,
+    stderr_writer: *std.Io.Writer,
     header: bool,
     output_format: OutputFormat,
     xml_root: []const u8,
@@ -59,6 +117,7 @@ pub fn execQuery(
     html_class: []const u8,
     null_value: ?[]const u8,
     use_table: bool,
+    checksum: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || error{ WriteFailed, StepFailed })!void {
     const query_z = try allocator.dupeZ(u8, query);
     defer allocator.free(query_z);
@@ -72,13 +131,13 @@ pub fn execQuery(
 
     // Table mode: buffer all rows and print a formatted table
     if (use_table) {
-        try table.writeTable(allocator, writer, stmt.?, col_count, null_value);
+        try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{allocator, stmt.?, col_count, null_value}, table.writeTable);
         return;
     }
 
     // Markdown output: two-pass writer (not streaming)
     if (output_format == .markdown) {
-        try markdown.writeMarkdown(allocator, writer, stmt.?, col_count, null_value);
+        try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{allocator, stmt.?, col_count, null_value}, markdown.writeMarkdown);
         return;
     }
 
@@ -92,11 +151,7 @@ pub fn execQuery(
     });
     defer out_writer.deinit(allocator);
 
-    try out_writer.begin(allocator, stmt.?, col_count, writer);
-    while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-        try out_writer.writeRow(stmt.?, writer);
-    }
-    try out_writer.end(writer);
+    try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt.?, col_count }, writeStreaming);
 }
 
 /// loadInput(allocator, io, db, table_name, input_format, reader, parsed, stderr_writer) → usize
@@ -299,9 +354,19 @@ fn run(
         printQueryPlan(allocator, db, query, main_table, stderr_writer);
     }
 
-    execQuery(allocator, db, query, stdout_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.sql_table, parsed.html_class, parsed.null_value, use_table) catch {
-        stdout_writer.flush() catch |err| std.log.err("failed to flush output before fatal: {}", .{err});
-        sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+    execQuery(allocator, db, query, stdout_writer, stderr_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.sql_table, parsed.html_class, parsed.null_value, use_table, parsed.checksum) catch |err| switch (err) {
+        error.PrepareQueryFailed => {
+            stdout_writer.flush() catch |flush_err| std.log.err("failed to flush output before fatal: {}", .{flush_err});
+            sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+        },
+        error.OutOfMemory => {
+            stdout_writer.flush() catch |flush_err| std.log.err("failed to flush output before fatal: {}", .{flush_err});
+            fatal("out of memory", stderr_writer, .csv_error, .{});
+        },
+        else => {
+            stdout_writer.flush() catch |flush_err| std.log.err("failed to flush output before fatal: {}", .{flush_err});
+            fatal("{s}", stderr_writer, .csv_error, .{@errorName(err)});
+        },
     };
 }
 

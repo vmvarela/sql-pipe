@@ -3740,6 +3740,126 @@ pub fn build(b: *std.Build) void {
             \\rm -f /tmp/fuzz_empty.parquet
             \\echo "$msg" | grep -q 'EXIT:[1-9]'
         });
-        test_parquet_fuzz_empty.step.dependOn(b.getInstallStep());
-        test_step.dependOn(&test_parquet_fuzz_empty.step);
+    test_parquet_fuzz_empty.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_parquet_fuzz_empty.step);
+
+    // ─── --checksum integration tests (issue #204) ──────────────────────────────
+    // 25 data-driven cases (204a-204y). Scripts run with `set -euo pipefail` so a
+    // failed assertion actually fails the step (a bare `[` + trailing `rm -f`
+    // would silently mask failures).
+    const ChecksumTestType = enum {
+        checksum_match,
+        checksum_present,
+        checksum_absent,
+        help_flag,
+        completions_flag,
+    };
+    const ChecksumTest = struct {
+        name: []const u8, // test identifier, e.g. "basic", "json"
+        args: []const u8, // sql-pipe CLI args (may contain "$tmp" for --output/--save)
+        input: ?[]const u8, // stdin data; null = no stdin pipe
+        expected_output: ?[]const u8, // checksum_match: literal expected stdout; null = hash captured stdout
+        check_type: ChecksumTestType,
+        extra_check: ?[]const u8, // extra bash assertion line (checksum_present only)
+        use_temp_file: bool, // wrap "$tmp" in mktemp + cleanup (--output/--save cases)
+    };
+    const checksum_tests = [_]ChecksumTest{
+        .{ .name = "basic", .args = "--checksum 'SELECT name FROM t ORDER BY age'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = "Bob\nAlice\n", .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204a
+        .{ .name = "json", .args = "--checksum --json 'SELECT name, age FROM t ORDER BY age'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = "[{\"name\":\"Bob\",\"age\":25},{\"name\":\"Alice\",\"age\":30}]\n", .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204b
+        .{ .name = "tsv", .args = "--checksum -O tsv 'SELECT name, age FROM t ORDER BY age'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = "Bob\t25\nAlice\t30\n", .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204c
+        .{ .name = "table", .args = "--checksum --table 'SELECT * FROM t'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = null, .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204d
+        .{ .name = "markdown", .args = "--checksum -O markdown 'SELECT * FROM t ORDER BY name'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = null, .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204e
+        .{ .name = "output_file", .args = "--checksum --output \"$tmp\" 'SELECT name FROM t ORDER BY age'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = null, .check_type = .checksum_match, .extra_check = null, .use_temp_file = true }, // 204f
+        .{ .name = "header", .args = "--checksum --header 'SELECT name, age FROM t ORDER BY age'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = "name,age\nBob,25\nAlice,30\n", .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204g
+        .{ .name = "sql", .args = "--checksum -O sql 'SELECT * FROM t ORDER BY name'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = null, .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204h
+        .{ .name = "html", .args = "--checksum -O html 'SELECT * FROM t ORDER BY name'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = null, .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204i
+        .{ .name = "xml", .args = "--checksum -O xml 'SELECT * FROM t ORDER BY name'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = null, .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204j
+        .{ .name = "ndjson", .args = "--checksum -O ndjson 'SELECT name, age FROM t ORDER BY age'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = "{\"name\":\"Bob\",\"age\":25}\n{\"name\":\"Alice\",\"age\":30}\n", .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204k
+        .{ .name = "empty", .args = "--checksum 'SELECT name FROM t WHERE age > 100'", .input = "name,age\nAlice,30\n", .expected_output = "", .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204l
+        .{ .name = "disk", .args = "--checksum --disk 'SELECT name FROM t WHERE age > 27'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = "Alice\n", .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204m
+        .{ .name = "null_value", .args = "--checksum --null-value 'N/A' 'SELECT name, score FROM t ORDER BY name'", .input = "name,score\nAlice,30\nBob,\n", .expected_output = null, .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204n
+        .{ .name = "verbose", .args = "--checksum --verbose 'SELECT name FROM t ORDER BY name'", .input = "name,age\nAlice,30\nBob,25\nCarol,35\n", .expected_output = null, .check_type = .checksum_present, .extra_check = "grep -q 'Loaded 3 rows' \"$err_file\"", .use_temp_file = false }, // 204o
+        .{ .name = "explain", .args = "--checksum --explain 'SELECT name FROM t ORDER BY name'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = null, .check_type = .checksum_present, .extra_check = "grep -q 'QUERY PLAN:' \"$err_file\"", .use_temp_file = false }, // 204p
+        .{ .name = "save", .args = "--checksum --save \"$tmp\" 'SELECT name FROM t ORDER BY name'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = null, .check_type = .checksum_present, .extra_check = "[ \"$(head -c 15 \"$tmp\")\" = \"SQLite format 3\" ]", .use_temp_file = true }, // 204q
+        .{ .name = "repl", .args = "--checksum --repl --no-stdin", .input = "SELECT 1 as one;\n.exit\n", .expected_output = null, .check_type = .checksum_present, .extra_check = null, .use_temp_file = false }, // 204r
+        .{ .name = "silent", .args = "--checksum --silent 'SELECT name FROM t'", .input = "name,age\nAlice,30\nBob,25\n", .expected_output = "Alice\nBob\n", .check_type = .checksum_match, .extra_check = null, .use_temp_file = false }, // 204z
+        .{ .name = "repl_multi", .args = "--checksum --repl --no-stdin", .input = "SELECT 1 as one;\nSELECT 2 as two;\nSELECT 3 as three;\n.exit\n", .expected_output = null, .check_type = .checksum_present, .extra_check = "[ \"$(grep -c 'checksum:' \"$err_file\")\" = \"3\" ]", .use_temp_file = false }, // 204aa
+        .{ .name = "columns", .args = "--checksum --columns", .input = "name,age\nAlice,30\n", .expected_output = null, .check_type = .checksum_absent, .extra_check = null, .use_temp_file = false }, // 204s
+        .{ .name = "validate", .args = "--checksum --validate", .input = "name,age\nAlice,30\n", .expected_output = null, .check_type = .checksum_absent, .extra_check = null, .use_temp_file = false }, // 204t
+        .{ .name = "sample", .args = "--checksum --sample 1", .input = "name,age\nAlice,30\n", .expected_output = null, .check_type = .checksum_absent, .extra_check = null, .use_temp_file = false }, // 204u
+        .{ .name = "stats", .args = "--checksum --stats", .input = "name,age\nAlice,30\n", .expected_output = null, .check_type = .checksum_absent, .extra_check = null, .use_temp_file = false }, // 204v
+        .{ .name = "schema", .args = "--checksum --schema", .input = "name,age\nAlice,30\n", .expected_output = null, .check_type = .checksum_absent, .extra_check = null, .use_temp_file = false }, // 204w
+        .{ .name = "help", .args = "--help", .input = null, .expected_output = null, .check_type = .help_flag, .extra_check = null, .use_temp_file = false }, // 204x
+        .{ .name = "completions", .args = "--completions bash", .input = null, .expected_output = null, .check_type = .completions_flag, .extra_check = null, .use_temp_file = false }, // 204y
+    };
+
+    for (checksum_tests) |t| {
+        const script = switch (t.check_type) {
+            .help_flag => b.allocator.dupe(u8, "./zig-out/bin/sql-pipe --help 2>&1 >/dev/null | grep -q -- '--checksum'") catch unreachable,
+            .completions_flag => b.allocator.dupe(u8, "./zig-out/bin/sql-pipe --completions bash | grep -q -- '--checksum'") catch unreachable,
+            .checksum_absent => std.fmt.allocPrint(b.allocator,
+                \\set -euo pipefail
+                \\err_file=$(mktemp)
+                \\stdout=$(printf '{s}' | ./zig-out/bin/sql-pipe {s} 2>"$err_file")
+                \\! grep -q 'checksum:' "$err_file"
+                \\rm -f "$err_file"
+            , .{ t.input.?, t.args }) catch unreachable,
+            .checksum_present => if (t.use_temp_file)
+                std.fmt.allocPrint(b.allocator,
+                    \\set -euo pipefail
+                    \\tmp=$(mktemp)
+                    \\err_file=$(mktemp)
+                    \\stdout=$(printf '{s}' | ./zig-out/bin/sql-pipe {s} 2>"$err_file")
+                    \\grep -q 'checksum:' "$err_file"
+                    \\{s}
+                    \\rm -f "$tmp" "$err_file"
+                , .{ t.input.?, t.args, t.extra_check.? }) catch unreachable
+            else
+                std.fmt.allocPrint(b.allocator,
+                    \\set -euo pipefail
+                    \\err_file=$(mktemp)
+                    \\stdout=$(printf '{s}' | ./zig-out/bin/sql-pipe {s} 2>"$err_file")
+                    \\grep -q 'checksum:' "$err_file"
+                    \\{s}
+                    \\rm -f "$err_file"
+                , .{ t.input.?, t.args, t.extra_check orelse "" }) catch unreachable,
+            .checksum_match => if (t.use_temp_file)
+                std.fmt.allocPrint(b.allocator,
+                    \\set -euo pipefail
+                    \\tmp=$(mktemp)
+                    \\err_file=$(mktemp)
+                    \\stdout=$(printf '{s}' | ./zig-out/bin/sql-pipe {s} 2>"$err_file")
+                    \\checksum=$(grep 'checksum:' "$err_file" | sed 's/.*checksum: //')
+                    \\expected=$(cat "$tmp" | sha256sum | awk '{{print $1}}')
+                    \\[ "$checksum" = "$expected" ]
+                    \\rm -f "$tmp" "$err_file"
+                , .{ t.input.?, t.args }) catch unreachable
+            else if (t.expected_output) |expected|
+                std.fmt.allocPrint(b.allocator,
+                    \\set -euo pipefail
+                    \\err_file=$(mktemp)
+                    \\stdout=$(printf '{s}' | ./zig-out/bin/sql-pipe {s} 2>"$err_file")
+                    \\checksum=$(grep 'checksum:' "$err_file" | sed 's/.*checksum: //')
+                    \\expected=$(printf '{s}' | sha256sum | awk '{{print $1}}')
+                    \\[ "$checksum" = "$expected" ]
+                    \\rm -f "$err_file"
+                , .{ t.input.?, t.args, expected }) catch unreachable
+            else
+                // Hash redirected stdout: $( ) capture strips trailing newlines,
+                // which would break the checksum comparison.
+                std.fmt.allocPrint(b.allocator,
+                    \\set -euo pipefail
+                    \\tmp=$(mktemp)
+                    \\err_file=$(mktemp)
+                    \\printf '{s}' | ./zig-out/bin/sql-pipe {s} > "$tmp" 2>"$err_file"
+                    \\checksum=$(grep 'checksum:' "$err_file" | sed 's/.*checksum: //')
+                    \\expected=$(sha256sum "$tmp" | awk '{{print $1}}')
+                    \\[ "$checksum" = "$expected" ]
+                    \\rm -f "$tmp" "$err_file"
+                , .{ t.input.?, t.args }) catch unreachable,
+        };
+        const test_checksum = b.addSystemCommand(&.{ "bash", "-c", script });
+        test_checksum.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_checksum.step);
+    }
 }

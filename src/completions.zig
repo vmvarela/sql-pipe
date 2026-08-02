@@ -82,9 +82,10 @@ fn generateBash(writer: *std.Io.Writer) !void {
         \\      --explain
         \\      --repl -r
         \\      --table --no-table
-        \\      --null-value
-        \\      --html-class
-        \\      --completions
+         \\      --null-value
+         \\      --html-class
+         \\      --checksum
+         \\      --completions
         \\      --columns
         \\      --file -f
         \\      --help -h
@@ -144,6 +145,7 @@ fn generateZsh(writer: *std.Io.Writer) !void {
         \\    '--no-table[Force CSV output]'
         \\    '--null-value=[Custom NULL representation]:string:'
         \\    '--html-class=[HTML table CSS class]:class:'
+        \\    '--checksum[Compute SHA-256 checksum of result set to stderr]'
         \\    '--completions=[Generate shell completions]:shell:(bash zsh fish)'
         \\    '(-f --file)'{-f+,--file=}'[Read SQL query from file]:file:_files'
         \\    '(-h --help)'{-h,--help}'[Show help message]'
@@ -201,6 +203,7 @@ fn generateFish(writer: *std.Io.Writer) !void {
         \\complete -c sql-pipe -l no-table -d "Force CSV output"
         \\complete -c sql-pipe -l null-value -r -d "Custom NULL representation"
         \\complete -c sql-pipe -l html-class -r -d "CSS class for HTML table"
+        \\complete -c sql-pipe -l checksum -d "Compute SHA-256 checksum of result set to stderr"
         \\
         \\# Meta options
         \\complete -c sql-pipe -l completions -r -f -a "bash zsh fish" -d "Generate shell completions"

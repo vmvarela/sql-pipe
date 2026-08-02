@@ -242,6 +242,22 @@ OPTIONS
 		attribute. Example: *--html-class 'data-table sortable'* produces
 		*<table class="data-table sortable">*.
 
+	*--checksum*
+		Compute the SHA-256 hash of the result set and print it to standard
+		error as *checksum: <hash>*. The hash covers only stdout output (the
+		result set), not stderr messages. Works with all output formats,
+		*--output*, *--disk*, *--save*, *--repl*, *--explain*, and
+		*--verbose*. Skipped in inspect modes (*--columns*, *--validate*,
+		*--sample*, *--stats*, *--schema*) since they do not produce result
+		sets.
+
+		The entire result set is buffered in memory to compute the checksum.
+		For very large result sets, this may consume significant RAM.
+		Add a *LIMIT* clause to your query to bound the result size.
+		*--max-rows* caps input rows, not output rows. Note:
+		*--checksum* defeats *--disk* — the result set always buffers in
+		RAM regardless of database backing.
+
 	*-r, --repl*
 		Enter an interactive REPL (read-eval-print loop) after loading
 		input data. All input files are loaded into SQLite tables once at startup,
@@ -470,6 +486,13 @@ EXAMPLES
 		QUERY PLAN: SCAN t
 		East,100
 		West,200
+
+	Compute a SHA-256 checksum of the result set (hash goes to stderr):
+
+		$ printf 'name,age\nAlice,30\nBob,25\n' | sql-pipe --checksum 'SELECT name FROM t ORDER BY age'
+		checksum: 081a774cb12f7bd5ea746c3b516da7b5bb8d6e7f62a30c6416f1e79c8958aef7
+		Bob
+		Alice
 
 	Interactive REPL mode (explore data iteratively):
 

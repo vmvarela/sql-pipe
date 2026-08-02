@@ -124,7 +124,7 @@ pub const OutputWriter = struct {
         self.* = undefined;
     }
 
-    /// Write any format preamble and collect column metadata.
+/// Write any format preamble and collect column metadata.
     ///
     /// JSON:    writes '['
     /// XML:     writes the XML declaration and opening root element
