@@ -170,6 +170,8 @@ pub const ParsedArgs = struct {
     html_class: []const u8 = "",
     /// Custom string for NULL values in output (default: "NULL" for CSV/TSV/table).
     null_value: ?[]const u8 = null,
+    /// Emit SHA-256 checksum of result set to stderr when true.
+    checksum: bool = false,
     /// Maximum response body size in bytes for --url (default: 100MB).
     max_body_size: usize = 100 * 1024 * 1024,
     /// When set, run in --inspect mode instead of normal query mode.
@@ -279,8 +281,9 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --table                      Force pretty-printed table output (auto-detected on TTY)
         \\  --no-table                   Force CSV output even when stdout is a TTY
         \\  --null-value <string>        Custom NULL representation in output (default: "NULL" for CSV/TSV/table)
-        \\  --html-class <class>         CSS class name for the HTML <table> element (-O html only)
-        \\  -f, --file <file>            Read SQL query from file instead of command line
+         \\  --html-class <class>         CSS class name for the HTML <table> element (-O html only)
+         \\  --checksum                   Emit SHA-256 hash of result set to stderr
+         \\  -f, --file <file>            Read SQL query from file instead of command line
         \\  --completions <shell>        Generate shell completion script (bash, zsh, fish)
         \\  -h, --help                   Show this help message and exit
         \\  -V, --version                Show version and exit
@@ -392,6 +395,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var xml_root_input: ?[]const u8 = null;
     var xml_row_input: ?[]const u8 = null;
     var null_value: ?[]const u8 = null;
+    var checksum = false;
     var json_path: ?[]const u8 = null;
     var inspect_mode: ?InspectMode = null;
     var inspect_sample_n: usize = 10;
@@ -575,6 +579,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             html_class = args[i];
         } else if (std.mem.startsWith(u8, arg, "--html-class=")) {
             html_class = arg["--html-class=".len..];
+        } else if (std.mem.eql(u8, arg, "--checksum")) {
+            checksum = true;
         } else if (std.mem.eql(u8, arg, "--no-table")) {
             table_mode = .never;
         } else if (std.mem.eql(u8, arg, "--completions")) {
@@ -980,6 +986,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .sql_table = sql_table,
         .html_class = html_class,
         .null_value = null_value,
+        .checksum = checksum,
         .max_body_size = max_body_size,
     };
 
