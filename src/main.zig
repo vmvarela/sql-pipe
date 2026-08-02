@@ -18,15 +18,15 @@ const repl_mode = @import("modes/repl.zig");
 const completions_mod = @import("completions.zig");
 
 // Windows console UTF-8 setup (Issue #201)
-const windows = @import("std").os.windows;
-const DWORD = windows.DWORD;
-const HANDLE = windows.HANDLE;
-const BOOL = windows.BOOL;
-const UINT = windows.UINT;
+const DWORD = std.os.windows.DWORD;
+const HANDLE = std.os.windows.HANDLE;
+const BOOL = std.os.windows.BOOL;
+const UINT = std.os.windows.UINT;
 const LPDWORD = *DWORD;
 
-const STD_OUTPUT_HANDLE: DWORD = @bitCast(@as(i32, -11));
+const STD_OUTPUT_HANDLE: DWORD = @bitCast(@as(i32, -11)); // 0xFFFFFFF5
 const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;
+const INVALID_HANDLE_VALUE: HANDLE = @ptrFromInt(std.math.maxInt(usize));
 
 extern "kernel32" fn SetConsoleOutputCP(wCodePageID: UINT) callconv(.winapi) BOOL;
 extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
@@ -39,6 +39,7 @@ fn setupConsoleOutput() void {
     if (@import("builtin").os.tag == .windows) {
         _ = SetConsoleOutputCP(65001);
         const handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (handle == INVALID_HANDLE_VALUE) return;
         var mode: DWORD = 0;
         _ = GetConsoleMode(handle, &mode);
         _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
