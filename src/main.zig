@@ -47,12 +47,14 @@ fn writeWithChecksum(
     }
 
     // ponytail: buffers full result set in memory for SHA-256; for GB-scale
-    // output, wrap writer in a hashing tee writer (O(1) memory).
+    // output, wrap writer in a hashing tee writer (O(1) memory). Note that
+    // --checksum defeats --disk: all output buffers in RAM regardless.
+    // Upgrade path: tee writer (O(1) memory) covers both --disk and --checksum.
     var buffer_writer = std.Io.Writer.Allocating.init(allocator);
-    defer buffer_writer.deinit();
     try @call(.auto, write_fn, pre_args ++ .{&buffer_writer.writer});
 
-    const buffer = buffer_writer.toArrayList();
+    var buffer = buffer_writer.toArrayList();
+    defer buffer.deinit(allocator);
 
     // Compute SHA-256 of buffered output and convert to hex.
     var hash: [32]u8 = undefined;
@@ -352,9 +354,19 @@ fn run(
         printQueryPlan(allocator, db, query, main_table, stderr_writer);
     }
 
-    execQuery(allocator, db, query, stdout_writer, stderr_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.sql_table, parsed.html_class, parsed.null_value, use_table, parsed.checksum) catch {
-        stdout_writer.flush() catch |err| std.log.err("failed to flush output before fatal: {}", .{err});
-        sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+    execQuery(allocator, db, query, stdout_writer, stderr_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.sql_table, parsed.html_class, parsed.null_value, use_table, parsed.checksum) catch |err| switch (err) {
+        error.PrepareQueryFailed => {
+            stdout_writer.flush() catch |flush_err| std.log.err("failed to flush output before fatal: {}", .{flush_err});
+            sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+        },
+        error.OutOfMemory => {
+            stdout_writer.flush() catch |flush_err| std.log.err("failed to flush output before fatal: {}", .{flush_err});
+            fatal("out of memory", stderr_writer, .csv_error, .{});
+        },
+        else => {
+            stdout_writer.flush() catch |flush_err| std.log.err("failed to flush output before fatal: {}", .{flush_err});
+            fatal("{s}", stderr_writer, .csv_error, .{@errorName(err)});
+        },
     };
 }
 
