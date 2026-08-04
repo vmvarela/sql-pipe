@@ -17,7 +17,7 @@ CLI tool that pipes structured data (CSV, TSV, JSON, NDJSON, XML, YAML, Parquet)
 | `json.zig` | JSON array + NDJSON input loading, JSON/NDJSON output formatting |
 | `xml.zig` | Custom row-based XML parser, XML output formatting (header/row/footer) |
 | `yaml.zig` | YAML sequence-of-mappings input loader via libyaml FFI |
-| `parquet.zig` | Parquet columnar input loader via carquet C library FFI (physical + logical type mapping, batch insert) |
+| `parquet.zig` | Parquet columnar input loader via zig-parquet DynamicReader API (physical + logical type mapping, batch insert) |
 | `table.zig` | Pretty-printed table (box-drawing) — two-pass streaming, O(cols) memory |
 | `markdown.zig` | Markdown table output — two-pass streaming, O(cols) memory |
 | `visual.zig` | UTF-8 display-width helpers (CJK width 2, emoji width 2) |
@@ -40,7 +40,7 @@ CLI tool that pipes structured data (CSV, TSV, JSON, NDJSON, XML, YAML, Parquet)
 
 **Comptime enum reflection.** Both `InputFormat` and `OutputFormat` use `std.meta.stringToEnum` for parsing and `std.fs.path.extension` combined with `stringToEnum` for file extension auto-detection. Zig's comptime reflection eliminates manual switch/match tables for format names.
 
-**FFI-backed columnar loader.** `parquet.zig` reads the entire input into a memory buffer, validates the `PAR1` magic header, then hands it to the carquet C reader (`carquet_reader_open_buffer`). Column metadata comes from walking the carquet schema tree: physical types (BOOLEAN/INT32/INT64/FLOAT/DOUBLE/BYTE_ARRAY/FIXED_LEN_BYTE_ARRAY/INT96) map to SQLite INTEGER/REAL/TEXT via `physToColType()`, with logical types (DATE, TIME, TIMESTAMP, DECIMAL) overriding to TEXT (or INTEGER for scale-0 DECIMAL). Rows are inserted in batches of 10,000 via the carquet batch reader, with logical-type values converted to ISO text (epoch-day/seconds/millis → `YYYY-MM-DD HH:MM:SS`, decimal → text with scale). `readLogicalType()` reads the `carquet_logical_type_t` C union as raw bytes (`ponytail:` assumption of the LP64 struct layout — swap to typed accessors if carquet exposes them). `loadParquetInput` shares the loaders' pattern of `defer`-freeing accumulated column metadata arrays. Note: `completions.zig` shell-completion word lists for `--input-format` were not extended to include parquet.
+**Pure Zig columnar loader.** `parquet.zig` reads the entire input into a memory buffer, validates the `PAR1` magic header, then hands it to the zig-parquet DynamicReader (`openBufferDynamic`). Column metadata comes from walking the schema tree: physical types (BOOLEAN/INT32/INT64/FLOAT/DOUBLE/BYTE_ARRAY/FIXED_LEN_BYTE_ARRAY/INT96) map to SQLite INTEGER/REAL/TEXT via `physicalToAffinity()`, with logical types (DATE, TIME, TIMESTAMP, DECIMAL) overriding to TEXT (or INTEGER for scale-0 DECIMAL). Rows are inserted in batches per row group via `readAllRows()`, with logical-type values converted to ISO text (epoch-day/seconds/millis → `YYYY-MM-DD HH:MM:SS`, decimal → text with scale). `loadParquetInput` shares the loaders' pattern of `defer`-freeing accumulated column metadata arrays. Note: `completions.zig` shell-completion word lists for `--input-format` were not extended to include parquet.
 
 **Arena + defer memory management.** Functions like `writeTable` and `writeMarkdown` use arena allocators with `defer arena.deinit()`. The `run()` function in `main.zig` uses a per-function arena for args and defers cleanup. The XML parser's `Column` struct owns its value with explicit `defer` cleanup at every call site. YAML input uses a block of `defer` statements to free accumulated key/value lists.
 
@@ -70,8 +70,8 @@ CLI args → parseArgs() → ArgsResult (tagged union)
                 │              │      yaml   → yaml.zig:loadYamlInput()
                 │              │               libyaml event parser → first mapping keys = cols → SQLite
                 │              │      parquet→ parquet.zig:loadParquetInput()
-                │              │               read-all-into-buffer → carquet C reader → SQLite
-                │              │               physical+logical type map → batch insert (10k rows)
+                │              │               read-all-into-buffer → zig-parquet DynamicReader → SQLite
+                │              │               physical+logical type map → batch insert (per row group)
                 │              │
                 │──── execQuery()
                 │     │   sqlite3_prepare_v2 → sqlite3_step loop
@@ -97,7 +97,6 @@ CLI args → parseArgs() → ArgsResult (tagged union)
 ### External C dependencies (FFI)
 - **SQLite3** (`c` module) — `sqlite3_open`, `sqlite3_prepare_v2`, `sqlite3_step`, `sqlite3_column_*`, `sqlite3_bind_*`, `sqlite3_exec`, etc. Used by every loader and the query executor.
 - **libyaml** (`yaml` module) — `yaml_parser_initialize`, `yaml_parser_set_input_string`, `yaml_parser_parse`, `yaml_event_t`, etc. Used exclusively by `yaml.zig`.
-- **carquet** (`c` module via `@cImport` of `carquet/carquet.h`) — `carquet_reader_open_buffer`, `carquet_schema_*`, `carquet_batch_reader_*`, `carquet_row_batch_column`, etc. Used exclusively by `parquet.zig`. Bundled with compression libs (zstd, lz4, zlib) as C source in `lib/carquet`.
 - **Zig stdlib** — `std.http.Client` for HTTP requests (`http.zig`).
 
 ### Import graph
@@ -111,7 +110,7 @@ main.zig
   ├── json.zig        ── depends on sqlite.zig
   ├── xml.zig         ── depends on sqlite.zig
   ├── yaml.zig        ── depends on sqlite.zig
-  ├── parquet.zig     ── depends on sqlite.zig, c (carquet FFI)
+  ├── parquet.zig     ── depends on sqlite.zig, zig_parquet (DynamicReader)
   ├── http.zig        ── depends on format.zig
   ├── table.zig       ── depends on sqlite.zig, visual.zig
   ├── markdown.zig    ── depends on sqlite.zig, visual.zig
@@ -126,7 +125,7 @@ main.zig
 - `build_options` provides `VERSION` string via build system.
 - `c` module provides C API declarations (generated or hand-written Zig bindings for sqlite3 and libyaml).
 - `yaml` module provides Zig bindings for libyaml (separate from `c`).
-- `lib/carquet` supplies the carquet C sources plus bundled compression libs (zstd, lz4, zlib), compiled as static C objects linked into the executable; include paths added for `lib/carquet/include` and `lib/carquet/src`.
+- `zig_parquet` module provides pure Zig Parquet reader (zig-parquet library).
 
 ### Consumed by
 - `src/modes/` — columns, validate, sample, stats, and schema modes all consume `args.zig` types, `format.zig` enums, and share `sqlite.zig` helpers and format-specific loaders.

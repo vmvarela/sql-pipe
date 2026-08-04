@@ -54,6 +54,16 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("yaml", translate_yaml.createModule());
 
+    // Parquet reader: pure Zig library with pure-Zig compression codecs (zstd, gzip, snappy, lz4, brotli).
+    // Replaces bundled carquet C library + zstd/lz4/zlib C sources.
+    // codecs=zig-only: no C compression sources are compiled (all codecs are pure Zig).
+    const zig_parquet = b.dependency("zig_parquet", .{
+        .target = target,
+        .optimize = optimize,
+        .codecs = "zig-only",
+    });
+    exe.root_module.addImport("zig_parquet", zig_parquet.module("parquet"));
+
     if (bundle_sqlite) {
         exe.root_module.addIncludePath(b.path("lib"));
         exe.root_module.addCSourceFile(.{
@@ -80,63 +90,6 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/reader.c"), .flags = &.{} });
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/writer.c"), .flags = &.{} });
     exe.root_module.addCSourceFile(.{ .file = b.path("lib/yaml/loader.c"), .flags = &.{} });
-
-    // Parquet support via carquet C library (MIT, by Johan Natter).
-    // Compression libs (zstd, lz4, zlib) bundled as C source alongside carquet.
-    // All statically linked — zero runtime deps.
-    // NetBSD: Zig's bundled libc stdio.h uses GCC extensions @cImport can't
-    // parse. Shadow it with a minimal shim that only declares what carquet needs.
-    if (target.result.os.tag == .netbsd) {
-        exe.root_module.addIncludePath(b.path("lib/carquet/netbsd-shim"));
-    }
-
-    exe.root_module.addIncludePath(b.path("lib/carquet/include"));
-    exe.root_module.addIncludePath(b.path("lib/carquet/src"));
-    exe.root_module.addIncludePath(b.path("lib/zstd"));
-    exe.root_module.addIncludePath(b.path("lib/lz4"));
-    exe.root_module.addIncludePath(b.path("lib/zlib"));
-
-    const carquet_src_root = "lib/carquet/src";
-    const carquet_flags = &.{ "-std=gnu11", "-D_GNU_SOURCE" };
-    inline for (.{
-        "core/arena.c", "core/allocator.c", "core/buffer.c",
-        "core/bitpack.c", "core/endian.c", "core/error.c", "core/geo_wkb.c",
-        "thrift/thrift_decode.c", "thrift/thrift_encode.c", "thrift/parquet_types.c",
-        "encoding/plain.c", "encoding/rle.c", "encoding/delta.c",
-        "encoding/delta_length.c", "encoding/delta_strings.c",
-        "encoding/dictionary.c", "encoding/byte_stream_split.c",
-        "compression/lz4.c", "compression/snappy.c", "compression/zstd.c",
-        "compression/gzip.c", "compression/custom.c",
-        "simd/detect.c", "simd/dispatch.c",
-        "reader/file_reader.c", "reader/batch_reader.c", "reader/column_reader.c",
-        "reader/page_reader.c", "reader/row_group_reader.c",
-        "reader/mmap_reader.c", "reader/statistics.c", "reader/page_filter.c",
-        "reader/worker_pool.c", "reader/arrow_c_export.c",
-        "reader/arrow_c_read.c", "reader/arrow_schema_read.c",
-        "writer/file_writer.c", "writer/row_group_writer.c", "writer/column_writer.c",
-        "writer/page_writer.c", "writer/arrow_schema.c", "writer/arrow_c_import.c",
-        "metadata/schema.c", "metadata/bloom_filter.c", "metadata/page_index.c",
-        "util/crc32.c", "util/xxhash.c",
-    }) |src_file| {
-        exe.root_module.addCSourceFile(.{
-            .file = b.path(carquet_src_root ++ "/" ++ src_file),
-            .flags = carquet_flags,
-        });
-    }
-
-    // Bundled compression libraries (C source, cross-compiles everywhere)
-    exe.root_module.addCSourceFile(.{ .file = b.path("lib/zstd/zstd.c"), .flags = &.{"-std=gnu11"} });
-    exe.root_module.addCSourceFile(.{ .file = b.path("lib/lz4/lz4.c"), .flags = &.{"-std=gnu11"} });
-    inline for (.{
-        "adler32.c", "compress.c", "crc32.c", "deflate.c",
-        "infback.c", "inffast.c",
-        "inflate.c", "inftrees.c", "trees.c", "uncompr.c", "zutil.c",
-    }) |zf| {
-        exe.root_module.addCSourceFile(.{ .file = b.path("lib/zlib/" ++ zf), .flags = &.{"-std=gnu11"} });
-    }
-
-    exe.root_module.linkSystemLibrary("pthread", .{});
-    exe.root_module.linkSystemLibrary("m", .{});
 
     b.installArtifact(exe);
 
