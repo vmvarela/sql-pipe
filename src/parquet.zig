@@ -140,7 +140,8 @@ fn intToBuf(value: i64, buf: []u8) []const u8 {
 /// Map a Parquet physical type to a SQLite ColumnType (no logical type mapping).
 fn physicalToAffinity(phys: parquet.format.PhysicalType) sqlite_mod.ColumnType {
     return switch (phys) {
-        .boolean, .int32, .int64, .int96 => .INTEGER,
+        .boolean, .int32, .int64 => .INTEGER,
+        .int96 => .TEXT, // bound as ISO timestamp text
         .float, .double => .REAL,
         .byte_array, .fixed_len_byte_array => .TEXT,
     };

@@ -3661,6 +3661,18 @@ pub fn build(b: *std.Build) void {
         test_parquet_columns.step.dependOn(b.getInstallStep());
         test_step.dependOn(&test_parquet_columns.step);
 
+        // Integration test 206g: Parquet INT96 legacy timestamps → TEXT column with ISO values
+        const test_parquet_int96 = b.addSystemCommand(&.{
+            "bash", "-c",
+            \\result=$(./zig-out/bin/sql-pipe tests/fixtures/int96.parquet 'SELECT ts FROM int96 ORDER BY ts')
+            \\expected=$(printf '2023-06-01 00:00:00\n2024-01-15 10:30:00')
+            \\[ "$result" = "$expected" ]
+            \\schema=$(./zig-out/bin/sql-pipe tests/fixtures/int96.parquet --schema)
+            \\echo "$schema" | grep -q '"ts" TEXT'
+        });
+        test_parquet_int96.step.dependOn(b.getInstallStep());
+        test_step.dependOn(&test_parquet_int96.step);
+
         // Fuzzing tests: malformed Parquet files must not crash
         const test_parquet_fuzz_truncated = b.addSystemCommand(&.{
             "bash", "-c",
