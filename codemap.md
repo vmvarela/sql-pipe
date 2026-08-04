@@ -2,12 +2,12 @@
 
 ## Project Responsibility
 
-CLI tool that pipes structured data (CSV, TSV, JSON, NDJSON, XML, YAML, Parquet) into an in-memory SQLite engine, runs a user-supplied SQL query, and emits results in eight formats (CSV, TSV, JSON, NDJSON, XML, Markdown, HTML table, SQL INSERT, pretty-printed table). Also provides ancillary modes for column listing, validation, sampling, statistics, schema DDL generation, and fused `--inspect` — plus a native interactive `--repl` — and shell completion for bash/zsh/fish. Single binary, zero external dependencies, bundles SQLite amalgamation, libyaml subset, and carquet (Parquet) C library.
+CLI tool that pipes structured data (CSV, TSV, JSON, NDJSON, XML, YAML, Parquet) into an in-memory SQLite engine, runs a user-supplied SQL query, and emits results in eight formats (CSV, TSV, JSON, NDJSON, XML, Markdown, HTML table, SQL INSERT, pretty-printed table). Also provides ancillary modes for column listing, validation, sampling, statistics, schema DDL generation, and fused `--inspect` — plus a native interactive `--repl` — and shell completion for bash/zsh/fish. Single binary, zero external dependencies, bundles SQLite amalgamation, libyaml subset, and zig-parquet (Parquet) pure Zig library.
 
 ## System Entry Points
 
 - `src/main.zig` — CLI entry point, argument parsing, mode dispatch, pipeline orchestration
-- `build.zig` — Zig build system with 120+ integration tests, bundles C deps (sqlite3, libyaml, carquet)
+- `build.zig` — Zig build system with 120+ integration tests, bundles C deps (sqlite3, libyaml)
 - `build.zig.zon` — Package manifest (name=`sql_pipe`, version=`0.0.0-dev`, min Zig `0.16.0`)
 
 ## Directory Map
@@ -16,7 +16,7 @@ CLI tool that pipes structured data (CSV, TSV, JSON, NDJSON, XML, YAML, Parquet)
 |-----------|---------------|--------------|
 | `src/` | Core pipeline: argument parsing, multi-format I/O loaders (incl. Parquet), SQLite wrappers, output formatters (15 modules) | [View Map](src/codemap.md) |
 | `src/modes/` | CLI sub-command modes: `--inspect` (fused columns/validate/sample/stats/schema), `--repl`, legacy flags (8 modules) | [View Map](src/modes/codemap.md) |
-| `lib/` | Vendored C deps: SQLite amalgamation (`sqlite3.c/h`), libyaml subset, carquet (Parquet) | (vendored) |
+| `lib/` | Vendored C deps: SQLite amalgamation (`sqlite3.c/h`), libyaml subset, zig-parquet (Parquet) | (vendored) |
 | `tests/` | Test fixtures (CSV, JSON, NDJSON, XML sample data) + HTTP test server | (fixtures) |
 | `docs/` | Man page source (`sql-pipe.1.scd`) | — |
 | `packaging/` | nfpm, winget packaging configs | — |
@@ -65,7 +65,7 @@ CLI args → parseArgs() → dispatch
 | NDJSON | `.ndjson` | `json.zig` | Newline-delimited, one object per line |
 | XML | `.xml` | `xml.zig` | Custom streaming parser, configurable container/row elements |
 | YAML | `.yaml` | `yaml.zig` | Sequence of mappings via libyaml FFI |
-| Parquet | `.parquet` | `parquet.zig` | Columnar via carquet FFI, batch inserts, logical-type conversion |
+| Parquet | `.parquet` | `parquet.zig` | Columnar via zig-parquet DynamicReader, batch inserts, logical-type conversion |
 
 ## Output Formats
 
@@ -82,9 +82,9 @@ CSV, TSV, JSON (array), NDJSON, XML, Markdown table, HTML table, SQL INSERT, pre
 
 ## Integration Points
 
-- **FFI**: SQLite3 C API (`sqlite3_open`, `sqlite3_prepare_v2`, `sqlite3_step`, etc.), libyaml C API (`yaml_parser_parse`, etc.), carquet C API (Parquet reading, logical-type conversion)
+- **FFI**: SQLite3 C API (`sqlite3_open`, `sqlite3_prepare_v2`, `sqlite3_step`, etc.), libyaml C API (`yaml_parser_parse`, etc.)
 - **HTTP**: `std.http.Client` for HTTPS URL input sources (`http.zig`)
-- **Build**: `c` module (SQLite + libyaml + carquet C bindings), `yaml` module (libyaml Zig bindings), `build_options.VERSION`
+- **Build**: `c` module (SQLite + libyaml C bindings), `yaml` module (libyaml Zig bindings), `zig_parquet` module (zig-parquet pure Zig), `build_options.VERSION`
 
 ## Build & Test
 

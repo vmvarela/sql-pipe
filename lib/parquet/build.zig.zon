@@ -1,0 +1,12 @@
+.{
+    .name = .parquet,
+    .version = "0.2.0",
+    .description = "Native Parquet reader/writer for Zig with C ABI, all standard encodings, nested types, and compression support",
+    .fingerprint = 0xffe52780a478c7e9,
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

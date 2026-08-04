@@ -1,26 +1,16 @@
-//! Parquet input loader powered by carquet (Copyright (c) 2025 Johan HG Natter, MIT License).
-//! Acknowledgments: carquet library by Johan Natter.
+//! Parquet input loader powered by zig-parquet (DynamicReader API).
 //!
 //! loadParquetInput
 //!   Read all of `reader` as a Parquet file from a memory buffer, create table
 //!   `table_name` in `db` with columns typed to match their physical + logical
 //!   Parquet types, and insert every row. Supports all Parquet physical types
-//!   via carquet with logical type mapping for DATE, TIMESTAMP, TIME, DECIMAL.
+//!   via zig-parquet with logical type mapping for DATE, TIMESTAMP, TIME, DECIMAL.
 
 const std = @import("std");
 const c = @import("c");
 
 const sqlite_mod = @import("sqlite.zig");
-
-const carquet_c = @cImport({
-    @cInclude("carquet/carquet.h");
-});
-
-fn isNull(bitmap: ?*const u8, row_idx: usize) bool {
-    const b = bitmap orelse return false;
-    const byte = @as([*]const u8, @ptrCast(@alignCast(b)))[row_idx / 8];
-    return (byte & (@as(u8, 1) << @intCast(row_idx % 8))) == 0;
-}
+const parquet = @import("zig_parquet");
 
 fn isLeapYear(year: i32) bool {
     return @rem(year, 4) == 0 and (@rem(year, 100) != 0 or @rem(year, 400) == 0);
@@ -147,44 +137,32 @@ fn intToBuf(value: i64, buf: []u8) []const u8 {
     return buf[0..end];
 }
 
-/// Map Parquet physical type to SQLite ColumnType (no logical type).
-fn physToColType(phys: u8) sqlite_mod.ColumnType {
+/// Map a Parquet physical type to a SQLite ColumnType (no logical type mapping).
+fn physicalToAffinity(phys: parquet.format.PhysicalType) sqlite_mod.ColumnType {
     return switch (phys) {
-        carquet_c.CARQUET_PHYSICAL_BOOLEAN,
-        carquet_c.CARQUET_PHYSICAL_INT32,
-        carquet_c.CARQUET_PHYSICAL_INT64 => .INTEGER,
-        carquet_c.CARQUET_PHYSICAL_FLOAT,
-        carquet_c.CARQUET_PHYSICAL_DOUBLE => .REAL,
-        carquet_c.CARQUET_PHYSICAL_BYTE_ARRAY,
-        carquet_c.CARQUET_PHYSICAL_FIXED_LEN_BYTE_ARRAY,
-        carquet_c.CARQUET_PHYSICAL_INT96 => .TEXT,
-        else => unreachable,
+        .boolean, .int32, .int64 => .INTEGER,
+        .int96 => .TEXT, // bound as ISO timestamp text
+        .float, .double => .REAL,
+        .byte_array, .fixed_len_byte_array => .TEXT,
     };
 }
 
-/// Read logical type id and param (scale for DECIMAL, time_unit for TIME/TIMESTAMP)
-/// from a C pointer to carquet_logical_type_t by reading raw bytes.
-/// ponytail: carquet_logical_type_t's C union can't be accessed via Zig @cImport.
-/// This assumes 4-byte enum id + unpacked union at offset 4 — valid for clang/gcc
-/// on macOS arm64/x86_64 and Linux x86_64 (LP64 ABI). If carquet exposes typed
-/// accessors in the future, switch to carquet_schema_node_logical_*().
-fn readLogicalType(logical: ?*const carquet_c.carquet_logical_type_t) struct { id: u8, param: i32 } {
-    const ptr = logical orelse return .{ .id = 0, .param = 0 };
-    const bytes = @as([*]const u8, @ptrCast(ptr));
-    // id is a carquet_logical_type_id_t enum (4 bytes on this platform)
-    const c_id = std.mem.readInt(u32, bytes[0..4], .little);
-    const id: u8 = @truncate(c_id);
-    if (id == carquet_c.CARQUET_LOGICAL_DECIMAL) {
-        // struct layout: id(4) + precision(4) + scale(4) = offset 8
-        const scale = std.mem.readInt(i32, bytes[8..12], .little);
-        return .{ .id = id, .param = scale };
+/// Map a leaf column's schema (logical type preferred, physical fallback) to SQLite ColumnType.
+fn columnToSqliteType(reader: *parquet.DynamicReader, col_idx: usize) sqlite_mod.ColumnType {
+    const elem = reader.getLeafSchemaElement(col_idx) orelse unreachable;
+    const logical = reader.getColumnLogicalType(col_idx);
+
+    // Logical types take precedence for columns that carry a semantic meaning.
+    if (logical) |lt| {
+        return switch (lt) {
+            .date => .TEXT, // epochDaysToIso
+            .time => .TEXT, // millisOfDayToIso
+            .timestamp => .TEXT, // epochSecondsToIso
+            .decimal => |d| if (d.scale == 0) .INTEGER else .TEXT, // decimalToText
+            else => physicalToAffinity(elem.type_.?),
+        };
     }
-    if (id == carquet_c.CARQUET_LOGICAL_TIME or id == carquet_c.CARQUET_LOGICAL_TIMESTAMP) {
-        // struct layout: id(4) + time_unit(4) = offset 4
-        const unit = std.mem.readInt(u32, bytes[4..8], .little);
-        return .{ .id = id, .param = @as(i32, @intCast(unit)) };
-    }
-    return .{ .id = id, .param = 0 };
+    return physicalToAffinity(elem.type_.?);
 }
 
 pub fn loadParquetInput(
@@ -205,76 +183,59 @@ pub fn loadParquetInput(
     if (buf.len < 4 or !std.mem.eql(u8, buf[0..4], "PAR1"))
         sqlite_mod.fatal("not a valid Parquet file (missing PAR1 header)", stderr_writer, .csv_error, .{});
 
-    var err: carquet_c.carquet_error_t = .{ .code = carquet_c.CARQUET_OK };
-    const reader_ptr = carquet_c.carquet_reader_open_buffer(buf.ptr, buf.len, null, &err) orelse
-        sqlite_mod.fatal("carquet: failed to open reader: {s}", stderr_writer, .csv_error, .{std.mem.sliceTo(&err.message, 0)});
-    defer carquet_c.carquet_reader_close(reader_ptr);
+    // ponytail: openBufferDynamic reads straight from the in-memory buffer, avoiding
+    // a temp file round-trip. `buf` outlives the reader (both freed at function exit).
+    var dyn = parquet.openBufferDynamic(allocator, buf, .{}) catch |err|
+        sqlite_mod.fatal("parquet: failed to open reader: {s}", stderr_writer, .csv_error, .{@errorName(err)});
+    defer dyn.deinit();
 
-    const schema = carquet_c.carquet_reader_schema(reader_ptr);
-    const num_elements = carquet_c.carquet_schema_num_elements(schema);
-    const num_cols = carquet_c.carquet_schema_num_columns(schema);
-    const num_cols_usize = @as(usize, @intCast(num_cols));
-    if (num_cols == 0)
+    // Reject nested types (groups) — flat schemas only, same as before.
+    const schema = dyn.getSchema();
+    for (1..schema.len) |i| {
+        const el = schema[i];
+        if (el.num_children != null)
+            sqlite_mod.fatal("nested Parquet types not supported (found group '{s}')", stderr_writer, .csv_error, .{el.name});
+    }
+
+    const num_cols = dyn.getNumColumns();
+    const num_cols_usize: usize = num_cols;
+    if (num_cols_usize == 0)
         sqlite_mod.fatal("Parquet file has no columns", stderr_writer, .csv_error, .{});
 
     var col_names: std.ArrayList([]const u8) = .empty;
     var col_types: std.ArrayList(sqlite_mod.ColumnType) = .empty;
-    var col_phys_types: std.ArrayList(u8) = .empty;
-    var col_logical_ids: std.ArrayList(u8) = .empty;
-    var col_logical_params: std.ArrayList(i32) = .empty;
     defer {
         for (col_names.items) |n| allocator.free(n);
         col_names.deinit(allocator);
         col_types.deinit(allocator);
-        col_phys_types.deinit(allocator);
-        col_logical_ids.deinit(allocator);
-        col_logical_params.deinit(allocator);
     }
 
-    // Walk schema tree (skip root at index 0). For flat schemas, leaf order
-    // in tree-walk matches leaf-index order used by batch reader.
-    for (1..@as(usize, @intCast(num_elements))) |elem_idx| {
-        const node = carquet_c.carquet_schema_get_element(schema, @intCast(elem_idx));
-        const name = std.mem.span(carquet_c.carquet_schema_node_name(node));
+    for (0..num_cols_usize) |col_idx| {
+        const elem = dyn.getLeafSchemaElement(col_idx) orelse unreachable;
 
-        if (!carquet_c.carquet_schema_node_is_leaf(node))
-            sqlite_mod.fatal("nested Parquet types not supported (found group '{s}')", stderr_writer, .csv_error, .{name});
-
-        const owned = allocator.dupe(u8, name) catch
+        const owned = allocator.dupe(u8, elem.name) catch
             sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
         col_names.append(allocator, owned) catch
             sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
 
-        const phys_type = carquet_c.carquet_schema_node_physical_type(node);
-        const phys_u8 = @as(u8, @intCast(phys_type));
-        const logical = carquet_c.carquet_schema_node_logical_type(node);
-
-        const lt = readLogicalType(logical);
-        const ctype: sqlite_mod.ColumnType = if (lt.id == carquet_c.CARQUET_LOGICAL_DATE and phys_u8 == carquet_c.CARQUET_PHYSICAL_INT32)
-            .TEXT
-        else if (lt.id == carquet_c.CARQUET_LOGICAL_TIME and (phys_u8 == carquet_c.CARQUET_PHYSICAL_INT32 or phys_u8 == carquet_c.CARQUET_PHYSICAL_INT64))
-            .TEXT
-        else if (lt.id == carquet_c.CARQUET_LOGICAL_TIMESTAMP and phys_u8 == carquet_c.CARQUET_PHYSICAL_INT64)
-            .TEXT
-        else if (lt.id == carquet_c.CARQUET_LOGICAL_DECIMAL and (phys_u8 == carquet_c.CARQUET_PHYSICAL_INT32 or phys_u8 == carquet_c.CARQUET_PHYSICAL_INT64))
-            if (lt.param == 0) .INTEGER else .TEXT
-        else
-            physToColType(phys_u8);
+        const ctype = columnToSqliteType(&dyn, col_idx);
         col_types.append(allocator, ctype) catch
             sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
-        col_phys_types.append(allocator, phys_u8) catch
-            sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
-        col_logical_ids.append(allocator, lt.id) catch
-            sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
-        col_logical_params.append(allocator, lt.param) catch
-            sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
-
-        // Validate: num_columns must match leaf count from walk
-        if (col_names.items.len > num_cols_usize)
-            sqlite_mod.fatal("schema element count mismatch", stderr_writer, .csv_error, .{});
     }
-    if (col_names.items.len != num_cols_usize)
-        sqlite_mod.fatal("schema element count mismatch", stderr_writer, .csv_error, .{});
+
+    // Precompute per-column metadata once, avoiding a linear schema scan
+    // (getLeafSchemaElement / getColumnLogicalType) for every row x column.
+    const col_phys_types = allocator.alloc(parquet.format.PhysicalType, num_cols_usize) catch
+        sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
+    defer allocator.free(col_phys_types);
+    const col_logical_types = allocator.alloc(?parquet.format.LogicalType, num_cols_usize) catch
+        sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
+    defer allocator.free(col_logical_types);
+    for (0..num_cols_usize) |col_idx| {
+        const elem = dyn.getLeafSchemaElement(col_idx) orelse unreachable;
+        col_phys_types[col_idx] = elem.type_.?;
+        col_logical_types[col_idx] = dyn.getColumnLogicalType(col_idx);
+    }
 
     sqlite_mod.createTable(allocator, db, table_name, col_names.items, col_types.items, stderr_writer);
     sqlite_mod.beginTransaction(db, stderr_writer);
@@ -282,186 +243,139 @@ pub fn loadParquetInput(
     const stmt = sqlite_mod.prepareInsertStmt(allocator, db, table_name, num_cols_usize, stderr_writer);
     defer _ = c.sqlite3_finalize(stmt);
 
-    var batch_config: carquet_c.carquet_batch_reader_config_t = undefined;
-    carquet_c.carquet_batch_reader_config_init(&batch_config);
-    batch_config.batch_size = 10000;
-
-    var batch_err: carquet_c.carquet_error_t = .{ .code = carquet_c.CARQUET_OK };
-    const batch_reader = carquet_c.carquet_batch_reader_create(reader_ptr, &batch_config, &batch_err) orelse
-        sqlite_mod.fatal("carquet: failed to create batch reader: {s}", stderr_writer, .csv_error, .{std.mem.sliceTo(&batch_err.message, 0)});
-    defer carquet_c.carquet_batch_reader_free(batch_reader);
-
     var rows_inserted: usize = 0;
-    var batch: ?*carquet_c.carquet_row_batch_t = null;
+    const num_rgs = dyn.getNumRowGroups();
 
-    while (carquet_c.carquet_batch_reader_next(batch_reader, &batch) == carquet_c.CARQUET_OK and batch != null) {
-        defer carquet_c.carquet_row_batch_free(batch);
-
-        var first_count: i64 = 0;
-        var dummy_data: ?*const anyopaque = undefined;
-        var dummy_null: ?*const u8 = undefined;
-        _ = carquet_c.carquet_row_batch_column(batch, 0, &dummy_data, &dummy_null, &first_count);
-        const num_rows = @as(usize, @intCast(first_count));
-        if (num_rows == 0) continue;
-
-        const col_data = allocator.alloc(?*const anyopaque, num_cols_usize) catch
-            sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
-        defer allocator.free(col_data);
-        const col_bitmap = allocator.alloc(?*const u8, num_cols_usize) catch
-            sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
-        defer allocator.free(col_bitmap);
-        const col_counts = allocator.alloc(i64, num_cols_usize) catch
-            sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
-        defer allocator.free(col_counts);
-
-        for (0..num_cols_usize) |j| {
-            const col_idx: i32 = @intCast(j);
-            var data: ?*const anyopaque = undefined;
-            var null_bitmap: ?*const u8 = undefined;
-            var count: i64 = undefined;
-            _ = carquet_c.carquet_row_batch_column(batch, col_idx, &data, &null_bitmap, &count);
-            col_data[j] = data;
-            col_bitmap[j] = null_bitmap;
-            col_counts[j] = count;
+    for (0..num_rgs) |rg_idx| {
+        const rows = dyn.readAllRows(rg_idx) catch |err|
+            sqlite_mod.fatal("parquet: failed to read row group: {s}", stderr_writer, .csv_error, .{@errorName(err)});
+        defer {
+            for (rows) |row| row.deinit();
+            allocator.free(rows);
         }
 
-        for (0..num_rows) |row_idx| {
+        for (rows) |row| {
             rows_inserted += 1;
             sqlite_mod.checkMaxRows(rows_inserted, max_rows, stderr_writer);
 
             _ = c.sqlite3_reset(stmt);
             _ = c.sqlite3_clear_bindings(stmt);
 
-            for (0..num_cols_usize) |j| {
-                const param_idx: c_int = @intCast(j + 1);
-                const phys_type = col_phys_types.items[j];
-                const logical_id = col_logical_ids.items[j];
-                const logical_param = col_logical_params.items[j];
+            for (0..num_cols_usize) |col_idx| {
+                const param_idx: c_int = @intCast(col_idx + 1);
+                const val = row.values[col_idx];
+                const phys = col_phys_types[col_idx];
 
-                if (row_idx >= @as(usize, @intCast(col_counts[j]))) {
+                if (val.isNull()) {
                     if (c.sqlite3_bind_null(stmt, param_idx) != c.SQLITE_OK)
                         sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
                     continue;
                 }
 
-                if (isNull(col_bitmap[j], row_idx)) {
-                    if (c.sqlite3_bind_null(stmt, param_idx) != c.SQLITE_OK)
-                        sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-                    continue;
-                }
+                const logical = col_logical_types[col_idx];
+                var handled = false;
 
-                const data = col_data[j].?;
-
-                // Logical type conversions (DATE, TIMESTAMP, TIME, DECIMAL)
-                if (logical_id == carquet_c.CARQUET_LOGICAL_DATE) {
-                    const arr: [*]const i32 = @ptrCast(@alignCast(data));
-                    var buf_date: [10]u8 = undefined;
-                    const iso = epochDaysToIso(arr[row_idx], &buf_date);
-                    if (c.sqlite3_bind_text(stmt, param_idx, iso.ptr, @as(c_int, @intCast(iso.len)), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
-                        sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-                    continue;
-                }
-
-                if (logical_id == carquet_c.CARQUET_LOGICAL_TIMESTAMP) {
-                    const arr: [*]const i64 = @ptrCast(@alignCast(data));
-                    const unit: i32 = logical_param;
-                    const divisor: i64 = switch (unit) {
-                        carquet_c.CARQUET_TIME_UNIT_MILLIS => 1000,
-                        carquet_c.CARQUET_TIME_UNIT_MICROS => 1_000_000,
-                        carquet_c.CARQUET_TIME_UNIT_NANOS => 1_000_000_000,
-                        else => 1000,
-                    };
-                    const secs = @divTrunc(arr[row_idx], divisor);
-                    var buf_ts: [20]u8 = undefined;
-                    const iso = epochSecondsToIso(secs, &buf_ts);
-                    if (c.sqlite3_bind_text(stmt, param_idx, iso.ptr, @as(c_int, @intCast(iso.len)), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
-                        sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-                    continue;
-                }
-
-                if (logical_id == carquet_c.CARQUET_LOGICAL_TIME) {
-                    const unit: i32 = logical_param;
-                    const millis: i32 = if (phys_type == carquet_c.CARQUET_PHYSICAL_INT32) blk: {
-                        const arr: [*]const i32 = @ptrCast(@alignCast(data));
-                        break :blk arr[row_idx];
-                    } else blk: {
-                        const arr: [*]const i64 = @ptrCast(@alignCast(data));
-                        const divisor: i64 = switch (unit) {
-                            carquet_c.CARQUET_TIME_UNIT_MICROS => 1000,
-                            carquet_c.CARQUET_TIME_UNIT_NANOS => 1_000_000,
-                            else => 1,
+                // Logical-type conversions (DATE, TIMESTAMP, TIME, DECIMAL).
+                // Other logical types (string, json, uuid, int, ...) fall through
+                // to physical-type binding below.
+                if (logical) |lt| {
+                    switch (lt) {
+                    .date => {
+                        const days = val.asInt32().?;
+                        var b: [10]u8 = undefined;
+                        const iso = epochDaysToIso(days, &b);
+                        if (c.sqlite3_bind_text(stmt, param_idx, iso.ptr, @intCast(iso.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
+                            sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                        handled = true;
+                    },
+                    .time => |t| {
+                        const millis: i32 = if (phys == .int32) val.asInt32().? else blk: {
+                            const raw = val.asInt64().?;
+                            const divisor: i64 = switch (t.unit) {
+                                .millis => 1,
+                                .micros => 1000,
+                                .nanos => 1_000_000,
+                            };
+                            break :blk @intCast(@divTrunc(raw, divisor));
                         };
-                        break :blk @intCast(@divTrunc(arr[row_idx], divisor));
-                    };
-                    var buf_time: [9]u8 = undefined;
-                    const iso = millisOfDayToIso(millis, &buf_time);
-                    if (c.sqlite3_bind_text(stmt, param_idx, iso.ptr, @as(c_int, @intCast(iso.len)), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
-                        sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-                    continue;
-                }
-
-                if (logical_id == carquet_c.CARQUET_LOGICAL_DECIMAL) {
-                    const scale = logical_param;
-                    const raw: i64 = if (phys_type == carquet_c.CARQUET_PHYSICAL_INT32) blk: {
-                        const arr: [*]const i32 = @ptrCast(@alignCast(data));
-                        break :blk arr[row_idx];
-                    } else blk: {
-                        const arr: [*]const i64 = @ptrCast(@alignCast(data));
-                        break :blk arr[row_idx];
-                    };
-                    if (scale == 0) {
-                        if (c.sqlite3_bind_int64(stmt, param_idx, raw) != c.SQLITE_OK)
+                        var b: [9]u8 = undefined;
+                        const iso = millisOfDayToIso(millis, &b);
+                        if (c.sqlite3_bind_text(stmt, param_idx, iso.ptr, @intCast(iso.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-                    } else {
-                        var buf_dec: [64]u8 = undefined;
-                        const text = decimalToText(raw, scale, &buf_dec);
-                        if (c.sqlite3_bind_text(stmt, param_idx, text.ptr, @as(c_int, @intCast(text.len)), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
+                        handled = true;
+                    },
+                    .timestamp => |t| {
+                        const divisor: i64 = switch (t.unit) {
+                            .millis => 1000,
+                            .micros => 1_000_000,
+                            .nanos => 1_000_000_000,
+                        };
+                        const secs = @divTrunc(val.asInt64().?, divisor);
+                        var b: [20]u8 = undefined;
+                        const iso = epochSecondsToIso(secs, &b);
+                        if (c.sqlite3_bind_text(stmt, param_idx, iso.ptr, @intCast(iso.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                        handled = true;
+                    },
+                    .decimal => |d| {
+                        if (phys == .byte_array or phys == .fixed_len_byte_array) {
+                            const bytes = val.asBytes().?;
+                            if (c.sqlite3_bind_text(stmt, param_idx, bytes.ptr, @intCast(bytes.len), sqlite_mod.sqlite_static) != c.SQLITE_OK)
+                                sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                        } else {
+                        const raw: i64 = if (phys == .int32) @as(i64, @intCast(val.asInt32().?)) else val.asInt64().?;
+                        if (d.scale == 0) {
+                            if (c.sqlite3_bind_int64(stmt, param_idx, raw) != c.SQLITE_OK)
+                                sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                        } else {
+                            var b: [64]u8 = undefined;
+                            const text = decimalToText(raw, d.scale, &b);
+                            if (c.sqlite3_bind_text(stmt, param_idx, text.ptr, @intCast(text.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
+                                sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                        }
+                        }
+                        handled = true;
+                    },
+                    else => {},
                     }
-                    continue;
                 }
+                if (handled) continue;
 
-                // Fallback: physical-only binding (same as original)
-                switch (phys_type) {
-                    carquet_c.CARQUET_PHYSICAL_BOOLEAN => {
-                        const arr: [*]const u8 = @ptrCast(@alignCast(data));
-                        if (c.sqlite3_bind_int64(stmt, param_idx, arr[row_idx]) != c.SQLITE_OK)
+                // Physical-only binding.
+                switch (phys) {
+                    .boolean => {
+                        if (c.sqlite3_bind_int64(stmt, param_idx, @as(i64, @intFromBool(val.asBool().?))) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
                     },
-                    carquet_c.CARQUET_PHYSICAL_INT32 => {
-                        const arr: [*]const i32 = @ptrCast(@alignCast(data));
-                        if (c.sqlite3_bind_int64(stmt, param_idx, arr[row_idx]) != c.SQLITE_OK)
+                    .int32 => {
+                        if (c.sqlite3_bind_int64(stmt, param_idx, @as(i64, @intCast(val.asInt32().?))) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
                     },
-                    carquet_c.CARQUET_PHYSICAL_INT64 => {
-                        const arr: [*]const i64 = @ptrCast(@alignCast(data));
-                        if (c.sqlite3_bind_int64(stmt, param_idx, arr[row_idx]) != c.SQLITE_OK)
+                    .int64 => {
+                        if (c.sqlite3_bind_int64(stmt, param_idx, val.asInt64().?) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
                     },
-                    carquet_c.CARQUET_PHYSICAL_FLOAT => {
-                        const arr: [*]const f32 = @ptrCast(@alignCast(data));
-                        if (c.sqlite3_bind_double(stmt, param_idx, arr[row_idx]) != c.SQLITE_OK)
+                    .int96 => {
+                        const nanos = val.asInt64().?;
+                        const secs = @divTrunc(nanos, 1_000_000_000);
+                        var b: [20]u8 = undefined;
+                        const iso = epochSecondsToIso(secs, &b);
+                        if (c.sqlite3_bind_text(stmt, param_idx, iso.ptr, @intCast(iso.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
                     },
-                    carquet_c.CARQUET_PHYSICAL_DOUBLE => {
-                        const arr: [*]const f64 = @ptrCast(@alignCast(data));
-                        if (c.sqlite3_bind_double(stmt, param_idx, arr[row_idx]) != c.SQLITE_OK)
+                    .float => {
+                        if (c.sqlite3_bind_double(stmt, param_idx, @as(f64, @floatCast(val.asFloat().?))) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
                     },
-                        carquet_c.CARQUET_PHYSICAL_BYTE_ARRAY,
-                        carquet_c.CARQUET_PHYSICAL_FIXED_LEN_BYTE_ARRAY,
-                        carquet_c.CARQUET_PHYSICAL_INT96 => {
-                            const arr: [*]const carquet_c.carquet_byte_array_t = @ptrCast(@alignCast(data));
-                            const ba = arr[row_idx];
-                            if (ba.data == null or ba.length == 0) {
-                                if (c.sqlite3_bind_text(stmt, param_idx, "", 0, sqlite_mod.sqlite_static) != c.SQLITE_OK)
-                                    sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-                            } else {
-                                if (c.sqlite3_bind_text(stmt, param_idx, @as([*]const u8, @ptrCast(ba.data)), ba.length, sqlite_mod.sqlite_static) != c.SQLITE_OK)
-                                    sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
-                            }
-                        },
-                    else => unreachable,
+                    .double => {
+                        if (c.sqlite3_bind_double(stmt, param_idx, val.asDouble().?) != c.SQLITE_OK)
+                            sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                    },
+                    .byte_array, .fixed_len_byte_array => {
+                        const bytes = val.asBytes().?;
+                        if (c.sqlite3_bind_text(stmt, param_idx, bytes.ptr, @intCast(bytes.len), sqlite_mod.sqlite_static) != c.SQLITE_OK)
+                            sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                    },
                 }
             }
 
