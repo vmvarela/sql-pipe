@@ -5,6 +5,7 @@ lib/
 # Vendored C source (linenoise, yaml)
 !lib/linenoise/
 !lib/yaml/
+!lib/parquet/
 sqlite.zip
 # Nix build output symlink
 result
