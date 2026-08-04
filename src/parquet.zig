@@ -222,6 +222,20 @@ pub fn loadParquetInput(
             sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
     }
 
+    // Precompute per-column metadata once, avoiding a linear schema scan
+    // (getLeafSchemaElement / getColumnLogicalType) for every row x column.
+    const col_phys_types = allocator.alloc(parquet.format.PhysicalType, num_cols_usize) catch
+        sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
+    defer allocator.free(col_phys_types);
+    const col_logical_types = allocator.alloc(?parquet.format.LogicalType, num_cols_usize) catch
+        sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
+    defer allocator.free(col_logical_types);
+    for (0..num_cols_usize) |col_idx| {
+        const elem = dyn.getLeafSchemaElement(col_idx) orelse unreachable;
+        col_phys_types[col_idx] = elem.type_.?;
+        col_logical_types[col_idx] = dyn.getColumnLogicalType(col_idx);
+    }
+
     sqlite_mod.createTable(allocator, db, table_name, col_names.items, col_types.items, stderr_writer);
     sqlite_mod.beginTransaction(db, stderr_writer);
 
@@ -249,8 +263,7 @@ pub fn loadParquetInput(
             for (0..num_cols_usize) |col_idx| {
                 const param_idx: c_int = @intCast(col_idx + 1);
                 const val = row.values[col_idx];
-                const elem = dyn.getLeafSchemaElement(col_idx) orelse unreachable;
-                const phys = elem.type_.?;
+                const phys = col_phys_types[col_idx];
 
                 if (val.isNull()) {
                     if (c.sqlite3_bind_null(stmt, param_idx) != c.SQLITE_OK)
@@ -258,7 +271,7 @@ pub fn loadParquetInput(
                     continue;
                 }
 
-                const logical = dyn.getColumnLogicalType(col_idx);
+                const logical = col_logical_types[col_idx];
                 var handled = false;
 
                 // Logical-type conversions (DATE, TIMESTAMP, TIME, DECIMAL).
@@ -304,6 +317,11 @@ pub fn loadParquetInput(
                         handled = true;
                     },
                     .decimal => |d| {
+                        if (phys == .byte_array or phys == .fixed_len_byte_array) {
+                            const bytes = val.asBytes().?;
+                            if (c.sqlite3_bind_text(stmt, param_idx, bytes.ptr, @intCast(bytes.len), sqlite_mod.sqlite_static) != c.SQLITE_OK)
+                                sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                        } else {
                         const raw: i64 = if (phys == .int32) @as(i64, @intCast(val.asInt32().?)) else val.asInt64().?;
                         if (d.scale == 0) {
                             if (c.sqlite3_bind_int64(stmt, param_idx, raw) != c.SQLITE_OK)
@@ -313,6 +331,7 @@ pub fn loadParquetInput(
                             const text = decimalToText(raw, d.scale, &b);
                             if (c.sqlite3_bind_text(stmt, param_idx, text.ptr, @intCast(text.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
                                 sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                        }
                         }
                         handled = true;
                     },
@@ -331,8 +350,16 @@ pub fn loadParquetInput(
                         if (c.sqlite3_bind_int64(stmt, param_idx, @as(i64, @intCast(val.asInt32().?))) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
                     },
-                    .int64, .int96 => {
+                    .int64 => {
                         if (c.sqlite3_bind_int64(stmt, param_idx, val.asInt64().?) != c.SQLITE_OK)
+                            sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
+                    },
+                    .int96 => {
+                        const nanos = val.asInt64().?;
+                        const secs = @divTrunc(nanos, 1_000_000_000);
+                        var b: [20]u8 = undefined;
+                        const iso = epochSecondsToIso(secs, &b);
+                        if (c.sqlite3_bind_text(stmt, param_idx, iso.ptr, @intCast(iso.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
                             sqlite_mod.fatalSqlWithContext(allocator, db, table_name, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
                     },
                     .float => {

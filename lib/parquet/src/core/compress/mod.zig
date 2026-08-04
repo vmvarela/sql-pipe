@@ -3,16 +3,10 @@
 //! Parquet supports multiple compression codecs. This module provides
 //! compression and decompression for supported codecs.
 //!
+//! Only pure-Zig codecs are compiled (C codec backends are not bundled).
 //! Use `-Dcodecs=` to control which codecs are included (default: all).
-//! Values: all, c-only, none, zig-only, or comma-separated list of: c-zstd,zstd,c-snappy,snappy,c-gzip,gzip,c-lz4,lz4,c-brotli,brotli
 
 const build_options = @import("build_options");
-
-pub const zstd = if (build_options.enable_zstd) @import("c_zstd.zig") else {};
-pub const snappy = if (build_options.enable_snappy) @import("c_snappy.zig") else {};
-pub const gzip = if (build_options.enable_gzip) @import("c_gzip.zig") else {};
-pub const lz4 = if (build_options.enable_lz4) @import("c_lz4.zig") else {};
-pub const brotli = if (build_options.enable_brotli) @import("c_brotli.zig") else {};
 
 pub const zig_zstd = if (build_options.enable_zig_zstd) @import("zstd.zig") else {};
 pub const zig_snappy = if (build_options.enable_zig_snappy) @import("snappy.zig") else {};
@@ -53,26 +47,12 @@ pub fn compress(
                     error.DecompressionError => return error.CompressionError,
                     error.InvalidSize => return error.CompressionError,
                 };
-            } else if (build_options.enable_zstd) {
-                return zstd.compress(allocator, data) catch |e| switch (e) {
-                    error.CompressionError => return error.CompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.DecompressionError => return error.CompressionError,
-                    error.InvalidSize => return error.CompressionError,
-                };
             }
             return error.UnsupportedCompression;
         },
         .gzip => {
             if (build_options.enable_zig_gzip) {
                 return zig_gzip.compress(allocator, data) catch |e| switch (e) {
-                    error.CompressionError => return error.CompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.DecompressionError => return error.CompressionError,
-                    error.InvalidSize => return error.CompressionError,
-                };
-            } else if (build_options.enable_gzip) {
-                return gzip.compress(allocator, data) catch |e| switch (e) {
                     error.CompressionError => return error.CompressionError,
                     error.OutOfMemory => return error.OutOfMemory,
                     error.DecompressionError => return error.CompressionError,
@@ -89,13 +69,6 @@ pub fn compress(
                     error.DecompressionError => return error.CompressionError,
                     error.InvalidSize => return error.CompressionError,
                 };
-            } else if (build_options.enable_snappy) {
-                return snappy.compress(allocator, data) catch |e| switch (e) {
-                    error.CompressionError => return error.CompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.DecompressionError => return error.CompressionError,
-                    error.InvalidSize => return error.CompressionError,
-                };
             }
             return error.UnsupportedCompression;
         },
@@ -107,12 +80,6 @@ pub fn compress(
                     error.DecompressionError => return error.CompressionError,
                     error.InvalidSize => return error.CompressionError,
                 };
-            } else if (build_options.enable_lz4) {
-                return lz4.compress(allocator, data) catch |e| switch (e) {
-                    error.CompressionError => return error.CompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.DecompressionError => return error.CompressionError,
-                };
             }
             return error.UnsupportedCompression;
         },
@@ -123,12 +90,6 @@ pub fn compress(
                     error.OutOfMemory => return error.OutOfMemory,
                     error.DecompressionError => return error.CompressionError,
                     error.InvalidSize => return error.CompressionError,
-                };
-            } else if (build_options.enable_brotli) {
-                return brotli.compress(allocator, data) catch |e| switch (e) {
-                    error.CompressionError => return error.CompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.DecompressionError => return error.CompressionError,
                 };
             }
             return error.UnsupportedCompression;
@@ -156,26 +117,12 @@ pub fn decompress(
                     error.CompressionError => return error.DecompressionError,
                     error.InvalidSize => return error.DecompressionError,
                 };
-            } else if (build_options.enable_zstd) {
-                return zstd.decompress(allocator, compressed, uncompressed_size) catch |e| switch (e) {
-                    error.DecompressionError => return error.DecompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.CompressionError => return error.DecompressionError,
-                    error.InvalidSize => return error.DecompressionError,
-                };
             }
             return error.UnsupportedCompression;
         },
         .gzip => {
             if (build_options.enable_zig_gzip) {
                 return zig_gzip.decompress(allocator, compressed, uncompressed_size) catch |e| switch (e) {
-                    error.DecompressionError => return error.DecompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.CompressionError => return error.DecompressionError,
-                    error.InvalidSize => return error.DecompressionError,
-                };
-            } else if (build_options.enable_gzip) {
-                return gzip.decompress(allocator, compressed, uncompressed_size) catch |e| switch (e) {
                     error.DecompressionError => return error.DecompressionError,
                     error.OutOfMemory => return error.OutOfMemory,
                     error.CompressionError => return error.DecompressionError,
@@ -192,12 +139,6 @@ pub fn decompress(
                     error.CompressionError => return error.DecompressionError,
                     error.InvalidSize => return error.DecompressionError,
                 };
-            } else if (build_options.enable_lz4) {
-                return lz4.decompress(allocator, compressed, uncompressed_size) catch |e| switch (e) {
-                    error.DecompressionError => return error.DecompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.CompressionError => return error.DecompressionError,
-                };
             }
             return error.UnsupportedCompression;
         },
@@ -209,25 +150,12 @@ pub fn decompress(
                     error.CompressionError => return error.DecompressionError,
                     error.InvalidSize => return error.DecompressionError,
                 };
-            } else if (build_options.enable_brotli) {
-                return brotli.decompress(allocator, compressed, uncompressed_size) catch |e| switch (e) {
-                    error.DecompressionError => return error.DecompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.CompressionError => return error.DecompressionError,
-                };
             }
             return error.UnsupportedCompression;
         },
         .snappy => {
             if (build_options.enable_zig_snappy) {
                 return zig_snappy.decompress(allocator, compressed, uncompressed_size) catch |e| switch (e) {
-                    error.DecompressionError => return error.DecompressionError,
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.CompressionError => return error.DecompressionError,
-                    error.InvalidSize => return error.DecompressionError,
-                };
-            } else if (build_options.enable_snappy) {
-                return snappy.decompress(allocator, compressed, uncompressed_size) catch |e| switch (e) {
                     error.DecompressionError => return error.DecompressionError,
                     error.OutOfMemory => return error.OutOfMemory,
                     error.CompressionError => return error.DecompressionError,
