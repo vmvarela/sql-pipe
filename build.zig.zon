@@ -6,7 +6,7 @@
     .paths = .{"."},
     .dependencies = .{
         .zig_parquet = .{
-            .path = "zig-parquet",
+            .path = "lib/parquet",
         },
     },
 }
