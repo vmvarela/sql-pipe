@@ -338,6 +338,26 @@ $ sql-pipe --file=query.sql orders.csv customers.csv
 
 When `-f` is used, all positional arguments are treated as data files (no positional query needed).
 
+### Before asking for a flag: SQL and the shell already do it
+
+sql-pipe pipes data into SQLite — column transformation and file comparison are
+solved by SQL and standard shell tools, no dedicated flags needed.
+
+**Select, rename, or cast columns** — use plain SQL instead of load-time flags:
+
+```sh
+# select + rename
+sql-pipe data.csv 'SELECT name, amount AS revenue FROM t'
+# cast (e.g. keep ZIP leading zeros)
+sql-pipe data.csv 'SELECT CAST(zip AS TEXT) AS zip, amount FROM t'
+```
+
+**Compare schemas of two files** — compose `--schema` with `diff`:
+
+```sh
+diff <(sql-pipe --schema v1.csv) <(sql-pipe --schema v2.csv)
+```
+
 ### Flags
 
 | Flag | Description |
