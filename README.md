@@ -38,6 +38,12 @@ By default it installs to `/usr/local/bin`. Override with `INSTALL_DIR`:
 curl -sSL https://raw.githubusercontent.com/vmvarela/sql-pipe/master/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
+**npm (Node.js ≥ 18):**
+
+```sh
+npm install -g @vmvarela/sql-pipe
+```
+
 **Debian / Ubuntu (APT repository):**
 
 ```sh

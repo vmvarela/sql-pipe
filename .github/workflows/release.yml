@@ -162,6 +162,49 @@ jobs:
               artifacts/*
           fi
 
+  # ── Publish to npm ─────────────────────────────────────────────────────
+  # Requires:
+  #   1. Package claimed on npmjs.com: @vmvarela/sql-pipe
+  #   2. Trusted Publishing configured on npmjs.com for repo vmvarela/sql-pipe, workflow release.yml
+  #   3. No NPM_TOKEN secret needed — uses OIDC (id-token: write)
+  publish-npm:
+    name: Publish to npm
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Stage npm binaries
+        run: |
+          mkdir -p npm-pkg/bin
+          cp artifacts/sql-pipe-x86_64-linux       npm-pkg/bin/sql-pipe-linux-x64
+          cp artifacts/sql-pipe-aarch64-linux      npm-pkg/bin/sql-pipe-linux-arm64
+          cp artifacts/sql-pipe-armv7-linux        npm-pkg/bin/sql-pipe-linux-arm
+          cp artifacts/sql-pipe-x86_64-macos       npm-pkg/bin/sql-pipe-darwin-x64
+          cp artifacts/sql-pipe-aarch64-macos      npm-pkg/bin/sql-pipe-darwin-arm64
+          cp artifacts/sql-pipe-x86_64-windows.exe npm-pkg/bin/sql-pipe-win32-x64.exe
+          chmod +x npm-pkg/bin/sql-pipe-linux-* npm-pkg/bin/sql-pipe-darwin-*
+
+      - name: Copy packaging files
+        run: |
+          cp -r packaging/npm/* npm-pkg/
+
+      - name: Set package version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --workspaces=false --prefix ./npm-pkg
+
+      - name: Publish to npm
+        run: npm publish ./npm-pkg --provenance --access public
+        continue-on-error: true
+
   # ── Update Homebrew tap ─────────────────────────────────────────────
   # Requires:
   #   1. Repository: vmvarela/homebrew-tap (with a Formula/ directory)
