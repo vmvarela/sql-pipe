@@ -36,6 +36,13 @@ DESCRIPTION
 	missing extensions default to CSV. Use *-I* to override auto-detection
 	(e.g., when a TSV file has a *.txt* extension).
 
+	Gzip-compressed inputs are supported transparently (gzip only). Files ending
+	in *.gz* are decompressed automatically; the input format is then detected
+	from the inner extension (e.g., *data.csv.gz* is read as CSV) and the table
+	name comes from the inner basename (*data.csv.gz* becomes table *data*).
+	Gzipped data piped to standard input is detected by its gzip magic bytes
+	(*\x1f\x8b*), so compressed stdin works without any extra flags.
+
 	This tool is useful for quick data transformations, filtering, grouping,
 	aggregations, and multi-file joins without manual SQL database setup.
 
@@ -338,6 +345,18 @@ EXAMPLES
 	Query a Parquet file (format auto-detected, requires -Dparquet=true build):
 
 		$ sql-pipe data.parquet 'SELECT name FROM data WHERE active = true'
+
+	Query a gzip-compressed CSV file (format detected from inner extension):
+
+		$ sql-pipe data.csv.gz 'SELECT COUNT(*) FROM data'
+
+	Pipe decompressed stdin (zcat decompresses, stdin reads as plain CSV):
+
+		$ zcat huge.csv.gz | sql-pipe 'SELECT * FROM t'
+
+	Pipe gzip-compressed stdin (detected by magic bytes):
+
+		$ gzip -c data.ndjson | sql-pipe 'SELECT * FROM t'
 
 	Override auto-detection when the extension is wrong:
 
