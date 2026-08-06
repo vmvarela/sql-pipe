@@ -1,0 +1,5 @@
+# Include only what's in files[]
+*
+!bin/
+!package.json
+!LICENSE
