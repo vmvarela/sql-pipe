@@ -114,24 +114,106 @@ fn writeStreaming(
     try out_writer.end(writer);
 }
 
-/// Backing storage for a gzip-wrapped reader. Heap-allocated so the returned
-/// `*std.Io.Reader` (which points into `decompress.reader`) stays valid for
-/// the lifetime of the program.
+/// Wrapper around a gzip-decompressing reader. Heap-allocated so the returned
+/// `*std.Io.Reader` stays valid for the lifetime of the program. The wrapper
+/// shares the flate decompressor's buffer and mirrors its cursor state, so it
+/// behaves exactly like the flate reader; its only job is to translate the raw
+/// `error.ReadFailed` into a message naming the specific flate failure (stored
+/// in `decompress.err`) instead of a generic read error.
+///
+/// The wrapper forwards to flate's *vtable* methods (not the generic
+/// `Reader.readVec`/`stream`/`discard` helpers), because the generic helpers
+/// short-circuit on the empty `data` slice that `fill` passes and would return
+/// 0 without ever refilling the decompressor's buffer, spinning forever.
 const GzipReader = struct {
     decompress: std.compress.flate.Decompress,
     buffer: [std.compress.flate.max_window_len]u8,
+    stderr_writer: *std.Io.Writer,
+    reader: std.Io.Reader,
+
+    fn sync(r: *std.Io.Reader) *GzipReader {
+        const gz: *GzipReader = @fieldParentPtr("reader", r);
+        r.buffer = gz.decompress.reader.buffer;
+        r.seek = gz.decompress.reader.seek;
+        r.end = gz.decompress.reader.end;
+        return gz;
+    }
+
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        _ = sync(r);
+        const gz: *GzipReader = @fieldParentPtr("reader", r);
+        const n = gz.decompress.reader.vtable.stream(&gz.decompress.reader, w, limit) catch |err| switch (err) {
+            error.WriteFailed => return error.WriteFailed,
+            error.EndOfStream => return error.EndOfStream,
+            error.ReadFailed => {
+                const detail = gz.decompress.err orelse return error.ReadFailed;
+                fatal("gzip decompression failed: {s}", gz.stderr_writer, .csv_error, .{@errorName(detail)});
+            },
+        };
+        _ = sync(r);
+        return n;
+    }
+
+    fn discard(r: *std.Io.Reader, limit: std.Io.Limit) std.Io.Reader.Error!usize {
+        _ = sync(r);
+        const gz: *GzipReader = @fieldParentPtr("reader", r);
+        const n = gz.decompress.reader.vtable.discard(&gz.decompress.reader, limit) catch |err| switch (err) {
+            error.EndOfStream => return error.EndOfStream,
+            error.ReadFailed => {
+                const detail = gz.decompress.err orelse return error.ReadFailed;
+                fatal("gzip decompression failed: {s}", gz.stderr_writer, .csv_error, .{@errorName(detail)});
+            },
+        };
+        _ = sync(r);
+        return n;
+    }
+
+    fn readVec(r: *std.Io.Reader, data: [][]u8) std.Io.Reader.Error!usize {
+        _ = sync(r);
+        const gz: *GzipReader = @fieldParentPtr("reader", r);
+        const n = gz.decompress.reader.vtable.readVec(&gz.decompress.reader, data) catch |err| switch (err) {
+            error.EndOfStream => return error.EndOfStream,
+            error.ReadFailed => {
+                const detail = gz.decompress.err orelse return error.ReadFailed;
+                fatal("gzip decompression failed: {s}", gz.stderr_writer, .csv_error, .{@errorName(detail)});
+            },
+        };
+        _ = sync(r);
+        return n;
+    }
+
+    fn rebase(r: *std.Io.Reader, capacity: usize) std.Io.Reader.RebaseError!void {
+        _ = sync(r);
+        const gz: *GzipReader = @fieldParentPtr("reader", r);
+        try gz.decompress.reader.vtable.rebase(&gz.decompress.reader, capacity);
+        _ = sync(r);
+    }
+
+    const vtable: std.Io.Reader.VTable = .{
+        .stream = stream,
+        .discard = discard,
+        .readVec = readVec,
+        .rebase = rebase,
+    };
 };
 
 /// Wrap `reader` in a gzip decompressing reader and return its reader.
-pub fn makeGzipReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !*std.Io.Reader {
+pub fn makeGzipReader(allocator: std.mem.Allocator, reader: *std.Io.Reader, stderr_writer: *std.Io.Writer) !*std.Io.Reader {
     const gz = try allocator.create(GzipReader);
     // ponytail: leaked for program lifetime; input pointer valid only
     // within loadPipelineInputs scope. CLI, single-use.
     gz.* = .{
         .decompress = std.compress.flate.Decompress.init(reader, .gzip, &gz.buffer),
         .buffer = undefined,
+        .stderr_writer = stderr_writer,
+        .reader = .{
+            .vtable = &GzipReader.vtable,
+            .buffer = &gz.buffer,
+            .seek = 0,
+            .end = 0,
+        },
     };
-    return &gz.decompress.reader;
+    return &gz.reader;
 }
 
 const progress_interval = loader.progress_interval;
@@ -330,7 +412,7 @@ pub fn loadPipelineInputs(
         const is_gz = InputFormat.isGzipExtension(file_input.path);
         // For .gz files: wrap in gzip decompressor, auto-detect inner format if not explicit
         const effective_reader: *std.Io.Reader = if (is_gz)
-            makeGzipReader(allocator, &file_reader.interface) catch
+            makeGzipReader(allocator, &file_reader.interface, stderr_writer) catch
                 fatal("out of memory allocating gzip reader for '{s}'", stderr_writer, .csv_error, .{file_input.path})
         else
             &file_reader.interface;
@@ -353,7 +435,7 @@ pub fn loadPipelineInputs(
         const peeked = stdin_reader.interface.peek(2) catch null;
         if (peeked) |b| {
             if (b.len >= 2 and b[0] == 0x1f and b[1] == 0x8b) {
-                effective = makeGzipReader(allocator, &stdin_reader.interface) catch
+                effective = makeGzipReader(allocator, &stdin_reader.interface, stderr_writer) catch
                     fatal("out of memory allocating gzip reader for stdin", stderr_writer, .csv_error, .{});
             }
         }

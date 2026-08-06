@@ -3770,10 +3770,18 @@ pub fn build(b: *std.Build) void {
     test_gzip_ndjson.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_gzip_ndjson.step);
 
-    // Integration test: corrupt/truncated gzip file exits non-zero
+    // Integration test: corrupt/truncated gzip file exits non-zero with a
+    // gzip-specific message. The truncated fixture is copied to a real .gz name
+    // (its own name ends in `.gz_truncated`, which isGzipExtension rejects).
     const test_gzip_corrupt = b.addSystemCommand(&.{
         "bash", "-c",
-        \\! ./zig-out/bin/sql-pipe tests/fixtures/sample.csv.gz_truncated 'SELECT 1' >/dev/null 2>&1
+        \\set -euo pipefail
+        \\cp tests/fixtures/sample.csv.gz_truncated /tmp/sql-pipe-corrupt.csv.gz
+        \\trap 'rm -f /tmp/sql-pipe-corrupt.csv.gz' EXIT
+        \\msg=$(./zig-out/bin/sql-pipe /tmp/sql-pipe-corrupt.csv.gz 'SELECT 1' 2>&1; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:2' || { echo "expected exit 2, got: $msg"; exit 1; }
+        \\echo "$msg" | grep -q 'gzip decompression failed: EndOfStream' || { echo "missing gzip error msg: $msg"; exit 1; }
+        \\
     });
     test_gzip_corrupt.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_gzip_corrupt.step);
