@@ -1,11 +1,11 @@
 {
   "name": "@vmvarela/sql-pipe",
-  "version": "0.24.0",
+  "version": "0.0.0",
   "description": "Read CSV from stdin, query with SQL, write CSV to stdout",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/vmvarela/sql-pipe.git"
+    "url": "git+https://github.com/vmvarela/sql-pipe.git"
   },
   "homepage": "https://github.com/vmvarela/sql-pipe",
   "bugs": "https://github.com/vmvarela/sql-pipe/issues",

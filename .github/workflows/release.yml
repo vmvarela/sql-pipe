@@ -166,15 +166,25 @@ jobs:
   # Requires:
   #   1. Package claimed on npmjs.com: @vmvarela/sql-pipe
   #   2. Trusted Publishing configured on npmjs.com for repo vmvarela/sql-pipe, workflow release.yml
-  #   3. No NPM_TOKEN secret needed — uses OIDC (id-token: write)
+  #   3. Repository variable NPM_TRUSTED_PUBLISHING=true set after configuring npm Trusted Publisher
+  #   4. No NPM_TOKEN secret needed — uses OIDC (id-token: write)
   publish-npm:
     name: Publish to npm
     needs: release
+    if: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -184,6 +194,8 @@ jobs:
       - name: Stage npm binaries
         run: |
           mkdir -p npm-pkg/bin
+          cp -r packaging/npm/. npm-pkg/
+          cp LICENSE npm-pkg/LICENSE
           cp artifacts/sql-pipe-x86_64-linux       npm-pkg/bin/sql-pipe-linux-x64
           cp artifacts/sql-pipe-aarch64-linux      npm-pkg/bin/sql-pipe-linux-arm64
           cp artifacts/sql-pipe-armv7-linux        npm-pkg/bin/sql-pipe-linux-arm
@@ -192,10 +204,6 @@ jobs:
           cp artifacts/sql-pipe-x86_64-windows.exe npm-pkg/bin/sql-pipe-win32-x64.exe
           chmod +x npm-pkg/bin/sql-pipe-linux-* npm-pkg/bin/sql-pipe-darwin-*
 
-      - name: Copy packaging files
-        run: |
-          cp -r packaging/npm/* npm-pkg/
-
       - name: Set package version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -203,7 +211,6 @@ jobs:
 
       - name: Publish to npm
         run: npm publish ./npm-pkg --provenance --access public
-        continue-on-error: true
 
   # ── Update Homebrew tap ─────────────────────────────────────────────
   # Requires:
