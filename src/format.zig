@@ -33,12 +33,25 @@ pub const InputFormat = enum {
 
     /// Detect input format from file extension.
     /// Returns null for unrecognized extensions.
+    /// A ".gz" extension is stripped first, so "data.csv.gz" maps to .csv.
     pub fn fromExtension(filename: []const u8) ?InputFormat {
-        const ext = std.fs.path.extension(filename);
+        const inner = stripGzExtension(filename);
+        const ext = std.fs.path.extension(inner);
         if (ext.len == 0) return null;
         const ext_no_dot = ext[1..]; // skip the leading '.'
         if (std.mem.eql(u8, ext_no_dot, "yml")) return .yaml;
         return std.meta.stringToEnum(InputFormat, ext_no_dot);
+    }
+
+    /// Return true when filename ends with ".gz".
+    pub fn isGzipExtension(filename: []const u8) bool {
+        return std.mem.endsWith(u8, filename, ".gz");
+    }
+
+    /// Return filename without a trailing ".gz", or the original when it isn't a .gz file.
+    pub fn stripGzExtension(filename: []const u8) []const u8 {
+        if (!isGzipExtension(filename)) return filename;
+        return filename[0 .. filename.len - 3];
     }
 };
 

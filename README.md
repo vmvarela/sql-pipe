@@ -296,6 +296,22 @@ $ sql-pipe orders.csv customers.csv \
      JOIN customers c ON o.cust_id = c.id GROUP BY c.name'
 ```
 
+Gzip-compressed inputs are handled transparently (gzip only). A file ending in `.gz`
+is decompressed automatically; the format is detected from the inner extension, and
+the table name comes from the inner basename:
+
+```sh
+$ sql-pipe data.csv.gz 'SELECT COUNT(*) FROM data'
+```
+
+Gzipped stdin is detected by its magic bytes, so both decompressed and compressed
+pipes work:
+
+```sh
+$ zcat huge.csv.gz | sql-pipe 'SELECT * FROM t'          # decompressed by zcat
+$ gzip -c data.ndjson | sql-pipe 'SELECT * FROM t'       # gzip stdin magic detection
+```
+
 Use `-I` to override auto-detection when the extension is wrong or ambiguous (`.txt`, `.dat`):
 
 ```sh

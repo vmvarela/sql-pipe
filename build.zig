@@ -3708,6 +3708,76 @@ pub fn build(b: *std.Build) void {
     test_parquet_fuzz_empty.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_parquet_fuzz_empty.step);
 
+    // ─── Gzip integration tests ────────────────────────────────────────────────
+
+    // Integration test: gzip file input (tests/fixtures/sample.csv.gz)
+    const test_gzip_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.csv.gz 'SELECT name FROM sample WHERE age > 27 ORDER BY name')
+        \\expected=$(printf 'Alice\nCarol')
+        \\[ "$result" = "$expected" ]
+    });
+    test_gzip_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_gzip_file.step);
+
+    // Integration test: gzip file table name derived from inner name (sample.csv.gz → "sample")
+    const test_gzip_table_name = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe tests/fixtures/sample.csv.gz 'SELECT name FROM sample ORDER BY name')
+        \\expected=$(printf 'Alice\nBob\nCarol')
+        \\[ "$result" = "$expected" ]
+    });
+    test_gzip_table_name.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_gzip_table_name.step);
+
+    // Integration test: gzip stdin magic sniffing
+    // sample.csv.gz is already gzipped; pipe it directly (re-gzipping would double-compress).
+    const test_gzip_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(cat tests/fixtures/sample.csv.gz | ./zig-out/bin/sql-pipe 'SELECT name FROM t WHERE age < 30')
+        \\expected=$(printf 'Bob\n')
+        \\[ "$result" = "$expected" ]
+    });
+    test_gzip_stdin.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_gzip_stdin.step);
+
+    // Integration test: non-gzip data on stdin is not misdetected as corrupt gzip
+    const test_gzip_non_gzip_stdin = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'hello\n' | ./zig-out/bin/sql-pipe --output-format json 'SELECT 1' 2>&1; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'EXIT:0'
+    });
+    test_gzip_non_gzip_stdin.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_gzip_non_gzip_stdin.step);
+
+    // Integration test: non-gzip stdin unchanged (regular CSV via stdin still works)
+    const test_gzip_stdin_unchanged = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'name,age\nAlice,30\n' | ./zig-out/bin/sql-pipe 'SELECT name FROM t')
+        \\[ "$result" = "Alice" ]
+    });
+    test_gzip_stdin_unchanged.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_gzip_stdin_unchanged.step);
+
+    // Integration test: .ndjson.gz inner format detection
+    const test_gzip_ndjson = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf '{"name":"Alice","age":30}\n{"name":"Bob","age":25}\n' | gzip -c > /tmp/test.ndjson.gz
+        \\result=$(./zig-out/bin/sql-pipe /tmp/test.ndjson.gz 'SELECT name FROM test WHERE age > 27')
+        \\rm -f /tmp/test.ndjson.gz
+        \\[ "$result" = "Alice" ]
+    });
+    test_gzip_ndjson.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_gzip_ndjson.step);
+
+    // Integration test: corrupt/truncated gzip file exits non-zero
+    const test_gzip_corrupt = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\! ./zig-out/bin/sql-pipe tests/fixtures/sample.csv.gz_truncated 'SELECT 1' >/dev/null 2>&1
+    });
+    test_gzip_corrupt.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_gzip_corrupt.step);
+
     // ─── --checksum integration tests (issue #204) ──────────────────────────────
     // 25 data-driven cases (204a-204y). Scripts run with `set -euo pipefail` so a
     // failed assertion actually fails the step (a bare `[` + trailing `rm -f`

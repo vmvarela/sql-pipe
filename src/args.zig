@@ -1003,7 +1003,12 @@ fn isValidHttpHeader(header: []const u8) bool {
 }
 
 /// Derive a table name from a file path (basename without extension).
+/// For .gz files, strips the .gz first so "data.csv.gz" → "data".
 fn tableNameFromPath(allocator: std.mem.Allocator, path: []const u8) (std.mem.Allocator.Error)![]const u8 {
-    const stem = std.fs.path.stem(path);
+    const inner = if (format.InputFormat.isGzipExtension(path))
+        format.InputFormat.stripGzExtension(path)
+    else
+        path;
+    const stem = std.fs.path.stem(inner);
     return allocator.dupe(u8, stem);
 }

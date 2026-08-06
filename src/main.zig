@@ -114,6 +114,26 @@ fn writeStreaming(
     try out_writer.end(writer);
 }
 
+/// Backing storage for a gzip-wrapped reader. Heap-allocated so the returned
+/// `*std.Io.Reader` (which points into `decompress.reader`) stays valid for
+/// the lifetime of the program.
+const GzipReader = struct {
+    decompress: std.compress.flate.Decompress,
+    buffer: [std.compress.flate.max_window_len]u8,
+};
+
+/// Wrap `reader` in a gzip decompressing reader and return its reader.
+pub fn makeGzipReader(allocator: std.mem.Allocator, reader: *std.Io.Reader) !*std.Io.Reader {
+    const gz = try allocator.create(GzipReader);
+    // ponytail: leaked for program lifetime; input pointer valid only
+    // within loadPipelineInputs scope. CLI, single-use.
+    gz.* = .{
+        .decompress = std.compress.flate.Decompress.init(reader, .gzip, &gz.buffer),
+        .buffer = undefined,
+    };
+    return &gz.decompress.reader;
+}
+
 const progress_interval = loader.progress_interval;
 const fatal = sqlite_mod.fatal;
 
@@ -307,7 +327,16 @@ pub fn loadPipelineInputs(
             fatal("cannot open file '{s}': {s}", stderr_writer, .csv_error, .{ file_input.path, @errorName(err) });
         defer std.Io.File.close(file, io);
         var file_reader = std.Io.File.reader(file, io, &file_buf);
-        const rows = loadInput(allocator, io, db, file_input.table_name, file_input.format, &file_reader.interface, parsed, stderr_writer);
+        const is_gz = InputFormat.isGzipExtension(file_input.path);
+        // For .gz files: wrap in gzip decompressor, auto-detect inner format if not explicit
+        const effective_reader: *std.Io.Reader = if (is_gz)
+            makeGzipReader(allocator, &file_reader.interface) catch
+                fatal("out of memory allocating gzip reader for '{s}'", stderr_writer, .csv_error, .{file_input.path})
+        else
+            &file_reader.interface;
+        // Format already resolved at parse time (args.zig uses fromExtension which strips .gz)
+        const effective_format = file_input.format;
+        const rows = loadInput(allocator, io, db, file_input.table_name, effective_format, effective_reader, parsed, stderr_writer);
         if (rows == 0) {
             fatal("empty input file: '{s}'", stderr_writer, .csv_error, .{file_input.path});
         }
@@ -318,8 +347,18 @@ pub fn loadPipelineInputs(
     if (parsed.has_stdin) {
         var stdin_buf: [4096]u8 = undefined;
         var stdin_reader = std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf);
+        // Sniff gzip magic by peeking first 2 bytes (peek fills buffer and
+        // returns without consuming, so we can wrap in place).
+        var effective: *std.Io.Reader = &stdin_reader.interface;
+        const peeked = stdin_reader.interface.peek(2) catch null;
+        if (peeked) |b| {
+            if (b.len >= 2 and b[0] == 0x1f and b[1] == 0x8b) {
+                effective = makeGzipReader(allocator, &stdin_reader.interface) catch
+                    fatal("out of memory allocating gzip reader for stdin", stderr_writer, .csv_error, .{});
+            }
+        }
         const stdin_table = if (parsed.urls.len > 0 or parsed.files.len > 0) "stdin" else "t";
-        const rows = loadInput(allocator, io, db, stdin_table, parsed.input_format, &stdin_reader.interface, parsed, stderr_writer);
+        const rows = loadInput(allocator, io, db, stdin_table, parsed.input_format, effective, parsed, stderr_writer);
         total_rows += rows;
     }
 
