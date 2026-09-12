@@ -321,29 +321,35 @@ pub fn parseHeader(
         cols.deinit(allocator);
     }
 
-    // seen: maps a column name to the number of times it has appeared so far.
-    // Pre:  seen is empty
-    // Post: seen[name] = count of occurrences in record[0..i]
-    var seen = std.StringHashMap(usize).init(allocator);
-    defer seen.deinit();
+    // emitted: set of column names already produced (bare and generated).
+    // A generated `base_N` can collide with an explicit header name
+    // (Issue #233: `a,a,a_2`), so every emitted name is registered and
+    // the `_N` suffix is bumped until free. Keys borrow `record`/`cols`
+    // slices; the map dies at function end, so no lifetime issue.
+    var emitted = std.StringHashMap(void).init(allocator);
+    defer emitted.deinit();
 
     for (record) |field| {
         const base = std.mem.trim(u8, field, " \t\r");
         if (base.len == 0) return error.EmptyColumnName;
 
-        const count = (seen.get(base) orelse 0) + 1;
-        try seen.put(base, count);
-
-        const col: []const u8 = if (count == 1)
+        const col: []const u8 = if (!emitted.contains(base))
             try allocator.dupe(u8, base)
         else blk: {
-            const renamed = try std.fmt.allocPrint(allocator, "{s}_{d}", .{ base, count });
-            // Best-effort warning to stderr; write errors are silently ignored
-            stderr_writer.print("warning: duplicate column \"{s}\" renamed to \"{s}\"\n", .{ base, renamed }) catch |err| {
-                std.log.err("failed to write warning: {}", .{err});
-            };
-            break :blk renamed;
+            var n: usize = 2;
+            while (true) : (n += 1) {
+                const cand = try std.fmt.allocPrint(allocator, "{s}_{d}", .{ base, n });
+                if (!emitted.contains(cand)) {
+                    // Best-effort warning to stderr; write errors are silently ignored
+                    stderr_writer.print("warning: duplicate column \"{s}\" renamed to \"{s}\"\n", .{ base, cand }) catch |err| {
+                        std.log.err("failed to write warning: {}", .{err});
+                    };
+                    break :blk cand;
+                }
+                allocator.free(cand);
+            }
         };
+        try emitted.put(col, {});
 
         try cols.append(allocator, col);
     }
