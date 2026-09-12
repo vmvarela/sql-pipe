@@ -143,11 +143,11 @@ pub const OutputWriter = struct {
     /// XML:     writes the XML declaration and opening root element
     /// CSV/TSV: writes an optional header row (when opts.header = true)
     ///
-    /// Pre:  stmt is a valid prepared statement; col_count = sqlite3_column_count(stmt)
+    /// Pre:  stmt is a valid prepared statement or null when query compiled to no statement (e.g. ";"); col_count = 0 in that case
     pub fn begin(
         self: *OutputWriter,
         allocator: std.mem.Allocator,
-        stmt: *c.sqlite3_stmt,
+        stmt: ?*c.sqlite3_stmt,
         col_count: c_int,
         writer: *std.Io.Writer,
     ) !void {
@@ -166,7 +166,7 @@ pub const OutputWriter = struct {
             },
             .csv, .tsv => {
                 if (self.opts.header and col_count > 0)
-                    try csvPrintHeaderRow(stmt, col_count, writer, self.csvDelimiter());
+                    try csvPrintHeaderRow(stmt.?, col_count, writer, self.csvDelimiter());
             },
             .markdown => unreachable, // handled before OutputWriter in execQuery
         }
