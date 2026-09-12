@@ -103,13 +103,15 @@ fn writeWithChecksum(
 fn writeStreaming(
     out_writer: *format.OutputWriter,
     allocator: std.mem.Allocator,
-    stmt: *c.sqlite3_stmt,
+    stmt: ?*c.sqlite3_stmt,
     col_count: c_int,
     writer: *std.Io.Writer,
 ) !void {
     try out_writer.begin(allocator, stmt, col_count, writer);
-    while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
-        try out_writer.writeRow(stmt, writer);
+    if (stmt) |s| {
+        while (c.sqlite3_step(s) == c.SQLITE_ROW) {
+            try out_writer.writeRow(s, writer);
+        }
     }
     try out_writer.end(writer);
 }
@@ -258,7 +260,10 @@ pub fn execQuery(
         return error.PrepareQueryFailed;
     defer _ = c.sqlite3_finalize(stmt);
 
-    const col_count = c.sqlite3_column_count(stmt);
+    // ponytail: prepare ";" succeeds with NULL stmt — empty result, no panic
+    if (stmt == null and (use_table or output_format == .markdown)) return;
+
+    const col_count: c_int = if (stmt) |s| c.sqlite3_column_count(s) else 0;
 
     // Table mode: buffer all rows and print a formatted table
     if (use_table) {
@@ -282,7 +287,7 @@ pub fn execQuery(
     });
     defer out_writer.deinit(allocator);
 
-    try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt.?, col_count }, writeStreaming);
+    try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt, col_count }, writeStreaming);
 }
 
 /// loadInput(allocator, io, db, table_name, input_format, reader, parsed, stderr_writer) → usize
