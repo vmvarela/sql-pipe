@@ -16,10 +16,15 @@ fn isLeapYear(year: i32) bool {
     return @rem(year, 4) == 0 and (@rem(year, 100) != 0 or @rem(year, 400) == 0);
 }
 
-// ponytail: Gregorian calendar only, no Julian/Gregorian switch. Non-negative epoch days only.
+// ponytail: Gregorian calendar only, no Julian/Gregorian switch. Years < 0 or > 9999 unsupported.
 fn epochDaysToIso(days: i32, buf: *[10]u8) []const u8 {
     var y: i32 = 1970;
     var d = days;
+    // ponytail: walk backwards for pre-1970 dates (Issue #235)
+    while (d < 0) {
+        y -= 1;
+        d += if (isLeapYear(y)) 366 else 365;
+    }
     while (true) {
         const days_in_year: i32 = if (isLeapYear(y)) 366 else 365;
         if (d < days_in_year) break;
@@ -50,8 +55,10 @@ fn epochDaysToIso(days: i32, buf: *[10]u8) []const u8 {
 }
 
 fn epochSecondsToIso(secs: i64, buf: *[20]u8) []const u8 {
-    const days = @divTrunc(secs, 86400);
-    const time_secs = @rem(secs, 86400);
+    // ponytail: floor decomposition (Issue #235) — trunc gives negative
+    // time-of-day for pre-1970 secs; @mod keeps it in 0..86399
+    const days = @divFloor(secs, 86400);
+    const time_secs = @mod(secs, 86400);
     const hours = @divTrunc(time_secs, 3600);
     const minutes = @divTrunc(@rem(time_secs, 3600), 60);
     const seconds = @rem(time_secs, 60);
@@ -141,6 +148,18 @@ fn intToBuf(value: i64, buf: []u8) []const u8 {
         j -= 1;
     }
     return buf[0..end];
+}
+
+test "epochDaysToIso / epochSecondsToIso: pre-1970 dates (Issue #235)" {
+    var db: [10]u8 = undefined;
+    try std.testing.expectEqualStrings("1969-12-31", epochDaysToIso(-1, &db));
+    try std.testing.expectEqualStrings("1969-01-01", epochDaysToIso(-365, &db));
+    try std.testing.expectEqualStrings("1968-12-31", epochDaysToIso(-366, &db));
+    try std.testing.expectEqualStrings("1970-01-01", epochDaysToIso(0, &db));
+    var sb: [20]u8 = undefined;
+    try std.testing.expectEqualStrings("1969-12-31 23:59:59", epochSecondsToIso(-1, &sb));
+    try std.testing.expectEqualStrings("1969-12-31 00:00:00", epochSecondsToIso(-86400, &sb));
+    try std.testing.expectEqualStrings("1970-01-01 00:00:00", epochSecondsToIso(0, &sb));
 }
 
 test "decimalToText: negative sub-unit value keeps its sign (Issue #234)" {
