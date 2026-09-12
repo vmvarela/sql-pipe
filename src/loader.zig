@@ -351,6 +351,34 @@ pub fn parseHeader(
     return cols.toOwnedSlice(allocator);
 }
 
+/// dateMatchesType(col_type, val) → bool
+/// Bind-time re-validation for DATE columns (Issue #232): inference only saw
+/// the first 100 rows, so a later value may not fit the inferred variant.
+/// isDate alone is not enough — a len-10 slash value in a .DATE column (or
+/// vice versa) indexes in-bounds but normalizes to garbage. The separator
+/// check keeps the variant shape; mismatch → caller binds as TEXT.
+fn dateMatchesType(col_type: ColumnType, val: []const u8) bool {
+    if (!isDate(val)) return false; // also guarantees val.len == 10
+    return switch (col_type) {
+        .DATE => val[4] == '-' or val[2] == '-',
+        .DATE_EU, .DATE_US => val[2] == '/',
+        else => false,
+    };
+}
+
+/// dateTimeMatchesType(col_type, val) → bool
+/// Bind-time re-validation for DATETIME columns (Issue #232). Same as above,
+/// plus the length must fit the variant: .DATETIME normalizes val[0..19],
+/// EU/US val[11..15] of a 16-char value — a cross-length value would OOB.
+fn dateTimeMatchesType(col_type: ColumnType, val: []const u8) bool {
+    if (!isDateTime(val)) return false; // val.len == 19 or 16
+    return switch (col_type) {
+        .DATETIME => val.len == 19,
+        .DATETIME_EU, .DATETIME_US => val.len == 16,
+        else => false,
+    };
+}
+
 /// insertRowTyped(stmt, row, types, param_count) → void
 /// Pre:  stmt is a prepared INSERT with param_count parameters, freshly reset
 ///       row is a non-empty CSV record (slice of field slices)
@@ -401,19 +429,30 @@ pub fn insertRowTyped(
                     return error.BindFailed;
             },
             .DATE, .DATE_EU, .DATE_US => {
-                // Normalize to ISO 8601 YYYY-MM-DD in a stack buffer.
-                // Use SQLITE_TRANSIENT so SQLite copies the value before the buffer
-                // is reclaimed (the step happens after this function's stack frame).
-                var buf: [10]u8 = undefined;
-                const iso = normalizeDateToIso(col_type, val, &buf);
-                if (c.sqlite3_bind_text(stmt, col_idx, iso.ptr, @intCast(iso.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
-                    return error.BindFailed;
+                if (!dateMatchesType(col_type, val)) {
+                    // ponytail: value past the inference sample — bind as TEXT, never panic
+                    if (c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), sqlite_static) != c.SQLITE_OK)
+                        return error.BindFailed;
+                } else {
+                    // Normalize to ISO 8601 YYYY-MM-DD in a stack buffer.
+                    // Use SQLITE_TRANSIENT so SQLite copies the value before the buffer
+                    // is reclaimed (the step happens after this function's stack frame).
+                    var buf: [10]u8 = undefined;
+                    const iso = normalizeDateToIso(col_type, val, &buf);
+                    if (c.sqlite3_bind_text(stmt, col_idx, iso.ptr, @intCast(iso.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
+                        return error.BindFailed;
+                }
             },
             .DATETIME, .DATETIME_EU, .DATETIME_US => {
-                var buf: [19]u8 = undefined;
-                const iso = normalizeDateTimeToIso(col_type, val, &buf);
-                if (c.sqlite3_bind_text(stmt, col_idx, iso.ptr, @intCast(iso.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
-                    return error.BindFailed;
+                if (!dateTimeMatchesType(col_type, val)) {
+                    if (c.sqlite3_bind_text(stmt, col_idx, val.ptr, @intCast(val.len), sqlite_static) != c.SQLITE_OK)
+                        return error.BindFailed;
+                } else {
+                    var buf: [19]u8 = undefined;
+                    const iso = normalizeDateTimeToIso(col_type, val, &buf);
+                    if (c.sqlite3_bind_text(stmt, col_idx, iso.ptr, @intCast(iso.len), sqlite_mod.sqliteTransient()) != c.SQLITE_OK)
+                        return error.BindFailed;
+                }
             },
         }
         col_idx += 1;
@@ -430,7 +469,7 @@ pub fn insertRowTyped(
 
 /// normalizeDateToIso(col_type, val, buf) → []const u8
 /// Pre:  col_type ∈ {DATE, DATE_EU, DATE_US}
-///       val was accepted by isDate during type inference; val.len == 10
+///       val passed dateMatchesType for col_type; val.len == 10
 ///       buf.len >= 10
 /// Post: result is buf[0..10] formatted as "YYYY-MM-DD" (ISO 8601)
 ///       DATE with val[4]=='-': YYYY-MM-DD passthrough
@@ -475,7 +514,7 @@ fn normalizeDateToIso(col_type: ColumnType, val: []const u8, buf: *[10]u8) []con
 
 /// normalizeDateTimeToIso(col_type, val, buf) → []const u8
 /// Pre:  col_type ∈ {DATETIME, DATETIME_EU, DATETIME_US}
-///       val was accepted by isDateTime during type inference
+///       val passed dateTimeMatchesType for col_type
 ///       buf.len >= 19
 /// Post: result is buf[0..19] formatted as "YYYY-MM-DD HH:MM:SS" (ISO 8601 with space)
 ///       DATETIME: T-separator normalized to space; space-separator passed through
@@ -818,6 +857,22 @@ test "normalizeDateTimeToIso: US slash to ISO" {
     var buf: [19]u8 = undefined;
     const result = normalizeDateTimeToIso(.DATETIME_US, "01/15/2024 10:30", &buf);
     try std.testing.expectEqualStrings("2024-01-15 10:30:00", result);
+}
+
+test "dateMatchesType: rejects non-conforming late values (Issue #232)" {
+    try std.testing.expect(dateMatchesType(.DATE, "2024-01-15"));
+    try std.testing.expect(dateMatchesType(.DATE_EU, "15/01/2024"));
+    try std.testing.expect(!dateMatchesType(.DATE, "x")); // OOB before fix
+    try std.testing.expect(!dateMatchesType(.DATE, "15/01/2024")); // cross-variant garbage before fix
+    try std.testing.expect(!dateMatchesType(.DATE_EU, "2024-01-15"));
+}
+
+test "dateTimeMatchesType: rejects cross-length late values (Issue #232)" {
+    try std.testing.expect(dateTimeMatchesType(.DATETIME, "2024-01-15 10:30:00"));
+    try std.testing.expect(dateTimeMatchesType(.DATETIME_EU, "15/01/2024 10:30"));
+    try std.testing.expect(!dateTimeMatchesType(.DATETIME, "15/01/2024 10:30")); // len 16 → OOB in memcpy val[0..19]
+    try std.testing.expect(!dateTimeMatchesType(.DATETIME_EU, "2024-01-15 10:30:00"));
+    try std.testing.expect(!dateTimeMatchesType(.DATETIME, "x"));
 }
 
 test "inferTypes: empty buffer → all TEXT" {
