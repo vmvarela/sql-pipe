@@ -261,10 +261,7 @@ pub fn execQuery(
     defer _ = c.sqlite3_finalize(stmt);
 
     // ponytail: prepare ";" succeeds with NULL stmt — empty result, no panic
-    if (stmt == null) {
-        if (use_table) return;
-        if (output_format == .markdown) return;
-    }
+    if (stmt == null and (use_table or output_format == .markdown)) return;
 
     const col_count: c_int = if (stmt) |s| c.sqlite3_column_count(s) else 0;
 
