@@ -109,9 +109,12 @@ fn writeStreaming(
 ) !void {
     try out_writer.begin(allocator, stmt, col_count, writer);
     if (stmt) |s| {
-        while (c.sqlite3_step(s) == c.SQLITE_ROW) {
+        var rc = c.sqlite3_step(s);
+        while (rc == c.SQLITE_ROW) {
             try out_writer.writeRow(s, writer);
+            rc = c.sqlite3_step(s);
         }
+        if (rc != c.SQLITE_DONE) return error.StepFailed;
     }
     try out_writer.end(writer);
 }
@@ -510,7 +513,7 @@ fn run(
     }
 
     execQuery(allocator, db, query, stdout_writer, stderr_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.sql_table, parsed.html_class, parsed.null_value, use_table, parsed.checksum) catch |err| switch (err) {
-        error.PrepareQueryFailed => {
+        error.PrepareQueryFailed, error.StepFailed => {
             stdout_writer.flush() catch |flush_err| std.log.err("failed to flush output before fatal: {}", .{flush_err});
             sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
         },

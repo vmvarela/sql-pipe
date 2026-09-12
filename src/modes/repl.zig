@@ -112,7 +112,7 @@ fn execReplQuery(
         parsed.sql_table, parsed.html_class,
         parsed.null_value, use_table, parsed.checksum,
     ) catch |err| switch (err) {
-        error.PrepareQueryFailed => {
+        error.PrepareQueryFailed, error.StepFailed => {
             stdout_writer.flush() catch |err_flush| std.log.err("failed to flush stdout: {}", .{err_flush});
             printSqlError(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
         },
