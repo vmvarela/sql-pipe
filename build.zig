@@ -357,6 +357,14 @@ pub fn build(b: *std.Build) void {
     test_dup_col_stdout.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_dup_col_stdout.step);
 
+    // Integration test 19b: generated rename colliding with an explicit name stays unique (Issue #233)
+    const test_dup_col_collision = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf 'a,a,a_2\n1,2,3\n' | ./zig-out/bin/sql-pipe --columns 2>/dev/null | diff - <(printf 'a\na_2\na_2_2\n')
+    });
+    test_dup_col_collision.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_dup_col_collision.step);
+
     // Integration test 20: --max-rows under limit succeeds
     const test_max_rows_under = b.addSystemCommand(&.{
         "bash", "-c",
