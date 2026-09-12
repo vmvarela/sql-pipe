@@ -91,13 +91,19 @@ fn decimalToText(value: i64, scale: i32, buf: *[64]u8) []const u8 {
         // ponytail: manual int-to-text avoids bufPrint FixedWriter issues
         return intToBuf(value, buf);
     }
-    var pow10: i64 = 1;
+    var pow10: u64 = 1;
     for (0..@as(usize, @intCast(scale))) |_| pow10 *= 10;
-    const int_part = @divTrunc(value, pow10);
-    const prefix = intToBuf(int_part, buf);
+    // ponytail: sign tracked independently (Issue #234) — @divTrunc(-1, 100)
+    // is 0, so intToBuf(int_part) alone drops the sign of |value| < pow10
+    const neg = value < 0;
+    const mag: u64 = @intCast(@abs(value));
+    if (neg) buf[0] = '-';
+    const off: usize = @intFromBool(neg);
+    const digits = intToBuf(@as(i64, @intCast(mag / pow10)), buf[off..]);
+    const prefix = buf[0 .. off + digits.len];
     buf[prefix.len] = '.';
     const dot_pos = prefix.len + 1;
-    var f = @as(u64, @intCast(@abs(@rem(value, pow10))));
+    var f = mag % pow10;
     var pos: usize = @intCast(scale);
     while (pos > 0) {
         pos -= 1;
@@ -135,6 +141,15 @@ fn intToBuf(value: i64, buf: []u8) []const u8 {
         j -= 1;
     }
     return buf[0..end];
+}
+
+test "decimalToText: negative sub-unit value keeps its sign (Issue #234)" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("-0.01", decimalToText(-1, 2, &buf));
+    try std.testing.expectEqualStrings("0.01", decimalToText(1, 2, &buf));
+    try std.testing.expectEqualStrings("-123.45", decimalToText(-12345, 2, &buf));
+    try std.testing.expectEqualStrings("-5", decimalToText(-5, 0, &buf));
+    try std.testing.expectEqualStrings("0.00", decimalToText(0, 2, &buf));
 }
 
 /// Map a Parquet physical type to a SQLite ColumnType (no logical type mapping).
