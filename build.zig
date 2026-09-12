@@ -2874,6 +2874,29 @@ pub fn build(b: *std.Build) void {
     const run_loader_unit_tests = b.addRunArtifact(loader_unit_tests);
     unit_test_step.dependOn(&run_loader_unit_tests.step);
 
+    // Unit tests for the Parquet loader (src/parquet.zig) — decimalToText sign handling
+    const parquet_unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/parquet.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    parquet_unit_tests.root_module.addImport("c", translate_c.createModule());
+    parquet_unit_tests.root_module.addImport("zig_parquet", zig_parquet.module("parquet"));
+    if (bundle_sqlite) {
+        parquet_unit_tests.root_module.addIncludePath(b.path("lib"));
+        parquet_unit_tests.root_module.addCSourceFile(.{
+            .file = b.path("lib/sqlite3.c"),
+            .flags = &.{ "-DSQLITE_OMIT_LOAD_EXTENSION=1", "-DSQLITE_ENABLE_MATH_FUNCTIONS=1" },
+        });
+    } else {
+        parquet_unit_tests.root_module.linkSystemLibrary("sqlite3", .{});
+    }
+    const run_parquet_unit_tests = b.addRunArtifact(parquet_unit_tests);
+    unit_test_step.dependOn(&run_parquet_unit_tests.step);
+
     // ─── --stats / --profile integration tests ──────────────────────────
 
     // Integration test: --stats on basic CSV with mixed types
