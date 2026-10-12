@@ -3817,6 +3817,21 @@ pub fn build(b: *std.Build) void {
     test_gzip_corrupt.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_gzip_corrupt.step);
 
+    // Integration test: blank lines in CSV are skipped (issue #231) — no
+    // phantom all-NULL rows; a valid one-column `""` row is preserved.
+    const test_blank_csv_lines = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\set -euo pipefail
+        \\csv=$'name,age\nAlice,30\n\n\nBob,25\n'
+        \\printf '%s' "$csv" | ./zig-out/bin/sql-pipe 'SELECT COUNT(*) FROM t' | grep -qx '2'
+        \\printf '%s' "$csv" | ./zig-out/bin/sql-pipe --verbose 'SELECT name FROM t' 2>&1 >/dev/null | grep -q 'Loaded 2 rows'
+        \\printf 'name\n\n""\n' | ./zig-out/bin/sql-pipe 'SELECT COUNT(*) FROM t' | grep -qx '1'
+        \\tsv=$'name\r\nAlice\r\n\r\nBob\r\n'
+        \\printf '%s' "$tsv" | ./zig-out/bin/sql-pipe 'SELECT COUNT(*) FROM t' | grep -qx '2'
+    });
+    test_blank_csv_lines.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_blank_csv_lines.step);
+
     // ─── --checksum integration tests (issue #204) ──────────────────────────────
     // 25 data-driven cases (204a-204y). Scripts run with `set -euo pipefail` so a
     // failed assertion actually fails the step (a bare `[` + trailing `rm -f`
