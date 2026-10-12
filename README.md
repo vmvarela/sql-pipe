@@ -607,7 +607,7 @@ $ printf 'SELECT 1+1;\n.exit\n' | sql-pipe --repl --no-stdin
 2
 ```
 
-**Dot commands:** `.help`, `.tables`, `.schema [table]`, `.read <file>`. **Multi-line queries:** end lines with Enter, finish with `;`. Empty line in multi-line mode executes the accumulated query.
+**Dot commands:** `.help`, `.tables`, `.schema [table]`, `.read <file>` (executes every statement in the file). **Multiple statements:** every `;`-terminated statement executes in order, even several on one line; semicolons inside SQL string literals and comments don't split statements. **Multi-line queries:** lines accumulate with their original whitespace and blank lines until the statement is complete (`;` required); a blank line doesn't execute incomplete SQL. Statements with side effects (e.g. `CREATE`, `INSERT`) execute even with `--table`/Markdown output; writable-result statements (`INSERT ... RETURNING`) run once, and their rows stream as CSV when `--table`/Markdown would require a two-pass read. Scripts and `.read` stop at the first SQL error; the REPL prompt remains for the next statement.
 
 ### Debug query performance with --explain
 

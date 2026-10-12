@@ -276,12 +276,22 @@ OPTIONS
 		- *.help* — show available commands
 		- *.tables* — list all table names
 		- *.schema* [table] — show CREATE TABLE DDL
-		- *.read* <file> — load and execute queries from a .sql file
+		- *.read* <file> — load and execute every statement from a .sql file
 		- *Ctrl-D* (EOF) or *Ctrl-C* — exit the REPL
 
 		No history persistence (no arrow-key history). Multi-line queries:
-		end lines with Enter, finish with *;*. Empty line in multi-line mode
-		executes the accumulated query.
+		lines accumulate with their original whitespace and blank lines until
+		the statement is complete (*;* required); a blank line doesn't
+		execute incomplete SQL.
+
+		Every *;*-terminated statement executes in order, including several
+		on a single line; semicolons inside SQL string literals and comments
+		do not split statements. Statements with side effects (e.g. *CREATE*,
+		*INSERT*) execute even with *--table* or Markdown output; writable
+		result statements (*INSERT ... RETURNING*) run once, and their rows
+		stream as CSV when two-pass table or Markdown output would be required.
+		Scripts and *.read* stop at the first SQL error; the prompt remains
+		for the next statement.
 
 		No query argument is required. Cannot be combined with *--inspect*,
 		*--columns*, *--validate*, *--sample*, *--stats*, *--schema*, *--explain*,
