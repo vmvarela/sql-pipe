@@ -159,7 +159,7 @@ OPTIONS
 		Row element name used when reading or writing XML (default: *row*).
 		Each result row is emitted as *<name><col>value</col>...</name>*.
 
-*--validate* [DEPRECATED]
+	*--validate* [DEPRECATED]
 		Use *--inspect validate* instead. Parse the entire input without
 		executing a SQL query. On success, prints a one-line summary to
 		standard output: *OK: <n> rows, <m> columns (<col> <TYPE>, ...)* and
@@ -304,7 +304,7 @@ OPTIONS
 		is self-contained with no external dependencies. Redirect to
 		the appropriate completions directory for your shell:
 		*--completions bash > /usr/share/bash-completion/completions/sql-pipe*,
-		*--completions zsh > /usr/share/zsh/site-functions/_sql-pipe*,
+		*--completions zsh > /usr/share/zsh/site-functions/\_sql-pipe*,
 		*--completions fish > ~/.config/fish/completions/sql-pipe.fish*.
 
 	*-f, --file* <file>
@@ -336,11 +336,11 @@ EXAMPLES
 
 	Query a file directly (table named after basename):
 
-		$ sql-pipe orders.csv 'SELECT * FROM orders WHERE amount > 100'
+		$ sql-pipe orders.csv 'SELECT \* FROM orders WHERE amount > 100'
 
 	Fetch URL input into table t:
 
-		$ sql-pipe --url https://example.com/orders.csv 'SELECT * FROM t'
+		$ sql-pipe --url https://example.com/orders.csv 'SELECT \* FROM t'
 
 	Join two files:
 
@@ -350,7 +350,7 @@ EXAMPLES
 
 	Query a JSON file (format auto-detected from extension):
 
-		$ sql-pipe data.json 'SELECT * FROM data WHERE score > 80'
+		$ sql-pipe data.json 'SELECT \* FROM data WHERE score > 80'
 
 	Query a Parquet file (format auto-detected, requires -Dparquet=true build):
 
@@ -358,24 +358,24 @@ EXAMPLES
 
 	Query a gzip-compressed CSV file (format detected from inner extension):
 
-		$ sql-pipe data.csv.gz 'SELECT COUNT(*) FROM data'
+		$ sql-pipe data.csv.gz 'SELECT COUNT(\*) FROM data'
 
 	Pipe decompressed stdin (zcat decompresses, stdin reads as plain CSV):
 
-		$ zcat huge.csv.gz | sql-pipe 'SELECT * FROM t'
+		$ zcat huge.csv.gz | sql-pipe 'SELECT \* FROM t'
 
 	Pipe gzip-compressed stdin (detected by magic bytes):
 
-		$ gzip -c data.ndjson | sql-pipe 'SELECT * FROM t'
+		$ gzip -c data.ndjson | sql-pipe 'SELECT \* FROM t'
 
 	Override auto-detection when the extension is wrong:
 
-		$ sql-pipe -I tsv data.txt 'SELECT * FROM data'
+		$ sql-pipe -I tsv data.txt 'SELECT \* FROM data'
 
 	Mix stdin (as table t) with a file argument:
 
 		$ cat events.csv | sql-pipe users.csv ++
-		    'SELECT * FROM t JOIN users ON t.uid = users.id'
+		    'SELECT \* FROM t JOIN users ON t.uid = users.id'
 
 	Read query from a file:
 
@@ -442,12 +442,12 @@ EXAMPLES
 	Output results as XML with custom element names:
 
 		$ cat data.csv \
-		    | sql-pipe -O xml --xml-root feed --xml-row entry 'SELECT * FROM t'
+		    | sql-pipe -O xml --xml-root feed --xml-row entry 'SELECT \* FROM t'
 
 	Output results as a Markdown table:
 
 		$ printf 'name,age\nAlice,30\nBob,25\nCarol,35' \
-		    | sql-pipe -O markdown 'SELECT * FROM t'
+		    | sql-pipe -O markdown 'SELECT \* FROM t'
 
 	Output:++
 	| name  | age |++
@@ -459,7 +459,7 @@ EXAMPLES
 	Output results as an HTML table:
 
 		$ printf 'name,age\nAlice,30\nBob,25' \
-		    | sql-pipe -O html 'SELECT * FROM t'
+		    | sql-pipe -O html 'SELECT \* FROM t'
 
 	Output:++
 	<table>++
@@ -472,7 +472,7 @@ EXAMPLES
 	Output with column headers and a CSS class:
 
 		$ printf 'name,age\nAlice,30\nBob,25' \
-		    | sql-pipe -O html --header --html-class 'results' 'SELECT * FROM t'
+		    | sql-pipe -O html --header --html-class 'results' 'SELECT \* FROM t'
 
 	Output:++
 	<table class="results">++
@@ -486,7 +486,7 @@ EXAMPLES
 	Custom NULL representation (replace NULL with empty string):
 
 		$ printf 'name,email\nAlice,a@b.com\nBob,\nCarol,c@d.com' \
-		    | sql-pipe --null-value '' 'SELECT * FROM t'
+		    | sql-pipe --null-value '' 'SELECT \* FROM t'
 
 	Output:++
 	Alice,a@b.com++
@@ -530,11 +530,11 @@ EXAMPLES
 		Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.
 		sql> SELECT region, SUM(revenue) FROM sales GROUP BY region;
 		+--------+-------------+
-		| region | SUM(revenue)|
+		\| region \| SUM(revenue)|
 		+--------+-------------+
-		| APAC   | 2345999.00  |
-		| EMEA   | 3123400.00  |
-		| NA     | 1890234.00  |
+		\| APAC   | 2345999.00  |
+		\| EMEA   | 3123400.00  |
+		\| NA     | 1890234.00  |
 		+--------+-------------+
 		sql> .exit
 

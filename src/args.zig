@@ -614,7 +614,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             if (args[i].len == 0) return error.InvalidUrl;
             const url_val = args[i];
             // Check for NAME=URL syntax
-            const eq_pos = std.mem.indexOfScalar(u8, url_val, '=');
+            const eq_pos = std.mem.findScalar(u8, url_val, '=');
             if (eq_pos) |pos| {
                 if (pos > 0) {
                     const name = url_val[0..pos];
@@ -646,7 +646,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         } else if (std.mem.startsWith(u8, arg, "--url=")) {
             const val = arg["--url=".len..];
             if (val.len == 0) return error.InvalidUrl;
-            const eq_pos = std.mem.indexOfScalar(u8, val, '=');
+            const eq_pos = std.mem.findScalar(u8, val, '=');
             if (eq_pos) |pos| {
                 if (pos > 0) {
                     const name = val[0..pos];
@@ -678,7 +678,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         } else if (std.mem.startsWith(u8, arg, "-u=")) {
             const val = arg["-u=".len..];
             if (val.len == 0) return error.InvalidUrl;
-            const eq_pos = std.mem.indexOfScalar(u8, val, '=');
+            const eq_pos = std.mem.findScalar(u8, val, '=');
             if (eq_pos) |pos| {
                 if (pos > 0) {
                     const name = val[0..pos];
@@ -998,7 +998,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
 }
 
 fn isValidHttpHeader(header: []const u8) bool {
-    const colon = std.mem.indexOfScalar(u8, header, ':') orelse return false;
+    const colon = std.mem.findScalar(u8, header, ':') orelse return false;
     return std.mem.trim(u8, header[0..colon], " \t").len > 0;
 }
 
