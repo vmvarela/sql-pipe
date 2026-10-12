@@ -3971,13 +3971,17 @@ pub fn build(b: *std.Build) void {
         \\set -euo pipefail
         \\bin=./zig-out/bin/sql-pipe
         \\msg=$("$bin" -p novalue 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'requires NAME=VALUE' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'requires NAME=VALUE' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
         \\msg=$("$bin" --param=x 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'requires NAME=VALUE' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'requires NAME=VALUE' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
         \\msg=$("$bin" -p '=x' 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'requires NAME=VALUE' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'requires NAME=VALUE' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
         \\msg=$("$bin" -p 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'requires NAME=VALUE' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'requires NAME=VALUE' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
     });
     test_param_usage.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_param_usage.step);
@@ -3988,14 +3992,17 @@ pub fn build(b: *std.Build) void {
         \\set -euo pipefail
         \\bin=./zig-out/bin/sql-pipe
         \\msg=$(printf 'a\n1\n' | "$bin" -p 'x=SECRETVAL' 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'no such parameter: :x' && echo "$msg" | grep -q 'EXIT:3'
-        \\! echo "$msg" | grep -q 'SECRETVAL'
+        \\echo "$msg" | grep -q 'no such parameter: :x' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:3' || exit 1
+        \\if echo "$msg" | grep -q 'SECRETVAL'; then exit 1; fi
         \\msg=$(printf 'a\n1\n' | "$bin" -p 'nmae=SECRETVAL' 'SELECT :name' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'hint: did you mean ":name"' && echo "$msg" | grep -q 'EXIT:3'
+        \\echo "$msg" | grep -q 'hint: did you mean ":name"' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:3' || exit 1
         \\# @NAME placeholders are never suggested for -p names
         \\msg=$(printf 'a\n1\n' | "$bin" -p 'foo=SECRETVAL' 'SELECT @foo, :fob' 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'hint: did you mean ":fob"' && echo "$msg" | grep -q 'EXIT:3'
-        \\! echo "$msg" | grep -q '"@foo"'
+        \\echo "$msg" | grep -q 'hint: did you mean ":fob"' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:3' || exit 1
+        \\if echo "$msg" | grep -q '"@foo"'; then exit 1; fi
     });
     test_param_unknown.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_param_unknown.step);
@@ -4007,9 +4014,10 @@ pub fn build(b: *std.Build) void {
         \\bin=./zig-out/bin/sql-pipe
         \\err=$(mktemp)
         \\result=$(printf 'a\n1\n' | "$bin" --explain -p min=5 'SELECT :min' 2>"$err")
-        \\[ "$result" = "5" ] && grep -q 'QUERY PLAN:' "$err"
-        \\printf 'a\n1\n' | "$bin" -p 'x=hello' --table 'SELECT :x' | grep -q 'hello'
-        \\printf 'a\n1\n' | "$bin" -p 'x=hello' -O markdown 'SELECT :x' | grep -q 'hello'
+        \\[ "$result" = "5" ] || exit 1
+        \\grep -q 'QUERY PLAN:' "$err" || exit 1
+        \\printf 'a\n1\n' | "$bin" -p 'x=hello' --table 'SELECT :x' | grep -q 'hello' || exit 1
+        \\printf 'a\n1\n' | "$bin" -p 'x=hello' -O markdown 'SELECT :x' | grep -q 'hello' || exit 1
         \\rm -f "$err"
     });
     test_param_explain_output.step.dependOn(b.getInstallStep());
@@ -4021,13 +4029,15 @@ pub fn build(b: *std.Build) void {
         \\set -euo pipefail
         \\bin=./zig-out/bin/sql-pipe
         \\msg=$(printf 'a\n1\n' | "$bin" --columns -p x=1 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'cannot be combined with --inspect or --repl' && echo "$msg" | grep -q 'EXIT:1'
+        \\echo "$msg" | grep -q 'cannot be combined with --inspect or --repl' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
         \\msg=$(printf 'SELECT 1;\n.exit\n' | "$bin" --repl --no-stdin -p x=1 2>&1 >/dev/null; echo "EXIT:$?")
-        \\echo "$msg" | grep -q 'cannot be combined with --inspect or --repl' && echo "$msg" | grep -q 'EXIT:1'
-        \\"$bin" --completions bash | grep -q -- '--param'
-        \\"$bin" --completions zsh | grep -q -- '--param'
-        \\"$bin" --completions fish | grep -q -- 'param'
-        \\"$bin" --help 2>&1 >/dev/null | grep -q -- '--param'
+        \\echo "$msg" | grep -q 'cannot be combined with --inspect or --repl' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
+        \\"$bin" --completions bash | grep -q -- '--param' || exit 1
+        \\"$bin" --completions zsh | grep -q -- '--param' || exit 1
+        \\"$bin" --completions fish | grep -q -- 'param' || exit 1
+        \\"$bin" --help 2>&1 >/dev/null | grep -q -- '--param' || exit 1
     });
     test_param_modes.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_param_modes.step);

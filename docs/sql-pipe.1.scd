@@ -249,8 +249,9 @@ OPTIONS
 		*=* characters. Placeholders in the query that receive no
 		*--param* keep SQLite's default (*NULL*). A supplied NAME the
 		query does not reference is an SQL error (exit 3), with a
-		suggestion when a similarly named parameter exists; values are
-		never echoed in error messages. Not compatible with *--inspect*
+		suggestion when a similarly named parameter exists; unknown-name
+		and binding diagnostics never echo values, but SQL execution
+		errors may include them. Not compatible with *--inspect*
 		modes or *--repl*.
 
 		Values always bind as TEXT: plain column comparisons convert via
