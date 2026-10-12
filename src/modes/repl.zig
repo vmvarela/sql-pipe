@@ -105,12 +105,21 @@ fn execReplQuery(
     use_table: bool,
     main_table: []const u8,
 ) void {
-    main_mod.execQuery(
-        allocator, db, query, stdout_writer, stderr_writer,
-        parsed.header, parsed.output_format,
-        parsed.xml_root, parsed.xml_row,
-        parsed.sql_table, parsed.html_class,
-        parsed.null_value, use_table, parsed.checksum,
+    main_mod.execScript(
+        allocator,
+        db,
+        query,
+        stdout_writer,
+        stderr_writer,
+        parsed.header,
+        parsed.output_format,
+        parsed.xml_root,
+        parsed.xml_row,
+        parsed.sql_table,
+        parsed.html_class,
+        parsed.null_value,
+        use_table,
+        parsed.checksum,
     ) catch |err| switch (err) {
         error.PrepareQueryFailed, error.StepFailed => {
             stdout_writer.flush() catch |err_flush| std.log.err("failed to flush stdout: {}", .{err_flush});
@@ -141,7 +150,7 @@ fn handleDotCommand(
     // Parse: split on first space to get command and optional argument
     const first_space = std.mem.indexOfAny(u8, trimmed, " \t");
     const cmd = if (first_space) |pos| trimmed[1..pos] else trimmed[1..];
-    const arg = if (first_space) |pos| std.mem.trim(u8, trimmed[pos+1..], " \t\r\n") else null;
+    const arg = if (first_space) |pos| std.mem.trim(u8, trimmed[pos + 1 ..], " \t\r\n") else null;
 
     if (std.mem.eql(u8, cmd, "help")) {
         stderr_writer.writeAll(
@@ -160,15 +169,16 @@ fn handleDotCommand(
         return true;
     }
     if (std.mem.eql(u8, cmd, "schema")) {
-        var query: [256]u8 = undefined;
-        const query_str = if (arg) |table_name|
-            std.fmt.bufPrint(&query, "SELECT sql FROM sqlite_master WHERE type='table' AND name='{s}'", .{table_name}) catch {
-                stderr_writer.print("error: table name too long\n", .{}) catch {};
-                return true;
-            }
-        else
-            "SELECT sql FROM sqlite_master WHERE type='table'";
-        execReplQuery(allocator, db, query_str, stdout_writer, stderr_writer, parsed, use_table, main_table);
+        if (arg) |table_name| {
+            var query: std.ArrayList(u8) = .empty;
+            defer query.deinit(allocator);
+            query.appendSlice(allocator, "SELECT sql FROM sqlite_master WHERE type='table' AND name=") catch
+                fatal("out of memory", stderr_writer, .csv_error, .{});
+            sqlite_mod.appendStringLiteral(allocator, stderr_writer, &query, table_name);
+            execReplQuery(allocator, db, query.items, stdout_writer, stderr_writer, parsed, use_table, main_table);
+        } else {
+            execReplQuery(allocator, db, "SELECT sql FROM sqlite_master WHERE type='table'", stdout_writer, stderr_writer, parsed, use_table, main_table);
+        }
         stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
         return true;
     }
@@ -182,12 +192,9 @@ fn handleDotCommand(
             return true;
         };
         defer allocator.free(file_contents);
-        var queries = std.mem.splitScalar(u8, file_contents, ';');
-        while (queries.next()) |query| {
-            const q = std.mem.trim(u8, query, " \t\r\n");
-            if (q.len == 0) continue;
-            execReplQuery(allocator, db, q, stdout_writer, stderr_writer, parsed, use_table, main_table);
-        }
+        // Execute every statement in the file (pzTail-driven); an error stops
+        // the remaining statements in this file but the REPL keeps running.
+        execReplQuery(allocator, db, file_contents, stdout_writer, stderr_writer, parsed, use_table, main_table);
         stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
         return true;
     }
@@ -236,47 +243,43 @@ pub fn runRepl(
         const line = readLine(allocator, io, &stdin_r, prompt);
         if (line == null) break;
         defer freeLine(allocator, line);
-        const trimmed = std.mem.trim(u8, line.?, " \t\r\n");
-
-        // Multi-line: empty line executes accumulated buffer
-        if (ml_buf.items.len > 0 and trimmed.len == 0) {
-            const query = ml_buf.items;
-            execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
-            ml_buf.clearRetainingCapacity();
-            stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
-            continue;
-        }
-
-        if (trimmed.len == 0) continue;
+        // Strip a single trailing \r so CRLF input doesn't leak into the buffer;
+        // otherwise keep raw line content (spaces/blank lines inside literals).
+        const raw = line.?;
+        const content = if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
+        const trimmed = std.mem.trim(u8, content, " \t");
 
         // Exit commands (always work, even in multi-line)
         if (std.mem.eql(u8, trimmed, ".exit") or std.mem.eql(u8, trimmed, ".quit") or std.mem.eql(u8, trimmed, ".q")) break;
 
         // Dot commands only in single-line mode (NOT in multi-line)
-        if (ml_buf.items.len == 0 and trimmed[0] == '.') {
+        if (ml_buf.items.len == 0 and trimmed.len > 0 and trimmed[0] == '.') {
             if (handleDotCommand(allocator, io, trimmed, db, stdout_writer, stderr_writer, parsed, use_table, main_table)) continue;
         }
 
-        // Append to multi-line buffer
-        const ends_with_semicolon = trimmed.len > 0 and trimmed[trimmed.len - 1] == ';';
+        if (trimmed.len == 0 and ml_buf.items.len == 0) continue;
+
+        // Append raw line content; never force-submit on a blank line — only
+        // sqlite3_complete decides when the buffered SQL is done.
         if (ml_buf.items.len > 0) {
-            ml_buf.append(allocator, ' ') catch { break; };
+            ml_buf.append(allocator, '\n') catch {
+                break;
+            };
         }
-        ml_buf.appendSlice(allocator, trimmed) catch { break; };
+        ml_buf.appendSlice(allocator, content) catch {
+            break;
+        };
 
-        if (!ends_with_semicolon) continue;
+        // Submit when SQLite says the buffered SQL is complete (semicolon kept).
+        // ponytail: dupeZ per line; upgrade to sentinel-terminated ArrayList
+        // if this shows up in profiles.
+        const sql_z = allocator.dupeZ(u8, ml_buf.items) catch {
+            break;
+        };
+        defer allocator.free(sql_z);
+        if (c.sqlite3_complete(sql_z.ptr) == 0) continue;
 
-        // Strip trailing ; and execute (B5)
-        const query_len = if (ml_buf.items.len > 0 and ml_buf.items[ml_buf.items.len - 1] == ';')
-            ml_buf.items.len - 1 else ml_buf.items.len;
-        const query = ml_buf.items[0..query_len];
-
-        if (query.len == 0) {
-            ml_buf.clearRetainingCapacity();
-            continue;
-        }
-
-        execReplQuery(allocator, db, query, stdout_writer, stderr_writer, parsed, use_table, main_table);
+        execReplQuery(allocator, db, ml_buf.items, stdout_writer, stderr_writer, parsed, use_table, main_table);
         ml_buf.clearRetainingCapacity();
         stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
     }

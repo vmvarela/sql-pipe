@@ -3481,18 +3481,99 @@ pub fn build(b: *std.Build) void {
     test_repl_strip.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_strip.step);
 
-    // Integration test 193: --repl multi-query
+    // Integration test 193: --repl multi-statement on one line (issue #239)
     const test_repl_multi = b.addSystemCommand(&.{
         "bash", "-c",
-        \\out=$(printf 'SELECT 1;\nSELECT 2;\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null); test "$(echo "$out" | grep -c '^1$')" = "1"
+        \\out=$(printf 'SELECT 1; SELECT 2;\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null)
+        \\test "$(echo "$out" | grep -c '^1$')" = "1" && test "$(echo "$out" | grep -c '^2$')" = "1"
     });
     test_repl_multi.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_multi.step);
 
-    // Integration test 194: --repl SQL error continues
+    // Integration test 193b: --repl semicolon inside string literal and line comment (issue #239)
+    const test_repl_string_semicolon = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\out=$(printf "SELECT 'a;b';\nSELECT 1 -- ;\n+ 1;\n.exit\n" | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null)
+        \\test "$(echo "$out" | grep -c '^a;b$')" = "1" && test "$(echo "$out" | grep -c '^2$')" = "1"
+    });
+    test_repl_string_semicolon.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_string_semicolon.step);
+
+    // Integration test 193c: --repl .read executes every statement, quoted semicolon (issue #239)
+    const test_repl_read_multi = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp); printf "SELECT 'x;y';\nSELECT 7;\n" > "$tmp"
+        \\out=$(printf ".read $tmp\n.exit\n" | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null); rm -f "$tmp"
+        \\test "$(echo "$out" | grep -c '^x;y$')" = "1" && test "$(echo "$out" | grep -c '^7$')" = "1"
+    });
+    test_repl_read_multi.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_read_multi.step);
+
+    // Integration test 193g: --repl .read stops at first error, REPL continues
+    // at the next prompt; statements after the failure do not run (issue #239)
+    const test_repl_read_error = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp); err=$(mktemp); printf "SELECT * FROM nonexistent;\nSELECT 9;\n" > "$tmp"
+        \\out=$(printf ".read $tmp\nSELECT 2;\n.exit\n" | ./zig-out/bin/sql-pipe --repl --no-stdin 2>"$err")
+        \\grep -q 'error:' "$err" && test "$(echo "$out" | grep -cx '2')" = "1" && test "$(echo "$out" | grep -cx '9')" = "0"; rc=$?
+        \\rm -f "$tmp" "$err"; exit $rc
+    });
+    test_repl_read_error.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_read_error.step);
+
+    // Integration test 193d: --repl side-effect statements execute with --table (issue #239)
+    const test_repl_table_side_effects = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\out=$(printf 'CREATE TABLE t (a);\nINSERT INTO t VALUES (5);\nSELECT a FROM t;\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin --table 2>/dev/null); echo "$out" | grep -Fq '│ 5 │'
+    });
+    test_repl_table_side_effects.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_table_side_effects.step);
+
+    // Integration test 193e: --repl INSERT...RETURNING executes exactly once with --table (issue #239)
+    // The RETURNING row and final count must each appear once.
+    const test_repl_returning_once = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\out=$(printf "CREATE TABLE t (a);\nINSERT INTO t VALUES (7) RETURNING a;\nSELECT COUNT(*) FROM t;\n.exit\n" | ./zig-out/bin/sql-pipe --repl --no-stdin --table 2>/dev/null)
+        \\test "$(printf '%s\n' "$out" | grep -c '^7$')" = "1" && echo "$out" | grep -Eq '│[[:space:]]*1[[:space:]]*│'
+    });
+    test_repl_returning_once.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_returning_once.step);
+
+    // Integration test 193h: --repl INSERT...RETURNING executes once with Markdown
+    const test_repl_returning_once_markdown = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\out=$(printf "CREATE TABLE t (a);\nINSERT INTO t VALUES (7) RETURNING a;\nSELECT COUNT(*) FROM t;\n.exit\n" | ./zig-out/bin/sql-pipe --repl --no-stdin -O markdown 2>/dev/null)
+        \\test "$(printf '%s\n' "$out" | grep -c '^7$')" = "1" && echo "$out" | grep -Eq '\|[[:space:]]*1[[:space:]]*\|'
+    });
+    test_repl_returning_once_markdown.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_returning_once_markdown.step);
+
+    // Integration test 193i: .schema treats its table name as a SQL literal
+    const test_repl_schema_literal = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\out=$(printf "CREATE TABLE victim (x);\nCREATE TABLE \"x'; DROP TABLE victim;--\" (x);\n.schema x'; DROP TABLE victim;--\n.tables\n.exit\n" | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null)
+        \\echo "$out" | grep -Fxq 'victim'
+    });
+    test_repl_schema_literal.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_schema_literal.step);
+
+    // Integration test 193f: --repl preserves blank lines and edge spaces inside string literals (issue #239)
+    // A blank line inside the literal is preserved along with edge spaces.
+    const test_repl_multiline_literal = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\printf "SELECT hex('  lead\n\n  trail  ');\n.exit\n" | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null | grep -qx '20206C6561640A0A2020747261696C2020'
+    });
+    test_repl_multiline_literal.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_multiline_literal.step);
+
+    // Integration test 194: --repl SQL error continues; statements after the
+    // failure in the same submission do not run, next prompt does (issue #239)
     const test_repl_error_continues = b.addSystemCommand(&.{
         "bash", "-c",
-        \\printf 'SELECT * FROM nonexistent;\nSELECT 1;\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>&1 >/dev/null | grep -q 'error:'
+        \\err=$(mktemp)
+        \\out=$(printf 'SELECT * FROM nonexistent; SELECT 9;\nSELECT 2;\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>"$err")
+        \\grep -q 'error:' "$err" && test "$(echo "$out" | grep -cx '2')" = "1" && test "$(echo "$out" | grep -cx '9')" = "0"; rc=$?
+        \\rm -f "$err"; exit $rc
     });
     test_repl_error_continues.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_error_continues.step);
@@ -3617,10 +3698,12 @@ pub fn build(b: *std.Build) void {
     test_repl_multiline.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_multiline.step);
 
-    // Integration test 210: --repl multi-line empty line submit
+    // Integration test 210: --repl multi-line blank line does not force-submit;
+    // sqlite3_complete submits only when the buffer is complete (issue #239)
     const test_repl_multiline_empty = b.addSystemCommand(&.{
         "bash", "-c",
-        \\printf 'SELECT 1\n\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null | grep -q '1'
+        \\out=$(printf 'SELECT 1\n\n+ 1;\n.exit\n' | ./zig-out/bin/sql-pipe --repl --no-stdin 2>/dev/null)
+        \\test "$(echo "$out" | grep -cx '2')" = "1" && test "$(echo "$out" | grep -cx '1')" = "0"
     });
     test_repl_multiline_empty.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_multiline_empty.step);

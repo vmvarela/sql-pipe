@@ -268,15 +268,8 @@ pub fn execQuery(
 
     const col_count: c_int = if (stmt) |s| c.sqlite3_column_count(s) else 0;
 
-    // Table mode: buffer all rows and print a formatted table
-    if (use_table) {
-        try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{allocator, stmt.?, col_count, null_value}, table.writeTable);
-        return;
-    }
-
-    // Markdown output: two-pass writer (not streaming)
-    if (output_format == .markdown) {
-        try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{allocator, stmt.?, col_count, null_value}, markdown.writeMarkdown);
+    if (stmt) |s| {
+        try writeResults(allocator, s, col_count, writer, stderr_writer, header, output_format, xml_root, xml_row, sql_table, html_class, null_value, use_table, checksum);
         return;
     }
 
@@ -291,6 +284,111 @@ pub fn execQuery(
     defer out_writer.deinit(allocator);
 
     try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt, col_count }, writeStreaming);
+}
+
+/// Format and emit the results of an already-prepared, not-yet-stepped
+/// statement. Shared by execQuery (CLI) and execScript (REPL).
+fn writeResults(
+    allocator: std.mem.Allocator,
+    stmt: *c.sqlite3_stmt,
+    col_count: c_int,
+    writer: *std.Io.Writer,
+    stderr_writer: *std.Io.Writer,
+    header: bool,
+    output_format: OutputFormat,
+    xml_root: []const u8,
+    xml_row: []const u8,
+    sql_table: []const u8,
+    html_class: []const u8,
+    null_value: ?[]const u8,
+    use_table: bool,
+    checksum: bool,
+) (SqlPipeError || std.mem.Allocator.Error || error{ WriteFailed, StepFailed })!void {
+    // Table mode: buffer all rows and print a formatted table
+    if (use_table) {
+        try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ allocator, stmt, col_count, null_value }, table.writeTable);
+        return;
+    }
+
+    // Markdown output: two-pass writer (not streaming)
+    if (output_format == .markdown) {
+        try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ allocator, stmt, col_count, null_value }, markdown.writeMarkdown);
+        return;
+    }
+
+    var out_writer = format.OutputWriter.init(output_format, .{
+        .header = header,
+        .xml_root = xml_root,
+        .xml_row = xml_row,
+        .sql_table = sql_table,
+        .html_class = html_class,
+        .null_value = null_value,
+    });
+    defer out_writer.deinit(allocator);
+
+    try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt, col_count }, writeStreaming);
+}
+
+/// execScript(allocator, db, sql, writer, stderr_writer, header, output_format, ...) → !void
+/// REPL-only multi-statement execution: runs every SQL statement in `sql`
+/// by walking sqlite3_prepare_v2's pzTail (no semicolon splitting).
+/// Statements without result columns (CREATE/INSERT/...) are stepped directly
+/// and emit no result block. A statement error aborts the remaining
+/// statements in this buffer; later REPL input still works.
+pub fn execScript(
+    allocator: std.mem.Allocator,
+    db: *c.sqlite3,
+    query: []const u8,
+    writer: *std.Io.Writer,
+    stderr_writer: *std.Io.Writer,
+    header: bool,
+    output_format: OutputFormat,
+    xml_root: []const u8,
+    xml_row: []const u8,
+    sql_table: []const u8,
+    html_class: []const u8,
+    null_value: ?[]const u8,
+    use_table: bool,
+    checksum: bool,
+) (SqlPipeError || std.mem.Allocator.Error || error{ WriteFailed, StepFailed })!void {
+    const query_z = try allocator.dupeZ(u8, query);
+    defer allocator.free(query_z);
+
+    var tail: [*c]const u8 = query_z.ptr;
+    while (true) {
+        var stmt: ?*c.sqlite3_stmt = null;
+        var next: [*c]const u8 = null;
+        if (c.sqlite3_prepare_v2(db, tail, -1, &stmt, &next) != c.SQLITE_OK)
+            return error.PrepareQueryFailed;
+        defer _ = c.sqlite3_finalize(stmt);
+        if (stmt == null) break; // only whitespace/comments remain
+        // Forward-progress guard: never loop if prepare consumes nothing.
+        if (next == null or @intFromPtr(next) <= @intFromPtr(tail)) break;
+        const col_count: c_int = c.sqlite3_column_count(stmt);
+        if (col_count == 0) {
+            // Side-effect statement: run to completion, no result output.
+            var rc = c.sqlite3_step(stmt.?);
+            while (rc == c.SQLITE_ROW) rc = c.sqlite3_step(stmt.?);
+            if (rc != c.SQLITE_DONE) return error.StepFailed;
+        } else {
+            // limit: the --table and Markdown writers are two-pass (reset + re-step),
+            // which would execute a writable statement (e.g. INSERT...RETURNING)
+            // twice; stream its rows once as CSV instead. Read-only statements
+            // keep the full two-pass output path. Upgrade: single-pass renderer.
+            const writable = c.sqlite3_stmt_readonly(stmt) == 0;
+            if (writable and (use_table or output_format == .markdown)) {
+                var out_writer = format.OutputWriter.init(.csv, .{
+                    .header = header,
+                    .null_value = null_value,
+                });
+                defer out_writer.deinit(allocator);
+                try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt, col_count }, writeStreaming);
+            } else {
+                try writeResults(allocator, stmt.?, col_count, writer, stderr_writer, header, output_format, xml_root, xml_row, sql_table, html_class, null_value, use_table, checksum);
+            }
+        }
+        tail = next;
+    }
 }
 
 /// loadInput(allocator, io, db, table_name, input_format, reader, parsed, stderr_writer) → usize
