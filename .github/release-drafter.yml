@@ -8,66 +8,26 @@ template: |
   **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
 
 autolabeler:
-  - label: "type:feature"
+  - label: "enhancement"
     title:
       - "/^feat(\\(.+\\))?:/i"
-  - label: "type:bug"
+  - label: "bug"
     title:
       - "/^fix(\\(.+\\))?:/i"
-  - label: "type:chore"
-    title:
-      - "/^chore(\\(.+\\))?:/i"
-      - "/^ci(\\(.+\\))?:/i"
-      - "/^test(\\(.+\\))?:/i"
-      - "/^refactor(\\(.+\\))?:/i"
-      - "/^build(\\(.+\\))?:/i"
-  - label: "type:docs"
+  - label: "documentation"
     title:
       - "/^docs(\\(.+\\))?:/i"
 
 categories:
   - title: "🚀 Features"
     labels:
-      - "type:feature"
-    exclude-labels:
-      - "type:bug"
-      - "type:chore"
-      - "type:docs"
-      - "type:spike"
-      - "dependencies"
+      - "enhancement"
   - title: "🐛 Bug Fixes"
     labels:
-      - "type:bug"
-    exclude-labels:
-      - "type:feature"
-      - "type:chore"
-      - "type:docs"
-      - "type:spike"
-      - "dependencies"
-  - title: "🧰 Maintenance"
-    labels:
-      - "type:chore"
-      - "tech-debt"
-    exclude-labels:
-      - "type:feature"
-      - "type:bug"
-      - "type:docs"
-      - "type:spike"
-      - "dependencies"
+      - "bug"
   - title: "📝 Documentation"
     labels:
-      - "type:docs"
-    exclude-labels:
-      - "type:feature"
-      - "type:bug"
-      - "type:chore"
-      - "type:spike"
-      - "dependencies"
-  - title: "🔬 Spikes & Research"
-    labels:
-      - "type:spike"
-    exclude-labels:
-      - "dependencies"
+      - "documentation"
   - title: "⬆️ Dependency Updates"
     labels:
       - "dependencies"
@@ -76,15 +36,7 @@ change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
 change-title-escapes: '\<*_&'
 
 version-resolver:
-  major:
-    labels:
-      - "type:breaking"
   minor:
     labels:
-      - "type:feature"
-  patch:
-    labels:
-      - "type:bug"
-      - "type:chore"
-      - "type:docs"
+      - "enhancement"
   default: patch

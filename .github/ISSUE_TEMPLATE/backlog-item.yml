@@ -29,34 +29,10 @@ body:
     attributes:
       label: Type
       options:
-        - feature
         - bug
-        - chore
-        - spike
-        - docs
-    validations:
-      required: true
-  - type: dropdown
-    id: priority
-    attributes:
-      label: Priority
-      options:
-        - critical
-        - high
-        - medium
-        - low
-    validations:
-      required: true
-  - type: dropdown
-    id: size
-    attributes:
-      label: Estimated Size
-      options:
-        - "xs (< 1 hour)"
-        - "s (1-4 hours)"
-        - "m (4-8 hours)"
-        - "l (1-2 days)"
-        - "xl (> 2 days — consider splitting)"
+        - enhancement
+        - documentation
+        - question
     validations:
       required: true
   - type: textarea

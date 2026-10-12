@@ -21,10 +21,9 @@ jobs:
             const { owner, repo } = context.repo;
 
             const typeMap = [
-              { pattern: /^feat(\(.+\))?:/i,                                      label: 'type:feature' },
-              { pattern: /^fix(\(.+\))?:/i,                                        label: 'type:bug'     },
-              { pattern: /^(chore|ci|test|refactor|build|perf)(\(.+\))?:/i,       label: 'type:chore'   },
-              { pattern: /^docs(\(.+\))?:/i,                                       label: 'type:docs'    },
+              { pattern: /^feat(\(.+\))?:/i, label: 'enhancement'   },
+              { pattern: /^fix(\(.+\))?:/i,  label: 'bug'           },
+              { pattern: /^docs(\(.+\))?:/i, label: 'documentation' },
             ];
 
             const typeLabels = typeMap.map(e => e.label);
@@ -36,7 +35,7 @@ jobs:
             });
             const currentNames = current.map(l => l.name);
 
-            // Remove stale type:* labels that no longer match
+            // Remove stale type labels that no longer match
             for (const l of currentNames) {
               if (typeLabels.includes(l) && l !== match?.label) {
                 await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name: l });
