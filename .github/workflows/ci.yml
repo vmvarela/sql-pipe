@@ -100,4 +100,11 @@ jobs:
             Write-Error "FAIL: unexpected output: $result"
             exit 1
           }
+          # Named parameter binding (issue #197)
+          $presult = "name,age`nAlice,30`nBob,25`nCarol,35" | .\zig-out\bin\sql-pipe.exe -p "min=30" "SELECT name FROM t WHERE CAST(age AS INT) >= :min"
+          $plines = $presult -split "`n" | Where-Object { $_ -ne "" }
+          if ($plines.Count -ne 2 -or $plines[0].Trim() -ne "Alice" -or $plines[1].Trim() -ne "Carol") {
+            Write-Error "FAIL: unexpected -p output: $presult"
+            exit 1
+          }
           Write-Host "PASS"

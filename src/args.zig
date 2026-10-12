@@ -41,6 +41,11 @@ pub const UrlInput = struct {
     headers: []const []const u8,
 };
 
+pub const SqlParam = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
 pub const SqlPipeError = error{
     MissingQuery,
     InvalidDelimiter,
@@ -108,6 +113,8 @@ pub const SqlPipeError = error{
     InvalidInspectMode,
     MissingInspectMode,
     ExplainWithOutput,
+    InvalidParam,
+    ParamsIncompatibleMode,
 };
 
 pub const ParsedArgs = struct {
@@ -178,6 +185,8 @@ pub const ParsedArgs = struct {
     inspect_args: ?InspectArgs = null,
     /// Number of sample rows to print when in --inspect sample mode (default: 10).
     sample_n: usize = 10,
+    /// Named SQL parameter values from -p/--param (repeatable); empty when none.
+    params: []const SqlParam = &.{},
 };
 
 pub const CompletionsShell = enum {
@@ -283,6 +292,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  --null-value <string>        Custom NULL representation in output (default: "NULL" for CSV/TSV/table)
          \\  --html-class <class>         CSS class name for the HTML <table> element (-O html only)
          \\  --checksum                   Emit SHA-256 hash of result set to stderr
+        \\  -p, --param NAME=VAL         Bind SQL named parameter :NAME as TEXT (repeatable)
          \\  -f, --file <file>            Read SQL query from file instead of command line
         \\  --completions <shell>        Generate shell completion script (bash, zsh, fish)
         \\  -h, --help                   Show this help message and exit
@@ -407,6 +417,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var table_mode: TableMode = .auto;
     var sql_table: []const u8 = "t";
     var html_class: []const u8 = "";
+    var params: std.ArrayList(SqlParam) = .empty;
     var seen_dashdash = false;
     var positional_args: std.ArrayList([]const u8) = .empty;
     defer positional_args.deinit(allocator);
@@ -579,6 +590,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             html_class = args[i];
         } else if (std.mem.startsWith(u8, arg, "--html-class=")) {
             html_class = arg["--html-class=".len..];
+        } else if (std.mem.eql(u8, arg, "--param") or std.mem.eql(u8, arg, "-p")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidParam;
+            try setParam(allocator, &params, try parseParamValue(args[i]));
+        } else if (std.mem.startsWith(u8, arg, "--param=")) {
+            try setParam(allocator, &params, try parseParamValue(arg["--param=".len..]));
+        } else if (std.mem.startsWith(u8, arg, "-p=")) {
+            try setParam(allocator, &params, try parseParamValue(arg["-p=".len..]));
         } else if (std.mem.eql(u8, arg, "--checksum")) {
             checksum = true;
         } else if (std.mem.eql(u8, arg, "--no-table")) {
@@ -833,6 +852,11 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     if (inspect_mode != null and explain)
         return error.InspectWithExplain;
 
+    // -p/--param binds query placeholders; inspect modes and the REPL never
+    // run the CLI query, so params would be silently ignored there.
+    if (params.items.len > 0 and (inspect_mode != null or repl_mode))
+        return error.ParamsIncompatibleMode;
+
     // --explain is mutually exclusive with --output (even outside inspect mode)
     if (explain and output != null)
         return error.ExplainWithOutput;
@@ -988,6 +1012,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         .null_value = null_value,
         .checksum = checksum,
         .max_body_size = max_body_size,
+        .params = params.items,
     };
 
     if (repl_mode) {
@@ -1000,6 +1025,26 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
 fn isValidHttpHeader(header: []const u8) bool {
     const colon = std.mem.findScalar(u8, header, ':') orelse return false;
     return std.mem.trim(u8, header[0..colon], " \t").len > 0;
+}
+
+/// Parse a -p/--param "NAME=VALUE" value, splitting on the first '=' so the
+/// rest (including further '=') is the value; VALUE may be empty.
+/// Missing '=' or empty NAME is a usage error.
+pub fn parseParamValue(val: []const u8) error{InvalidParam}!SqlParam {
+    const eq = std.mem.findScalar(u8, val, '=') orelse return error.InvalidParam;
+    if (eq == 0) return error.InvalidParam;
+    return .{ .name = val[0..eq], .value = val[eq + 1 ..] };
+}
+
+/// Add/replace a parameter; repeated CLI names keep the last value.
+fn setParam(allocator: std.mem.Allocator, params: *std.ArrayList(SqlParam), param: SqlParam) !void {
+    for (params.items) |*existing| {
+        if (std.mem.eql(u8, existing.name, param.name)) {
+            existing.value = param.value;
+            return;
+        }
+    }
+    try params.append(allocator, param);
 }
 
 /// Derive a table name from a file path (basename without extension).

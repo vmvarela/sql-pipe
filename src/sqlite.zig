@@ -428,6 +428,70 @@ pub fn printSqlErrorContext(
     }
 }
 
+/// Bind -p/--param values as TEXT to a prepared statement (issue #197).
+/// Only colon-prefixed (:NAME) placeholders are bound; other placeholder
+/// kinds (?, ?NNN, @NAME, $NAME) keep SQLite's default NULL behavior.
+/// A supplied name the statement does not reference exits with sql_error
+/// (the value is never echoed) and a Levenshtein hint when a statement
+/// parameter has a similar name.
+pub fn bindParams(
+    allocator: std.mem.Allocator,
+    db: *c.sqlite3,
+    writer: *std.Io.Writer,
+    stmt: ?*c.sqlite3_stmt,
+    params: []const args_mod.SqlParam,
+) void {
+    if (params.len == 0) return;
+    const count: c_int = if (stmt) |s| c.sqlite3_bind_parameter_count(s) else 0;
+
+    for (params) |param| {
+        const full = allocator.allocSentinel(u8, param.name.len + 1, 0) catch
+            fatal("out of memory", writer, .csv_error, .{});
+        defer allocator.free(full);
+        full[0] = ':';
+        @memcpy(full[1..], param.name);
+
+        const index: c_int = if (stmt) |s| c.sqlite3_bind_parameter_index(s, full.ptr) else 0;
+        if (index == 0) unknownParamFatal(writer, stmt, full, count);
+
+        const rc = c.sqlite3_bind_text(stmt.?, index, param.value.ptr, @intCast(param.value.len), sqliteTransient());
+        if (rc != c.SQLITE_OK)
+            fatal("{s}", writer, .sql_error, .{std.mem.span(c.sqlite3_errmsg(db))});
+    }
+}
+
+/// Fatal (exit 3) for a -p/--param name the statement never references.
+fn unknownParamFatal(
+    writer: *std.Io.Writer,
+    stmt: ?*c.sqlite3_stmt,
+    full: [:0]u8,
+    count: c_int,
+) noreturn {
+    writer.print("error: no such parameter: {s}\n", .{full}) catch |err|
+        std.log.err("failed to write error: {}", .{err});
+    if (stmt) |s| {
+        var best: ?[]const u8 = null;
+        var best_dist: usize = 3;
+        var idx: c_int = 1;
+        while (idx <= count) : (idx += 1) {
+            const name_ptr = c.sqlite3_bind_parameter_name(s, idx) orelse continue;
+            const name = std.mem.span(@as([*:0]const u8, @ptrCast(name_ptr)));
+            // -p names map to :NAME placeholders; never suggest @NAME/$NAME/?
+            if (name.len == 0 or name[0] != ':') continue;
+            const dist = levenshteinDistance(full, name);
+            if (dist < best_dist) {
+                best_dist = dist;
+                best = name;
+            }
+        }
+        if (best) |b|
+            writer.print("  hint: did you mean \"{s}\"?\n", .{b}) catch |err|
+                std.log.err("failed to write hint: {}", .{err});
+    }
+    writer.flush() catch |err| std.log.err("failed to flush: {}", .{err});
+    std.process.exit(@intFromEnum(ExitCode.sql_error));
+}
+
 /// Print SQL error message with column context to stderr without exiting.
 /// Pre:  errmsg is the SQLite error string; db has table (or PRAGMA silently fails)
 /// Post: stderr has "error: <msg>\n" + optional column list + optional hint

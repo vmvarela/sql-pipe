@@ -241,6 +241,23 @@ OPTIONS
 		still executes normally and results go to stdout. Mutually exclusive
 		with *--columns*, *--validate*, *--sample*, *--stats*, *--schema*, and *--output*.
 
+	*-p, --param* <NAME=VALUE>
+		Bind the SQL named parameter *:NAME* to VALUE as TEXT. Repeatable;
+		when the same NAME is given again, the last value wins. Also
+		accepted as *--param=NAME=VALUE* and *-p=NAME=VALUE*. The value
+		splits on the first *=*: it may be empty and may contain further
+		*=* characters. Placeholders in the query that receive no
+		*--param* keep SQLite's default (*NULL*). A supplied NAME the
+		query does not reference is an SQL error (exit 3), with a
+		suggestion when a similarly named parameter exists; values are
+		never echoed in error messages. Not compatible with *--inspect*
+		modes or *--repl*.
+
+		Values always bind as TEXT: plain column comparisons convert via
+		column affinity, but expression and aggregate comparisons may not
+		coerce the parameter numerically — cast explicitly when needed, e.g.
+		*SUM(age) >= CAST(:min AS INTEGER)*.
+
 	*--null-value* <string>
 		Custom representation for SQL NULL values in CSV, TSV, table, and
 		HTML output. By default, NULL values are printed as the string *NULL*
