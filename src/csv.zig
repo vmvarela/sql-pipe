@@ -80,6 +80,7 @@ pub const CsvReader = struct {
     ///       result = fields  ⟺  fields is a heap-allocated [][]u8 where
     ///           fields[i] is the UTF-8 content of the i-th field of the record,
     ///           decoded according to RFC 4180 ("" → ", embedded newlines preserved)
+    ///       a physically blank line returns a record with zero fields
     ///       On error.UnterminatedQuotedField: input ended inside a quoted field
     ///       All returned memory must be freed with freeRecord.
     pub fn nextRecord(self: *CsvReader) !?[][]u8 {
@@ -148,8 +149,15 @@ pub const CsvReader = struct {
                             // Part of \r\n; ignore, \n will terminate the record.
                         },
                         '\n' => {
-                            // End of record — last field is empty.
-                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                            // Physically blank line: zero fields (consumers
+                            // skip it). A quoted "" record still yields one
+                            // empty field via the quote_saw path.
+                            if (fields.items.len > 0) {
+                                // End of record — last field is empty.
+                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                            } else {
+                                field.deinit(self.allocator);
+                            }
                             return try fields.toOwnedSlice(self.allocator);
                         },
                         else => {
@@ -629,4 +637,74 @@ test "multi-char delimiter: greedy left-to-right matching" {
     try std.testing.expectEqual(2, r.len);
     try std.testing.expectEqualStrings("a", r[0]);
     try std.testing.expectEqualStrings("|b", r[1]);
+}
+
+// ─── Blank-line regression tests (issue #231) ─────────
+
+test "blank lines yield zero-field records (issue #231)" {
+    const input = "key,value\n\nx,1\n\n\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReader(std.testing.allocator, &input_reader);
+
+    const r1 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r1);
+    try std.testing.expectEqual(2, r1.len);
+    try std.testing.expectEqualStrings("key", r1[0]);
+
+    const r2 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r2);
+    try std.testing.expectEqual(0, r2.len);
+
+    const r3 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r3);
+    try std.testing.expectEqual(2, r3.len);
+    try std.testing.expectEqualStrings("x", r3[0]);
+    try std.testing.expectEqualStrings("1", r3[1]);
+
+    const r4 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r4);
+    try std.testing.expectEqual(0, r4.len);
+
+    const r5 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r5);
+    try std.testing.expectEqual(0, r5.len);
+
+    try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
+}
+
+test "quoted empty one-column row stays one empty field (issue #231)" {
+    const input = "\"\"\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReader(std.testing.allocator, &input_reader);
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(1, r.len);
+    try std.testing.expectEqualStrings("", r[0]);
+
+    try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
+}
+
+test "whitespace-only line is data, not blank" {
+    const input = " \n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReader(std.testing.allocator, &input_reader);
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(1, r.len);
+    try std.testing.expectEqualStrings(" ", r[0]);
+}
+
+test "blank line does not split quoted multi-line record" {
+    const input = "a,\"x\n\ny\",b\n";
+    var input_reader: std.Io.Reader = .fixed(input);
+    var csv = csvReader(std.testing.allocator, &input_reader);
+
+    const r = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r);
+    try std.testing.expectEqual(3, r.len);
+    try std.testing.expectEqualStrings("x\n\ny", r[1]);
+
+    try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
 }
