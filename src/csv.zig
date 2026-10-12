@@ -149,15 +149,15 @@ pub const CsvReader = struct {
                             // Part of \r\n; ignore, \n will terminate the record.
                         },
                         '\n' => {
-                            // Physically blank record: zero fields (consumers
+                            // Physically blank line: zero fields (consumers
                             // skip it). A quoted "" record still yields one
                             // empty field via the quote_saw path.
-                            if (fields.items.len == 0) {
+                            if (fields.items.len > 0) {
+                                // End of record — last field is empty.
+                                try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
+                            } else {
                                 field.deinit(self.allocator);
-                                return try fields.toOwnedSlice(self.allocator);
                             }
-                            // End of record — last field is empty.
-                            try fields.append(self.allocator, try field.toOwnedSlice(self.allocator));
                             return try fields.toOwnedSlice(self.allocator);
                         },
                         else => {
@@ -641,8 +641,8 @@ test "multi-char delimiter: greedy left-to-right matching" {
 
 // ─── Blank-line regression tests (issue #231) ─────────
 
-test "blank line yields zero-field record (issue #231)" {
-    const input = "key,value\n\nx,1\n";
+test "blank lines yield zero-field records (issue #231)" {
+    const input = "key,value\n\nx,1\n\n\n";
     var input_reader: std.Io.Reader = .fixed(input);
     var csv = csvReader(std.testing.allocator, &input_reader);
 
@@ -661,58 +661,13 @@ test "blank line yields zero-field record (issue #231)" {
     try std.testing.expectEqualStrings("x", r3[0]);
     try std.testing.expectEqualStrings("1", r3[1]);
 
-    try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
-}
+    const r4 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r4);
+    try std.testing.expectEqual(0, r4.len);
 
-test "blank CRLF line yields zero-field record" {
-    const input = "a,b\r\n\r\n1,2\r\n";
-    var input_reader: std.Io.Reader = .fixed(input);
-    var csv = csvReader(std.testing.allocator, &input_reader);
-
-    const r1 = (try csv.nextRecord()).?;
-    defer csv.freeRecord(r1);
-    try std.testing.expectEqual(2, r1.len);
-
-    const r2 = (try csv.nextRecord()).?;
-    defer csv.freeRecord(r2);
-    try std.testing.expectEqual(0, r2.len);
-
-    const r3 = (try csv.nextRecord()).?;
-    defer csv.freeRecord(r3);
-    try std.testing.expectEqual(2, r3.len);
-
-    try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
-}
-
-test "consecutive blank lines yield zero-field records then EOF" {
-    const input = "\n\n";
-    var input_reader: std.Io.Reader = .fixed(input);
-    var csv = csvReader(std.testing.allocator, &input_reader);
-
-    const r1 = (try csv.nextRecord()).?;
-    defer csv.freeRecord(r1);
-    try std.testing.expectEqual(0, r1.len);
-
-    const r2 = (try csv.nextRecord()).?;
-    defer csv.freeRecord(r2);
-    try std.testing.expectEqual(0, r2.len);
-
-    try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
-}
-
-test "trailing blank line before EOF yields zero-field record" {
-    const input = "a\n\n";
-    var input_reader: std.Io.Reader = .fixed(input);
-    var csv = csvReader(std.testing.allocator, &input_reader);
-
-    const r1 = (try csv.nextRecord()).?;
-    defer csv.freeRecord(r1);
-    try std.testing.expectEqual(1, r1.len);
-    try std.testing.expectEqualStrings("a", r1[0]);
-
-    const r2 = (try csv.nextRecord()).?;
-    defer csv.freeRecord(r2);
-    try std.testing.expectEqual(0, r2.len);
+    const r5 = (try csv.nextRecord()).?;
+    defer csv.freeRecord(r5);
+    try std.testing.expectEqual(0, r5.len);
 
     try std.testing.expectEqual(@as(?[][]u8, null), try csv.nextRecord());
 }

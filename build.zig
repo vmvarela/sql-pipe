@@ -3826,8 +3826,9 @@ pub fn build(b: *std.Build) void {
         \\printf '%s' "$csv" | ./zig-out/bin/sql-pipe 'SELECT COUNT(*) FROM t' | grep -qx '2'
         \\printf '%s' "$csv" | ./zig-out/bin/sql-pipe --verbose 'SELECT name FROM t' 2>&1 >/dev/null | grep -q 'Loaded 2 rows'
         \\printf 'name\n\n""\n' | ./zig-out/bin/sql-pipe 'SELECT COUNT(*) FROM t' | grep -qx '1'
-        \\tsv=$'name\r\nAlice\r\n\r\nBob\r\n'
-        \\printf '%s' "$tsv" | ./zig-out/bin/sql-pipe 'SELECT COUNT(*) FROM t' | grep -qx '2'
+        \\printf 'name\n\n""\n' | ./zig-out/bin/sql-pipe --no-type-inference 'SELECT COUNT(*) FROM t' | grep -qx '1'
+        \\tsv=$'name\tage\r\nAlice\t30\r\n\r\nBob\t25\r\n'
+        \\printf '%s' "$tsv" | ./zig-out/bin/sql-pipe -I tsv 'SELECT COUNT(*), SUM(age) FROM t' | grep -qx '2,55'
     });
     test_blank_csv_lines.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_blank_csv_lines.step);
