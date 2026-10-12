@@ -183,6 +183,8 @@ $ printf 'name,age\nAlice,30\nBob,25\nCarol,35' | sql-pipe 'SELECT * FROM t'
 
 Numeric columns are right-aligned, text columns left-aligned. Pipe the output and it stays CSV — no behavior change for scripts. Use `--table` to force table output or `--no-table` to force CSV.
 
+Table and Markdown output use two passes: one to measure column widths and another to render rows. The statement is run again for the second pass, so volatile expressions such as `random()` or `CURRENT_TIMESTAMP` may produce different values or widths. Use streaming CSV output with `--no-table` when the query must be evaluated only once.
+
 ### Custom NULL representation
 
 SQL NULL values show as the literal string `NULL` in CSV, TSV, and table output by default. Use `--null-value` to pick your own:
