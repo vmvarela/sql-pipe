@@ -3306,12 +3306,22 @@ pub fn build(b: *std.Build) void {
     test_completions_bash_syntax.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_completions_bash_syntax.step);
 
-    // Integration test 175i: Zsh completion script has valid syntax (skip if zsh not available)
+    // Integration test 175i: Zsh completion script has valid syntax and the
+    // -p/--param option brace-expands into real spec words (skip if zsh not available)
     const test_completions_zsh_syntax = b.addSystemCommand(&.{
         "bash", "-c",
+        \\set -euo pipefail
         \\script=$(./zig-out/bin/sql-pipe --completions zsh)
         \\if command -v zsh >/dev/null 2>&1; then
         \\  echo "$script" | zsh -n 2>&1 || exit 1
+        \\  # Stub _arguments so sourcing the script prints the spec words it passes
+        \\  tmp=$(mktemp -d)
+        \\  { echo '_arguments() { print -rl -- "$@"; }'; echo "$script"; } > "$tmp/comp.zsh"
+        \\  expanded=$(zsh -f -c "source '$tmp/comp.zsh'" 2>/dev/null)
+        \\  rm -rf "$tmp"
+        \\  echo "$expanded" | grep -q -- '^\*-p+\['
+        \\  echo "$expanded" | grep -q -- '^\*--param=\['
+        \\  ! echo "$expanded" | grep -q -- '{-p+,--param=}'
         \\fi
     });
     test_completions_zsh_syntax.step.dependOn(b.getInstallStep());
@@ -3915,6 +3925,122 @@ pub fn build(b: *std.Build) void {
     });
     test_blank_csv_lines.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_blank_csv_lines.step);
+
+    // ─── -p/--param integration tests (issue #197) ─────────────────────────────
+
+    // Integration test 197a: split form, equals forms, multiple params, last wins
+    const test_param_positive = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\set -euo pipefail
+        \\bin=./zig-out/bin/sql-pipe
+        \\in=$'name,age\nAlice,30\nBob,25\n'
+        \\printf '%s' "$in" | "$bin" -p min=25 'SELECT name FROM t WHERE age >= :min ORDER BY name' | diff - <(printf 'Alice\nBob\n')
+        \\printf '%s' "$in" | "$bin" --param min=25 'SELECT name FROM t WHERE age >= :min ORDER BY name' | diff - <(printf 'Alice\nBob\n')
+        \\printf '%s' "$in" | "$bin" -p=min=25 'SELECT name FROM t WHERE age >= :min ORDER BY name' | diff - <(printf 'Alice\nBob\n')
+        \\printf '%s' "$in" | "$bin" --param=lo=25 --param=hi=31 'SELECT name FROM t WHERE age > :lo AND age < :hi' | diff - <(printf 'Alice\n')
+        \\# duplicate name: last value wins (first value would also match Bob)
+        \\printf '%s' "$in" | "$bin" -p min=25 -p min=30 'SELECT name FROM t WHERE age >= :min' | diff - <(printf 'Alice\n')
+        \\printf 'a\n1\n' | "$bin" -p x=5 -p y=2 'SELECT :x + :y FROM t' | diff - <(printf '7\n')
+        \\printf 'a\n1\n' | "$bin" -p 'x=5' 'SELECT typeof(:x) FROM t' | diff - <(printf 'text\n')
+    });
+    test_param_positive.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_param_positive.step);
+
+    // Integration test 197b: value splitting, empty value, unbound placeholder stays NULL
+    const test_param_values = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\set -euo pipefail
+        \\bin=./zig-out/bin/sql-pipe
+        \\printf 'a\n1\n' | "$bin" -p 'eq=a=b' 'SELECT :eq FROM t' | diff - <(printf 'a=b\n')
+        \\printf 'a\n1\n' | "$bin" -p 'e=' 'SELECT :e FROM t' | diff - <(printf '\n')
+        \\printf 'a\n1\n' | "$bin" 'SELECT :unset IS NULL FROM t' | diff - <(printf '1\n')
+        \\# Expression comparisons may not coerce TEXT parameters numerically; CAST when needed
+        \\printf 'age\n30\n25\n' | "$bin" -p min=55 'SELECT SUM(age) >= :min FROM t' | diff - <(printf '0\n')
+        \\printf 'age\n30\n25\n' | "$bin" -p min=55 'SELECT SUM(age) >= CAST(:min AS INTEGER) FROM t' | diff - <(printf '1\n')
+        \\# value with spaces and single/double quotes is preserved exactly (equals the escaped SQL literal)
+        \\v="O'Brien \"X\" y"
+        \\lit="O''Brien \"X\" y"
+        \\printf 'a\n1\n' | "$bin" -p "x=$v" "SELECT :x = '$lit' FROM t" | diff - <(printf '1\n')
+    });
+    test_param_values.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_param_values.step);
+
+    // Integration test 197c: usage errors — missing '=', empty NAME, missing value (exit 1)
+    const test_param_usage = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\set -euo pipefail
+        \\bin=./zig-out/bin/sql-pipe
+        \\msg=$("$bin" -p novalue 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'requires NAME=VALUE' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
+        \\msg=$("$bin" --param=x 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'requires NAME=VALUE' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
+        \\msg=$("$bin" -p '=x' 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'requires NAME=VALUE' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
+        \\msg=$("$bin" -p 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'requires NAME=VALUE' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
+    });
+    test_param_usage.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_param_usage.step);
+
+    // Integration test 197d: unknown supplied parameter exits 3 with hint, value never echoed
+    const test_param_unknown = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\set -euo pipefail
+        \\bin=./zig-out/bin/sql-pipe
+        \\msg=$(printf 'a\n1\n' | "$bin" -p 'x=SECRETVAL' 'SELECT 1' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'no such parameter: :x' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:3' || exit 1
+        \\if echo "$msg" | grep -q 'SECRETVAL'; then exit 1; fi
+        \\msg=$(printf 'a\n1\n' | "$bin" -p 'nmae=SECRETVAL' 'SELECT :name' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'hint: did you mean ":name"' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:3' || exit 1
+        \\# @NAME placeholders are never suggested for -p names
+        \\msg=$(printf 'a\n1\n' | "$bin" -p 'foo=SECRETVAL' 'SELECT @foo, :fob' 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'hint: did you mean ":fob"' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:3' || exit 1
+        \\if echo "$msg" | grep -q '"@foo"'; then exit 1; fi
+    });
+    test_param_unknown.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_param_unknown.step);
+
+    // Integration test 197e: --explain binds parameters; --table and markdown paths re-step safely
+    const test_param_explain_output = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\set -euo pipefail
+        \\bin=./zig-out/bin/sql-pipe
+        \\err=$(mktemp)
+        \\result=$(printf 'a\n1\n' | "$bin" --explain -p min=5 'SELECT :min' 2>"$err")
+        \\[ "$result" = "5" ] || exit 1
+        \\grep -q 'QUERY PLAN:' "$err" || exit 1
+        \\printf 'a\n1\n' | "$bin" -p 'x=hello' --table 'SELECT :x' | grep -q 'hello' || exit 1
+        \\printf 'a\n1\n' | "$bin" -p 'x=hello' -O markdown 'SELECT :x' | grep -q 'hello' || exit 1
+        \\rm -f "$err"
+    });
+    test_param_explain_output.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_param_explain_output.step);
+
+    // Integration test 197f: -p rejected with inspect modes and --repl; completions mention it
+    const test_param_modes = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\set -euo pipefail
+        \\bin=./zig-out/bin/sql-pipe
+        \\msg=$(printf 'a\n1\n' | "$bin" --columns -p x=1 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'cannot be combined with --inspect or --repl' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
+        \\msg=$(printf 'SELECT 1;\n.exit\n' | "$bin" --repl --no-stdin -p x=1 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q 'cannot be combined with --inspect or --repl' || exit 1
+        \\echo "$msg" | grep -q 'EXIT:1' || exit 1
+        \\"$bin" --completions bash | grep -q -- '--param' || exit 1
+        \\"$bin" --completions zsh | grep -q -- '--param' || exit 1
+        \\"$bin" --completions fish | grep -q -- 'param' || exit 1
+        \\"$bin" --help 2>&1 >/dev/null | grep -q -- '--param' || exit 1
+    });
+    test_param_modes.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_param_modes.step);
 
     // ─── --checksum integration tests (issue #204) ──────────────────────────────
     // 25 data-driven cases (204a-204y). Scripts run with `set -euo pipefail` so a

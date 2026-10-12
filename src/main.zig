@@ -244,6 +244,7 @@ pub fn execQuery(
     allocator: std.mem.Allocator,
     db: *c.sqlite3,
     query: []const u8,
+    params: []const args_mod.SqlParam,
     writer: *std.Io.Writer,
     stderr_writer: *std.Io.Writer,
     header: bool,
@@ -263,6 +264,8 @@ pub fn execQuery(
     if (c.sqlite3_prepare_v2(db, query_z.ptr, -1, &stmt, null) != c.SQLITE_OK)
         return error.PrepareQueryFailed;
     defer _ = c.sqlite3_finalize(stmt);
+
+    sqlite_mod.bindParams(allocator, db, stderr_writer, stmt, params);
 
     // ponytail: prepare ";" succeeds with NULL stmt — empty result, no panic
     if (stmt == null and (use_table or output_format == .markdown)) return;
@@ -429,6 +432,7 @@ fn printQueryPlan(
     allocator: std.mem.Allocator,
     db: *c.sqlite3,
     query: []const u8,
+    params: []const args_mod.SqlParam,
     main_table: []const u8,
     stderr_writer: *std.Io.Writer,
 ) void {
@@ -448,6 +452,8 @@ fn printQueryPlan(
         sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
     }
     defer _ = c.sqlite3_finalize(stmt);
+
+    sqlite_mod.bindParams(allocator, db, stderr_writer, stmt, params);
 
     while (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
         // EXPLAIN QUERY PLAN columns: id(0), parent(1), notused(2), detail(3)
@@ -609,13 +615,14 @@ fn run(
 
     // Print query plan to stderr when --explain is set
     if (parsed.explain) {
-        printQueryPlan(allocator, db, query, main_table, stderr_writer);
+        printQueryPlan(allocator, db, query, parsed.params, main_table, stderr_writer);
     }
 
     execQuery(
         allocator,
         db,
         query,
+        parsed.params,
         stdout_writer,
         stderr_writer,
         parsed.header,
@@ -706,6 +713,8 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.SaveIncompatibleDisk => fatal("--save implies --disk; remove --disk", stderr_writer, .usage, .{}),
             error.MissingNullValue => fatal("--null-value requires a value", stderr_writer, .usage, .{}),
             error.MissingHtmlClassValue => fatal("--html-class requires a value", stderr_writer, .usage, .{}),
+            error.InvalidParam => fatal("-p/--param requires NAME=VALUE with a non-empty NAME", stderr_writer, .usage, .{}),
+            error.ParamsIncompatibleMode => fatal("--param cannot be combined with --inspect or --repl", stderr_writer, .usage, .{}),
             error.InvalidCompletionsShell => fatal("unknown shell; supported: bash, zsh, fish", stderr_writer, .usage, .{}),
             error.ReplIncompatibleMode => fatal("--repl cannot be combined with other special modes", stderr_writer, .usage, .{}),
             error.ReplWithQueryFile => fatal("--repl cannot be combined with -f/--file", stderr_writer, .usage, .{}),
