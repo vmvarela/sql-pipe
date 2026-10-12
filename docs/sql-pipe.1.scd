@@ -78,6 +78,11 @@ OPTIONS
 	*-O, --output-format* <fmt>
 		Set the output format: *csv* (default), *tsv*, *json*, *ndjson*,
 		*xml*, *markdown* (alias: *md*), *html*, or *sql*.
+		Table and Markdown output use two passes: one to measure column widths
+		and another to render rows. The statement runs again on the second pass,
+		so volatile expressions such as *random()* or *CURRENT\_TIMESTAMP* may
+		produce different values or widths. Use streaming CSV with *--no-table*
+		when the query must be evaluated only once.
 
 	*--sql-table* <name>
 		Target table name for *-O sql* INSERT output (default: *t*).
