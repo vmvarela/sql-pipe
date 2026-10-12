@@ -106,7 +106,7 @@ fn decimalToText(value: i64, scale: i32, buf: *[64]u8) []const u8 {
     const mag: u64 = @intCast(@abs(value));
     if (neg) buf[0] = '-';
     const off: usize = @intFromBool(neg);
-    const digits = intToBuf(@as(i64, @intCast(mag / pow10)), buf[off..]);
+    const digits = intToBuf(@intCast(mag / pow10), buf[off..]);
     const prefix = buf[0 .. off + digits.len];
     buf[prefix.len] = '.';
     const dot_pos = prefix.len + 1;

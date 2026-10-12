@@ -56,8 +56,9 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_r: anytype, prompt: 
         const trimmed = if (raw.len > 0 and raw[raw.len - 1] == '\r') raw[0 .. raw.len - 1] else raw;
 
         if (raw.len == buf.len) {
-            err_writer.print("warning: input line truncated at 8192 bytes\n", .{}) catch {};
-            err_writer.flush() catch {};
+            err_writer.print("warning: input line truncated at 8192 bytes\n", .{}) catch |err|
+                std.log.err("failed to write truncation warning: {}", .{err});
+            err_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
         }
 
         const copy = allocator.allocSentinel(u8, trimmed.len, 0) catch return null;
@@ -82,8 +83,9 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_r: anytype, prompt: 
             pos += 1;
         }
         if (pos == line_buf.len) {
-            err_writer.print("warning: input line truncated at 8192 bytes\n", .{}) catch {};
-            err_writer.flush() catch {};
+            err_writer.print("warning: input line truncated at 8192 bytes\n", .{}) catch |err|
+                std.log.err("failed to write truncation warning: {}", .{err});
+            err_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
         }
         const copy = allocator.allocSentinel(u8, pos, 0) catch return null;
         @memcpy(copy[0..pos], line_buf[0..pos]);
@@ -127,7 +129,8 @@ fn execReplQuery(
         },
         else => {
             stdout_writer.flush() catch |err_flush| std.log.err("failed to flush stdout: {}", .{err_flush});
-            stderr_writer.print("error: {s}\n", .{@errorName(err)}) catch {};
+            stderr_writer.print("error: {s}\n", .{@errorName(err)}) catch |write_err|
+                std.log.err("failed to write error message: {}", .{write_err});
             stderr_writer.flush() catch |err_flush| std.log.err("failed to flush stderr: {}", .{err_flush});
         },
     };
@@ -148,7 +151,7 @@ fn handleDotCommand(
     if (trimmed.len == 0 or trimmed[0] != '.') return false;
 
     // Parse: split on first space to get command and optional argument
-    const first_space = std.mem.indexOfAny(u8, trimmed, " \t");
+    const first_space = std.mem.findAny(u8, trimmed, " \t");
     const cmd = if (first_space) |pos| trimmed[1..pos] else trimmed[1..];
     const arg = if (first_space) |pos| std.mem.trim(u8, trimmed[pos + 1 ..], " \t\r\n") else null;
 
@@ -159,7 +162,7 @@ fn handleDotCommand(
             \\.schema [table]      Show CREATE TABLE DDL (all tables if no name given)
             \\.read <file>         Load and execute queries from file
             \\.exit, .quit, .q     Exit the REPL
-        ) catch {};
+        ) catch |err| std.log.err("failed to write help text: {}", .{err});
         stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
         return true;
     }
@@ -184,11 +187,13 @@ fn handleDotCommand(
     }
     if (std.mem.eql(u8, cmd, "read")) {
         if (arg == null or arg.?.len == 0) {
-            stderr_writer.print("usage: .read <file>\n", .{}) catch {};
+            stderr_writer.print("usage: .read <file>\n", .{}) catch |err|
+                std.log.err("failed to write usage message: {}", .{err});
             return true;
         }
         const file_contents = std.Io.Dir.cwd().readFileAlloc(io, arg.?, allocator, .limited(10 * 1024 * 1024)) catch |err| {
-            stderr_writer.print("error reading file '{s}': {s}\n", .{ arg.?, @errorName(err) }) catch {};
+            stderr_writer.print("error reading file '{s}': {s}\n", .{ arg.?, @errorName(err) }) catch |write_err|
+                std.log.err("failed to write file read error: {}", .{write_err});
             return true;
         };
         defer allocator.free(file_contents);
@@ -198,7 +203,8 @@ fn handleDotCommand(
         stdout_writer.flush() catch |err| std.log.err("failed to flush stdout: {}", .{err});
         return true;
     }
-    stderr_writer.print("unknown command: {s}\n", .{command}) catch {};
+    stderr_writer.print("unknown command: {s}\n", .{command}) catch |err|
+        std.log.err("failed to write unknown command message: {}", .{err});
     return true;
 }
 
@@ -232,7 +238,8 @@ pub fn runRepl(
     var stdin_buf: [8192]u8 = undefined;
     var stdin_r = if (builtin.os.tag != .windows) std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf) else {};
 
-    stderr_writer.writeAll("Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.\n") catch {};
+    stderr_writer.writeAll("Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.\n") catch |err|
+        std.log.err("failed to write REPL banner: {}", .{err});
     stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
 
     var ml_buf: std.ArrayList(u8) = .empty;

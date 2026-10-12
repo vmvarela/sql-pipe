@@ -1,7 +1,5 @@
 const std = @import("std");
 const c = @import("c");
-const build_options = @import("build_options");
-const parquet_mod = @import("../parquet.zig");
 const sqlite_mod = @import("../sqlite.zig");
 const args_mod = @import("../args.zig");
 const table = @import("../table.zig");

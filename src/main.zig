@@ -16,33 +16,34 @@ const parquet_mod = @import("parquet.zig");
 const inspect_mode = @import("modes/inspect.zig");
 const repl_mode = @import("modes/repl.zig");
 const completions_mod = @import("completions.zig");
+const builtin = @import("builtin");
 
 // Windows console UTF-8 setup (Issue #201)
-const DWORD = std.os.windows.DWORD;
-const HANDLE = std.os.windows.HANDLE;
-const BOOL = std.os.windows.BOOL;
-const UINT = std.os.windows.UINT;
-const LPDWORD = *DWORD;
+const Dword = std.os.windows.DWORD;
+const Handle = std.os.windows.HANDLE;
+const Bool = std.os.windows.BOOL;
+const Uint = std.os.windows.UINT;
+const Lpdword = *Dword;
 
-const STD_OUTPUT_HANDLE: DWORD = @bitCast(@as(i32, -11)); // 0xFFFFFFF5
-const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;
-const INVALID_HANDLE_VALUE: HANDLE = @ptrFromInt(std.math.maxInt(usize));
+const std_output_handle: Dword = @bitCast(@as(i32, -11)); // 0xFFFFFFF5
+const enable_virtual_terminal_processing: Dword = 0x0004;
+const invalid_handle_value: Handle = @ptrFromInt(std.math.maxInt(usize));
 
-extern "kernel32" fn SetConsoleOutputCP(wCodePageID: UINT) callconv(.winapi) BOOL;
-extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-extern "kernel32" fn GetConsoleMode(hConsoleHandle: HANDLE, lpMode: LPDWORD) callconv(.winapi) BOOL;
-extern "kernel32" fn SetConsoleMode(hConsoleHandle: HANDLE, dwMode: DWORD) callconv(.winapi) BOOL;
+extern "kernel32" fn SetConsoleOutputCP(wCodePageID: Uint) callconv(.winapi) Bool;
+extern "kernel32" fn GetStdHandle(nStdHandle: Dword) callconv(.winapi) Handle;
+extern "kernel32" fn GetConsoleMode(hConsoleHandle: Handle, lpMode: Lpdword) callconv(.winapi) Bool;
+extern "kernel32" fn SetConsoleMode(hConsoleHandle: Handle, dwMode: Dword) callconv(.winapi) Bool;
 
 /// Best-effort UTF-8 + VT support for the Windows console (Issue #201).
 /// No-op on non-Windows: body eliminated at compile time.
 fn setupConsoleOutput() void {
-    if (@import("builtin").os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         _ = SetConsoleOutputCP(65001);
-        const handle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (handle == INVALID_HANDLE_VALUE) return;
-        var mode: DWORD = 0;
+        const handle = GetStdHandle(std_output_handle);
+        if (handle == invalid_handle_value) return;
+        var mode: Dword = 0;
         _ = GetConsoleMode(handle, &mode);
-        _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        _ = SetConsoleMode(handle, mode | enable_virtual_terminal_processing);
     }
 }
 
@@ -101,8 +102,8 @@ fn writeWithChecksum(
 /// Stream all result rows through the format OutputWriter (writer is last param
 /// so it can be passed to writeWithChecksum).
 fn writeStreaming(
-    out_writer: *format.OutputWriter,
     allocator: std.mem.Allocator,
+    out_writer: *format.OutputWriter,
     stmt: ?*c.sqlite3_stmt,
     col_count: c_int,
     writer: *std.Io.Writer,
@@ -283,7 +284,7 @@ pub fn execQuery(
     });
     defer out_writer.deinit(allocator);
 
-    try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt, col_count }, writeStreaming);
+    try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ allocator, &out_writer, stmt, col_count }, writeStreaming);
 }
 
 /// Format and emit the results of an already-prepared, not-yet-stepped
@@ -326,7 +327,7 @@ fn writeResults(
     });
     defer out_writer.deinit(allocator);
 
-    try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt, col_count }, writeStreaming);
+    try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ allocator, &out_writer, stmt, col_count }, writeStreaming);
 }
 
 /// execScript(allocator, db, sql, writer, stderr_writer, header, output_format, ...) → !void
@@ -382,7 +383,7 @@ pub fn execScript(
                     .null_value = null_value,
                 });
                 defer out_writer.deinit(allocator);
-                try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ &out_writer, allocator, stmt, col_count }, writeStreaming);
+                try writeWithChecksum(allocator, writer, stderr_writer, checksum, .{ allocator, &out_writer, stmt, col_count }, writeStreaming);
             } else {
                 try writeResults(allocator, stmt.?, col_count, writer, stderr_writer, header, output_format, xml_root, xml_row, sql_table, html_class, null_value, use_table, checksum);
             }
@@ -552,7 +553,8 @@ pub fn loadPipelineInputs(
 
     // Warn when no rows were loaded — query referencing tables will fail
     if (total_rows == 0 and (parsed.has_stdin or parsed.files.len > 0 or parsed.urls.len > 0)) {
-        stderr_writer.print("warning: no rows loaded — tables not created; query may fail\n", .{}) catch {};
+        stderr_writer.print("warning: no rows loaded — tables not created; query may fail\n", .{}) catch |err|
+            std.log.err("failed to write no-rows warning: {}", .{err});
     }
 
     return total_rows;
@@ -610,7 +612,22 @@ fn run(
         printQueryPlan(allocator, db, query, main_table, stderr_writer);
     }
 
-    execQuery(allocator, db, query, stdout_writer, stderr_writer, parsed.header, parsed.output_format, parsed.xml_root, parsed.xml_row, parsed.sql_table, parsed.html_class, parsed.null_value, use_table, parsed.checksum) catch |err| switch (err) {
+    execQuery(
+        allocator,
+        db,
+        query,
+        stdout_writer,
+        stderr_writer,
+        parsed.header,
+        parsed.output_format,
+        parsed.xml_root,
+        parsed.xml_row,
+        parsed.sql_table,
+        parsed.html_class,
+        parsed.null_value,
+        use_table,
+        parsed.checksum,
+    ) catch |err| switch (err) {
         error.PrepareQueryFailed, error.StepFailed => {
             stdout_writer.flush() catch |flush_err| std.log.err("failed to flush output before fatal: {}", .{flush_err});
             sqlite_mod.fatalSqlWithContext(allocator, db, main_table, std.mem.span(c.sqlite3_errmsg(db)), stderr_writer);
@@ -721,8 +738,9 @@ pub fn main(init: std.process.Init.Minimal) void {
             // Print deprecation warning if old flag was used
             if (inspect_args.deprecated) {
                 const mode_str = @tagName(inspect_args.mode);
-                stderr_writer.print("warning: --{s} is deprecated, use --inspect {s}\n", .{ mode_str, mode_str }) catch {};
-                stderr_writer.flush() catch {};
+                stderr_writer.print("warning: --{s} is deprecated, use --inspect {s}\n", .{ mode_str, mode_str }) catch |err|
+                    std.log.err("failed to write deprecation warning: {}", .{err});
+                stderr_writer.flush() catch |err| std.log.err("failed to flush stderr: {}", .{err});
             }
             inspect_mode.runInspect(allocator, io.io(), inspect_args.mode, parsed, stderr_writer, stdout_writer);
             stdout_file_writer.flush() catch |err| {
