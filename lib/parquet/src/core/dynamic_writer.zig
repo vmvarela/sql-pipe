@@ -326,7 +326,7 @@ pub const DynamicWriter = struct {
             try validateEncodingForType(enc, info.physical);
         }
         for (self.pending_columns.items) |col| {
-            if (std.mem.eql(u8, col.name, name, 0)) return error.DuplicateColumnName;
+            if (std.mem.eql(u8, col.name, name)) return error.DuplicateColumnName;
         }
         const duped = self.allocator.dupeSentinel(u8, name, 0) catch return error.OutOfMemory;
         errdefer self.allocator.free(duped);
@@ -343,7 +343,7 @@ pub const DynamicWriter = struct {
     pub fn addColumnNested(self: *DynamicWriter, name: []const u8, node: *const SchemaNode, opts: ColumnProperties) DynamicWriterError!void {
         if (self.began) return error.InvalidState;
         for (self.pending_columns.items) |col| {
-            if (std.mem.eql(u8, col.name, name, 0)) return error.DuplicateColumnName;
+            if (std.mem.eql(u8, col.name, name)) return error.DuplicateColumnName;
         }
         const duped = self.allocator.dupeSentinel(u8, name, 0) catch return error.OutOfMemory;
         errdefer self.allocator.free(duped);
@@ -366,7 +366,7 @@ pub const DynamicWriter = struct {
     }
 
     pub fn dupeSchemaName(self: *DynamicWriter, name: []const u8) DynamicWriterError![]const u8 {
-        return self.schema_arena.allocator().dupe(u8, name, 0) catch return error.OutOfMemory;
+        return self.schema_arena.allocator().dupe(u8, name) catch return error.OutOfMemory;
     }
 
     pub fn setCompression(self: *DynamicWriter, codec: format.CompressionCodec) void {
@@ -662,7 +662,7 @@ pub const DynamicWriter = struct {
         const fields = getStructFields(node) orelse return error.InvalidState;
         if (field_idx >= fields.len) return error.InvalidArgument;
         const arena_alloc = self.bytes_arena.allocator();
-        const name = arena_alloc.dupe(u8, fields[field_idx].name, 0) catch return error.OutOfMemory;
+        const name = arena_alloc.dupe(u8, fields[field_idx].name) catch return error.OutOfMemory;
         frame.struct_fields.append(self.allocator, .{ .name = name, .value = val }) catch return error.OutOfMemory;
     }
 
@@ -1060,7 +1060,7 @@ pub const DynamicWriter = struct {
 
         var current_path: std.ArrayListUnmanaged([]const u8) = .empty;
         defer current_path.deinit(allocator);
-        current_path.append(allocator, col_name, 0) catch return error.OutOfMemory;
+        current_path.append(allocator, col_name) catch return error.OutOfMemory;
         buildLeafPaths(allocator, &leaf_paths, &current_path, node) catch return error.OutOfMemory;
 
         const leaf_levels = node.computeLeafLevels(allocator) catch return error.OutOfMemory;
@@ -1136,7 +1136,7 @@ pub const DynamicWriter = struct {
             },
             .struct_ => |s| {
                 for (s.fields) |f| {
-                    try current_path.append(allocator, f.name, 0);
+                    try current_path.append(allocator, f.name);
                     try buildLeafPaths(allocator, paths, current_path, f.node);
                     _ = current_path.pop();
                 }
@@ -1605,7 +1605,7 @@ pub const DynamicWriter = struct {
         self.kv_metadata.deinit(allocator);
 
         for (self.pending_columns.items) |pc| {
-            allocator.free(pc.name, 0);
+            allocator.free(pc.name);
         }
         self.pending_columns.deinit(allocator);
         if (self.column_names_owned.len > 0) allocator.free(self.column_names_owned);
