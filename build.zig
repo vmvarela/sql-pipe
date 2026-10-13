@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
     // Windows REPL uses C stdio for line-oriented stdin handling.
     if (target.result.os.tag == .windows) {
         const translate_stdio = b.addTranslateC(.{
-            .root_source_file = b.path("lib/stdio.h"),
+            .root_source_file = b.path("lib/windows_stdio.h"),
             .target = target,
             .optimize = optimize,
         });
