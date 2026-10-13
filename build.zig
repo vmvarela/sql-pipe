@@ -54,6 +54,16 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("yaml", translate_yaml.createModule());
 
+    // Windows REPL uses C stdio for line-oriented stdin handling.
+    if (target.result.os.tag == .windows) {
+        const translate_stdio = b.addTranslateC(.{
+            .root_source_file = b.path("lib/stdio.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        exe.root_module.addImport("c_stdio", translate_stdio.createModule());
+    }
+
     // Parquet reader: pure Zig library with pure-Zig compression codecs (zstd, gzip, snappy, lz4, brotli).
     // Replaces bundled carquet C library + zstd/lz4/zlib C sources.
     // codecs=zig-only: no C compression sources are compiled (all codecs are pure Zig).
