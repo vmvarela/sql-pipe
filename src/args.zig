@@ -835,7 +835,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         var seen = std.StringHashMap(void).init(allocator);
         defer seen.deinit();
         for (files.items) |f| {
-            const gop = try seen.getOrPut(f.table_name, 0);
+            const gop = try seen.getOrPut(f.table_name);
             if (gop.found_existing) return error.DuplicateTableName;
         }
     }
@@ -907,7 +907,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         var seen = std.StringHashMap(void).init(allocator);
         defer seen.deinit();
         for (files.items) |f| {
-            const gop = try seen.getOrPut(f.table_name, 0);
+            const gop = try seen.getOrPut(f.table_name);
             if (gop.found_existing) return error.DuplicateTableName;
         }
         for (urls.items, 0..) |url_input, url_idx| {
@@ -916,7 +916,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
                 const written = std.fmt.bufPrint(&buf, "url{}", .{url_idx}) catch unreachable;
                 break :blk allocator.dupeSentinel(u8, written, 0) catch unreachable;
             };
-            const gop = try seen.getOrPut(table_name, 0);
+            const gop = try seen.getOrPut(table_name);
             if (gop.found_existing) return error.DuplicateUrlTableName;
         }
         // Check stdin table name
@@ -1039,7 +1039,7 @@ pub fn parseParamValue(val: []const u8) error{InvalidParam}!SqlParam {
 /// Add/replace a parameter; repeated CLI names keep the last value.
 fn setParam(allocator: std.mem.Allocator, params: *std.ArrayList(SqlParam), param: SqlParam) !void {
     for (params.items) |*existing| {
-        if (std.mem.eql(u8, existing.name, param.name, 0)) {
+        if (std.mem.eql(u8, existing.name, param.name)) {
             existing.value = param.value;
             return;
         }
