@@ -6,10 +6,8 @@ const main_mod = @import("../main.zig");
 const loader = @import("../loader.zig");
 const builtin = @import("builtin");
 
-// ponytail: C stdio for Windows stdin reading (Zig 0.16 I/O API is inconsistent on Windows)
-const c_stdio = if (builtin.os.tag == .windows) @cImport({
-    @cInclude("stdio.h");
-}) else struct {};
+// C stdio is translated by build.zig for the Windows REPL path.
+const c_stdio = if (builtin.target.os.tag == .windows) @import("c_stdio") else struct {};
 
 const ParsedArgs = args_mod.ParsedArgs;
 const fatal = sqlite_mod.fatal;
@@ -47,7 +45,7 @@ fn readLine(allocator: std.mem.Allocator, io: std.Io, stdin_r: anytype, prompt: 
     err_writer.writeAll(prompt) catch return null;
     err_writer.flush() catch return null;
 
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         // ponytail: 8KB line limit; warn if truncated
         var buf: [8192]u8 = undefined;
         const raw = readLineWindows(&buf) orelse return null;
@@ -236,7 +234,7 @@ pub fn runRepl(
     // ponytail: persistent stdin reader for Unix — Windows uses C stdio getc() directly
     // Must be var and passed as pointer so internal buffer state survives across readLine calls.
     var stdin_buf: [8192]u8 = undefined;
-    var stdin_r = if (builtin.os.tag != .windows) std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf) else {};
+    var stdin_r = if (builtin.target.os.tag != .windows) std.Io.File.reader(std.Io.File.stdin(), io, &stdin_buf) else {};
 
     stderr_writer.writeAll("Entering interactive mode. Type .exit, .quit, Ctrl-D, or Ctrl-C to quit.\n") catch |err|
         std.log.err("failed to write REPL banner: {}", .{err});
@@ -278,9 +276,9 @@ pub fn runRepl(
         };
 
         // Submit when SQLite says the buffered SQL is complete (semicolon kept).
-        // ponytail: dupeZ per line; upgrade to sentinel-terminated ArrayList
+        // ponytail: sentinel-terminated duplicate per line; upgrade to sentinel-terminated ArrayList
         // if this shows up in profiles.
-        const sql_z = allocator.dupeZ(u8, ml_buf.items) catch {
+        const sql_z = allocator.dupeSentinel(u8, ml_buf.items, 0) catch {
             break;
         };
         defer allocator.free(sql_z);

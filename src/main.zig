@@ -37,7 +37,7 @@ extern "kernel32" fn SetConsoleMode(hConsoleHandle: Handle, dwMode: Dword) callc
 /// Best-effort UTF-8 + VT support for the Windows console (Issue #201).
 /// No-op on non-Windows: body eliminated at compile time.
 fn setupConsoleOutput() void {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         _ = SetConsoleOutputCP(65001);
         const handle = GetStdHandle(std_output_handle);
         if (handle == invalid_handle_value) return;
@@ -257,7 +257,7 @@ pub fn execQuery(
     use_table: bool,
     checksum: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || error{ WriteFailed, StepFailed })!void {
-    const query_z = try allocator.dupeZ(u8, query);
+    const query_z = try allocator.dupeSentinel(u8, query, 0);
     defer allocator.free(query_z);
 
     var stmt: ?*c.sqlite3_stmt = null;
@@ -355,7 +355,7 @@ pub fn execScript(
     use_table: bool,
     checksum: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || error{ WriteFailed, StepFailed })!void {
-    const query_z = try allocator.dupeZ(u8, query);
+    const query_z = try allocator.dupeSentinel(u8, query, 0);
     defer allocator.free(query_z);
 
     var tail: [*c]const u8 = query_z.ptr;
@@ -436,7 +436,7 @@ fn printQueryPlan(
     main_table: []const u8,
     stderr_writer: *std.Io.Writer,
 ) void {
-    // Build null-terminated "EXPLAIN QUERY PLAN <query>" using ArrayList (no allocPrintZ in 0.16).
+    // Build null-terminated "EXPLAIN QUERY PLAN <query>" using ArrayList.
     var eqp_buf: std.ArrayList(u8) = .empty;
     defer eqp_buf.deinit(allocator);
     eqp_buf.appendSlice(allocator, "EXPLAIN QUERY PLAN ") catch
@@ -509,7 +509,7 @@ pub fn loadPipelineInputs(
         const table_name = url_input.table_name orelse blk: {
             var buf: [16]u8 = undefined;
             const written = std.fmt.bufPrint(&buf, "url{}", .{i}) catch unreachable;
-            break :blk allocator.dupeZ(u8, written) catch unreachable;
+            break :blk allocator.dupeSentinel(u8, written, 0) catch unreachable;
         };
         const rows = loadInput(allocator, io, db, table_name, input_format, &body_reader, parsed, stderr_writer);
         total_rows += rows;

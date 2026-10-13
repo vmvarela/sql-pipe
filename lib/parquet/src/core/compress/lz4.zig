@@ -147,7 +147,7 @@ fn lz4CompressBlock(src: []const u8, dst: []u8) usize {
         return writeLastLiterals(dst, 0, src[0..]);
     }
 
-    var hash_table: [HASH_SIZE]u32 = [_]u32{0} ** HASH_SIZE;
+    var hash_table: [HASH_SIZE]u32 = @splat(0);
     var dp: usize = 0;
     var anchor: usize = 0;
     var ip: usize = 1; // skip first byte
@@ -312,7 +312,9 @@ test "lz4 empty data" {
 
 test "lz4 round-trip repetitive data" {
     const allocator = std.testing.allocator;
-    const original = "abcdefgh" ** 1000;
+    var original_buf: [8 * 1000]u8 = undefined;
+    for (0..1000) |i| @memcpy(original_buf[i * 8 ..][0..8], "abcdefgh");
+    const original = original_buf[0..];
 
     const compressed = try compress(allocator, original);
     defer allocator.free(compressed);

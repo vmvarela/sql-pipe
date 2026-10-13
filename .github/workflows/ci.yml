@@ -9,7 +9,7 @@ on:
 env:
   SQLITE_VERSION: "3490100"
   SQLITE_YEAR: "2025"
-  ZIG_VERSION: "0.16.0"
+  ZIG_VERSION: "0.17.0"
 
 jobs:
   build-and-test:
@@ -73,6 +73,12 @@ jobs:
 
       - name: Unit tests (csv.zig)
         run: zig build unit-test -Dbundle-sqlite=true
+
+      - name: Embedded Parquet compile check
+        shell: bash
+        run: |
+          cd lib/parquet
+          zig build check -Dcodecs=zig-only
 
       - name: Integration tests (build.zig)
         if: runner.os != 'Windows'

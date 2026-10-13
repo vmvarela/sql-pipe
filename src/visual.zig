@@ -210,7 +210,7 @@ pub fn writeCharRepeated(writer: *std.Io.Writer, char: []const u8, n: usize) err
     }
 }
 
-const spaces_buf = " " ** 256;
+const spaces_buf: [256]u8 = @splat(' ');
 
 /// Write n space characters efficiently using a pre-filled buffer.
 pub fn writeSpaces(writer: *std.Io.Writer, n: usize) error{WriteFailed}!void {

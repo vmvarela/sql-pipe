@@ -691,7 +691,9 @@ test "zstd compress empty data" {
 
 test "zstd round-trip repetitive data" {
     const allocator = std.testing.allocator;
-    const original = "abcdefgh" ** 1000;
+    var original_buf: [8 * 1000]u8 = undefined;
+    for (0..1000) |i| @memcpy(original_buf[i * 8 ..][0..8], "abcdefgh");
+    const original = original_buf[0..];
 
     const compressed = try compress(allocator, original);
     defer allocator.free(compressed);
@@ -720,7 +722,9 @@ test "zstd round-trip small data" {
 test "zstd round-trip multi-block data" {
     const allocator = std.testing.allocator;
     // 256KB > BLOCK_SIZE_MAX (128KB), forces at least 2 blocks
-    const original = "ABCDEFGHIJKLMNOP" ** (256 * 1024 / 16);
+    var original_buf: [256 * 1024]u8 = undefined;
+    for (0..(256 * 1024 / 16)) |i| @memcpy(original_buf[i * 16 ..][0..16], "ABCDEFGHIJKLMNOP");
+    const original = original_buf[0..];
 
     const compressed = try compress(allocator, original);
     defer allocator.free(compressed);
@@ -791,7 +795,9 @@ test "zstd rep offsets improve columnar data compression" {
     const allocator = std.testing.allocator;
 
     // Simulate columnar data: repeating 8-byte pattern where rep[0] should fire
-    const original = "abcdefgh" ** 1000;
+    var original_buf: [8 * 1000]u8 = undefined;
+    for (0..1000) |i| @memcpy(original_buf[i * 8 ..][0..8], "abcdefgh");
+    const original = original_buf[0..];
 
     const compressed = try compress(allocator, original);
     defer allocator.free(compressed);

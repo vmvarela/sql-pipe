@@ -914,7 +914,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             const table_name = url_input.table_name orelse blk: {
                 var buf: [16]u8 = undefined;
                 const written = std.fmt.bufPrint(&buf, "url{}", .{url_idx}) catch unreachable;
-                break :blk allocator.dupeZ(u8, written) catch unreachable;
+                break :blk allocator.dupeSentinel(u8, written, 0) catch unreachable;
             };
             const gop = try seen.getOrPut(table_name);
             if (gop.found_existing) return error.DuplicateUrlTableName;
