@@ -95,7 +95,7 @@ fn schemaRelease(schema_ptr: *ArrowSchema) callconv(.c) void {
     if (pd.children_ptrs_alloc) |ptrs| allocator.free(ptrs);
 
     allocator.free(pd.format_alloc);
-    if (pd.name_alloc) |name| allocator.free(name);
+    if (pd.name_alloc) |name| allocator.free(name, 0);
 
     allocator.destroy(pd);
     schema_ptr.release = null;
@@ -112,10 +112,10 @@ fn createSchemaNode(
     const pd = try allocator.create(SchemaPrivateData);
     errdefer allocator.destroy(pd);
 
-    const fmt = try allocator.dupeZ(u8, format_str);
+    const fmt = try allocator.dupeSentinel(u8, format_str);
     errdefer allocator.free(fmt);
 
-    const name_z = try allocator.dupeZ(u8, name);
+    const name_z = try allocator.dupeSentinel(u8, name, 0);
     errdefer allocator.free(name_z);
 
     pd.* = .{
@@ -359,30 +359,30 @@ fn parquetTypeToArrowFormat(allocator: Allocator, elem: format.SchemaElement) Sc
 
 fn logicalTypeToArrowFormat(allocator: Allocator, lt: format.LogicalType, elem: format.SchemaElement) SchemaConvError![:0]u8 {
     return switch (lt) {
-        .string => allocator.dupeZ(u8, "u"),
-        .enum_ => allocator.dupeZ(u8, "u"),
-        .json => allocator.dupeZ(u8, "u"),
-        .bson => allocator.dupeZ(u8, "z"),
-        .date => allocator.dupeZ(u8, "tdD"),
-        .uuid => allocator.dupeZ(u8, "w:16"),
-        .float16 => allocator.dupeZ(u8, "e"),
-        .geometry => allocator.dupeZ(u8, "z"),
-        .geography => allocator.dupeZ(u8, "z"),
+        .string => allocator.dupeSentinel(u8, "u", 0),
+        .enum_ => allocator.dupeSentinel(u8, "u", 0),
+        .json => allocator.dupeSentinel(u8, "u", 0),
+        .bson => allocator.dupeSentinel(u8, "z"),
+        .date => allocator.dupeSentinel(u8, "tdD"),
+        .uuid => allocator.dupeSentinel(u8, "w:16"),
+        .float16 => allocator.dupeSentinel(u8, "e"),
+        .geometry => allocator.dupeSentinel(u8, "z"),
+        .geography => allocator.dupeSentinel(u8, "z"),
         .int => |i| {
             if (i.is_signed) {
                 return switch (i.bit_width) {
-                    8 => allocator.dupeZ(u8, "c"),
-                    16 => allocator.dupeZ(u8, "s"),
-                    32 => allocator.dupeZ(u8, "i"),
-                    64 => allocator.dupeZ(u8, "l"),
+                    8 => allocator.dupeSentinel(u8, "c"),
+                    16 => allocator.dupeSentinel(u8, "s"),
+                    32 => allocator.dupeSentinel(u8, "i"),
+                    64 => allocator.dupeSentinel(u8, "l"),
                     else => error.UnsupportedType,
                 };
             } else {
                 return switch (i.bit_width) {
-                    8 => allocator.dupeZ(u8, "C"),
-                    16 => allocator.dupeZ(u8, "S"),
-                    32 => allocator.dupeZ(u8, "I"),
-                    64 => allocator.dupeZ(u8, "L"),
+                    8 => allocator.dupeSentinel(u8, "C"),
+                    16 => allocator.dupeSentinel(u8, "S"),
+                    32 => allocator.dupeSentinel(u8, "I"),
+                    64 => allocator.dupeSentinel(u8, "L"),
                     else => error.UnsupportedType,
                 };
             }
@@ -397,9 +397,9 @@ fn logicalTypeToArrowFormat(allocator: Allocator, lt: format.LogicalType, elem: 
             return fmtZ(allocator, "ts{c}:{s}", .{ unit_char, tz });
         },
         .time => |t| switch (t.unit) {
-            .millis => allocator.dupeZ(u8, "ttm"),
-            .micros => allocator.dupeZ(u8, "ttu"),
-            .nanos => allocator.dupeZ(u8, "ttn"),
+            .millis => allocator.dupeSentinel(u8, "ttm", 0),
+            .micros => allocator.dupeSentinel(u8, "ttu", 0),
+            .nanos => allocator.dupeSentinel(u8, "ttn", 0),
         },
         .decimal => |d| {
             if (elem.type_) |pt| {
@@ -415,24 +415,24 @@ fn logicalTypeToArrowFormat(allocator: Allocator, lt: format.LogicalType, elem: 
 
 fn convertedTypeToArrowFormat(allocator: Allocator, ct: i32, elem: format.SchemaElement) SchemaConvError![:0]u8 {
     return switch (ct) {
-        format.ConvertedType.UTF8 => allocator.dupeZ(u8, "u"),
-        format.ConvertedType.DATE => allocator.dupeZ(u8, "tdD"),
-        format.ConvertedType.TIMESTAMP_MILLIS => allocator.dupeZ(u8, "tsm:"),
-        format.ConvertedType.TIMESTAMP_MICROS => allocator.dupeZ(u8, "tsu:"),
-        format.ConvertedType.TIME_MILLIS => allocator.dupeZ(u8, "ttm"),
-        format.ConvertedType.TIME_MICROS => allocator.dupeZ(u8, "ttu"),
-        format.ConvertedType.INT_8 => allocator.dupeZ(u8, "c"),
-        format.ConvertedType.INT_16 => allocator.dupeZ(u8, "s"),
-        format.ConvertedType.INT_32 => allocator.dupeZ(u8, "i"),
-        format.ConvertedType.INT_64 => allocator.dupeZ(u8, "l"),
-        format.ConvertedType.UINT_8 => allocator.dupeZ(u8, "C"),
-        format.ConvertedType.UINT_16 => allocator.dupeZ(u8, "S"),
-        format.ConvertedType.UINT_32 => allocator.dupeZ(u8, "I"),
-        format.ConvertedType.UINT_64 => allocator.dupeZ(u8, "L"),
-        format.ConvertedType.ENUM => allocator.dupeZ(u8, "u"),
-        format.ConvertedType.JSON => allocator.dupeZ(u8, "u"),
-        format.ConvertedType.BSON => allocator.dupeZ(u8, "z"),
-        format.ConvertedType.INTERVAL => allocator.dupeZ(u8, "w:12"),
+        format.ConvertedType.UTF8 => allocator.dupeSentinel(u8, "u", 0),
+        format.ConvertedType.DATE => allocator.dupeSentinel(u8, "tdD"),
+        format.ConvertedType.TIMESTAMP_MILLIS => allocator.dupeSentinel(u8, "tsm:"),
+        format.ConvertedType.TIMESTAMP_MICROS => allocator.dupeSentinel(u8, "tsu:"),
+        format.ConvertedType.TIME_MILLIS => allocator.dupeSentinel(u8, "ttm", 0),
+        format.ConvertedType.TIME_MICROS => allocator.dupeSentinel(u8, "ttu", 0),
+        format.ConvertedType.INT_8 => allocator.dupeSentinel(u8, "c"),
+        format.ConvertedType.INT_16 => allocator.dupeSentinel(u8, "s"),
+        format.ConvertedType.INT_32 => allocator.dupeSentinel(u8, "i"),
+        format.ConvertedType.INT_64 => allocator.dupeSentinel(u8, "l"),
+        format.ConvertedType.UINT_8 => allocator.dupeSentinel(u8, "C"),
+        format.ConvertedType.UINT_16 => allocator.dupeSentinel(u8, "S"),
+        format.ConvertedType.UINT_32 => allocator.dupeSentinel(u8, "I"),
+        format.ConvertedType.UINT_64 => allocator.dupeSentinel(u8, "L"),
+        format.ConvertedType.ENUM => allocator.dupeSentinel(u8, "u", 0),
+        format.ConvertedType.JSON => allocator.dupeSentinel(u8, "u", 0),
+        format.ConvertedType.BSON => allocator.dupeSentinel(u8, "z"),
+        format.ConvertedType.INTERVAL => allocator.dupeSentinel(u8, "w:12"),
         format.ConvertedType.DECIMAL => blk: {
             const p = elem.precision orelse 0;
             const s = elem.scale orelse 0;
@@ -445,13 +445,13 @@ fn convertedTypeToArrowFormat(allocator: Allocator, ct: i32, elem: format.Schema
 fn physicalTypeToArrowFormat(allocator: Allocator, elem: format.SchemaElement) SchemaConvError![:0]u8 {
     const pt = elem.type_ orelse return error.InvalidSchema;
     return switch (pt) {
-        .boolean => allocator.dupeZ(u8, "b"),
-        .int32 => allocator.dupeZ(u8, "i"),
-        .int64 => allocator.dupeZ(u8, "l"),
-        .int96 => allocator.dupeZ(u8, "tsn:"),
-        .float => allocator.dupeZ(u8, "f"),
-        .double => allocator.dupeZ(u8, "g"),
-        .byte_array => allocator.dupeZ(u8, "z"),
+        .boolean => allocator.dupeSentinel(u8, "b"),
+        .int32 => allocator.dupeSentinel(u8, "i"),
+        .int64 => allocator.dupeSentinel(u8, "l"),
+        .int96 => allocator.dupeSentinel(u8, "tsn:"),
+        .float => allocator.dupeSentinel(u8, "f"),
+        .double => allocator.dupeSentinel(u8, "g"),
+        .byte_array => allocator.dupeSentinel(u8, "z"),
         .fixed_len_byte_array => blk: {
             const tl = elem.type_length orelse return error.InvalidSchema;
             break :blk fmtZ(allocator, "w:{d}", .{tl});
@@ -494,7 +494,7 @@ pub fn freeImportedColumnDefs(allocator: Allocator, col_defs: []ColumnDef) void 
 
 fn arrowSchemaToColumnDef(allocator: Allocator, schema: *const ArrowSchema) !ColumnDef {
     const fmt = std.mem.sliceTo(schema.format, 0);
-    const name = if (schema.name) |n| std.mem.sliceTo(n, 0) else "";
+    const name = if (schema.name, 0) |n| std.mem.sliceTo(n, 0) else "";
     const nullable = (schema.flags & arrow.ARROW_FLAG_NULLABLE) != 0;
 
     if (std.mem.eql(u8, fmt, "+l")) {
@@ -532,7 +532,7 @@ fn arrowSchemaToSchemaNode(allocator: Allocator, schema: *const ArrowSchema, nul
         const fields = allocator.alloc(SchemaNode.Field, nc) catch return error.OutOfMemory;
         for (0..nc) |i| {
             const child = children[i];
-            const child_name = if (child.name) |n| std.mem.sliceTo(n, 0) else "";
+            const child_name = if (child.name, 0) |n| std.mem.sliceTo(n, 0) else "";
             const child_nullable = (child.flags & arrow.ARROW_FLAG_NULLABLE) != 0;
             fields[i] = .{
                 .name = child_name,
@@ -594,13 +594,13 @@ const ArrowFormatInfo = struct {
         if (std.mem.eql(u8, fmt, "tdD") or std.mem.eql(u8, fmt, "tdm")) {
             return .{ .physical_type = .int32, .logical_type = .date };
         }
-        if (std.mem.eql(u8, fmt, "ttm") or std.mem.eql(u8, fmt, "tts")) {
+        if (std.mem.eql(u8, fmt, "ttm", 0) or std.mem.eql(u8, fmt, "tts")) {
             return .{ .physical_type = .int32, .logical_type = .{ .time = .{ .is_adjusted_to_utc = false, .unit = .millis } } };
         }
-        if (std.mem.eql(u8, fmt, "ttu")) {
+        if (std.mem.eql(u8, fmt, "ttu", 0)) {
             return .{ .physical_type = .int64, .logical_type = .{ .time = .{ .is_adjusted_to_utc = false, .unit = .micros } } };
         }
-        if (std.mem.eql(u8, fmt, "ttn")) {
+        if (std.mem.eql(u8, fmt, "ttn", 0)) {
             return .{ .physical_type = .int64, .logical_type = .{ .time = .{ .is_adjusted_to_utc = false, .unit = .nanos } } };
         }
         if (fmt.len >= 4 and std.mem.eql(u8, fmt[0..2], "ts")) {
@@ -760,7 +760,7 @@ fn arrowStructToColumnDef(allocator: Allocator, schema: *const ArrowSchema, name
     for (0..nc) |i| {
         const child = children[i];
         const child_fmt = std.mem.sliceTo(child.format, 0);
-        const child_name = if (child.name) |n| std.mem.sliceTo(n, 0) else "";
+        const child_name = if (child.name, 0) |n| std.mem.sliceTo(n, 0) else "";
         const child_nullable = (child.flags & arrow.ARROW_FLAG_NULLABLE) != 0;
 
         const child_def = try arrowLeafToColumnDef(child_fmt, child_name, child_nullable);
@@ -2175,7 +2175,7 @@ fn writeArrowColumnToParquet(
     }
 
     // Time32 millis → INT32
-    if (std.mem.eql(u8, fmt, "ttm")) {
+    if (std.mem.eql(u8, fmt, "ttm", 0)) {
         try writeTypedColumn(i32, writer, allocator, col_idx, arr, n);
         return;
     }
@@ -2185,7 +2185,7 @@ fn writeArrowColumnToParquet(
         try writeTime32SecondsColumn(writer, allocator, col_idx, arr, n);
         return;
     }
-    if (std.mem.eql(u8, fmt, "ttu") or std.mem.eql(u8, fmt, "ttn")) {
+    if (std.mem.eql(u8, fmt, "ttu", 0) or std.mem.eql(u8, fmt, "ttn", 0)) {
         try writeTypedColumn(i64, writer, allocator, col_idx, arr, n);
         return;
     }
@@ -2372,7 +2372,7 @@ fn arrowLeafToValue(arr: ArrowArray, fmt: []const u8, idx: usize) ArrowValueErro
         const data: [*]const i64 = @ptrCast(@alignCast(arr.buffers[1].?));
         return .{ .int32_val = safe.castTo(i32, @divTrunc(data[idx], 86_400_000)) catch return error.IntegerOverflow };
     }
-    if (std.mem.eql(u8, fmt, "ttm")) {
+    if (std.mem.eql(u8, fmt, "ttm", 0)) {
         const data: [*]const i32 = @ptrCast(@alignCast(arr.buffers[1].?));
         return .{ .int32_val = data[idx] };
     }
@@ -2380,7 +2380,7 @@ fn arrowLeafToValue(arr: ArrowArray, fmt: []const u8, idx: usize) ArrowValueErro
         const data: [*]const i32 = @ptrCast(@alignCast(arr.buffers[1].?));
         return .{ .int32_val = std.math.mul(i32, data[idx], 1000) catch return error.IntegerOverflow };
     }
-    if (std.mem.eql(u8, fmt, "ttu") or std.mem.eql(u8, fmt, "ttn")) {
+    if (std.mem.eql(u8, fmt, "ttu", 0) or std.mem.eql(u8, fmt, "ttn", 0)) {
         const data: [*]const i64 = @ptrCast(@alignCast(arr.buffers[1].?));
         return .{ .int64_val = data[idx] };
     }
@@ -2450,7 +2450,7 @@ fn arrowStructToValue(allocator: Allocator, arr: ArrowArray, sch: ArrowSchema, i
 
     var fields = allocator.alloc(Value.FieldValue, nc) catch return error.OutOfMemory;
     for (0..nc) |i| {
-        const child_name = if (child_schs[i].name) |n| std.mem.sliceTo(n, 0) else "";
+        const child_name = if (child_schs[i].name, 0) |n| std.mem.sliceTo(n, 0) else "";
         fields[i] = .{
             .name = child_name,
             .value = try arrowToValue(allocator, child_arrs[i].*, child_schs[i].*, idx),
@@ -2537,7 +2537,7 @@ fn writeListFromArrow(
         try writeListColumnDate64(writer, allocator, col_idx, arr, child_arr.*, n);
         return;
     }
-    if (std.mem.eql(u8, child_fmt, "ttm")) {
+    if (std.mem.eql(u8, child_fmt, "ttm", 0)) {
         try writeListColumnTyped(i32, writer, allocator, col_idx, arr, child_arr.*, n);
         return;
     }
@@ -2545,7 +2545,7 @@ fn writeListFromArrow(
         try writeListColumnTime32Seconds(writer, allocator, col_idx, arr, child_arr.*, n);
         return;
     }
-    if (std.mem.eql(u8, child_fmt, "ttu") or std.mem.eql(u8, child_fmt, "ttn")) {
+    if (std.mem.eql(u8, child_fmt, "ttu", 0) or std.mem.eql(u8, child_fmt, "ttn", 0)) {
         try writeListColumnTyped(i64, writer, allocator, col_idx, arr, child_arr.*, n);
         return;
     }
@@ -3062,7 +3062,7 @@ fn writeStructFieldFromArrow(
         try writeStructFieldDate64(writer, allocator, struct_col_idx, field_idx, child_arr, n, parent_nulls);
         return;
     }
-    if (std.mem.eql(u8, child_fmt, "ttm")) {
+    if (std.mem.eql(u8, child_fmt, "ttm", 0)) {
         try writeStructFieldTyped(i32, writer, allocator, struct_col_idx, field_idx, child_arr, n, parent_nulls);
         return;
     }
@@ -3070,7 +3070,7 @@ fn writeStructFieldFromArrow(
         try writeStructFieldTime32Seconds(writer, allocator, struct_col_idx, field_idx, child_arr, n, parent_nulls);
         return;
     }
-    if (std.mem.eql(u8, child_fmt, "ttu") or std.mem.eql(u8, child_fmt, "ttn")) {
+    if (std.mem.eql(u8, child_fmt, "ttu", 0) or std.mem.eql(u8, child_fmt, "ttn", 0)) {
         try writeStructFieldTyped(i64, writer, allocator, struct_col_idx, field_idx, child_arr, n, parent_nulls);
         return;
     }
