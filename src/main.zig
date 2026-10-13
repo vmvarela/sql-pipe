@@ -37,7 +37,7 @@ extern "kernel32" fn SetConsoleMode(hConsoleHandle: Handle, dwMode: Dword) callc
 /// Best-effort UTF-8 + VT support for the Windows console (Issue #201).
 /// No-op on non-Windows: body eliminated at compile time.
 fn setupConsoleOutput() void {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         _ = SetConsoleOutputCP(65001);
         const handle = GetStdHandle(std_output_handle);
         if (handle == invalid_handle_value) return;
