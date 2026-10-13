@@ -175,7 +175,7 @@ fn handleDotCommand(
             defer query.deinit(allocator);
             query.appendSlice(allocator, "SELECT sql FROM sqlite_master WHERE type='table' AND name=") catch
                 fatal("out of memory", stderr_writer, .csv_error, .{});
-            sqlite_mod.appendStringLiteral(allocator, stderr_writer, &query, table_name, 0);
+            sqlite_mod.appendStringLiteral(allocator, stderr_writer, &query, table_name);
             execReplQuery(allocator, db, query.items, stdout_writer, stderr_writer, parsed, use_table, main_table);
         } else {
             execReplQuery(allocator, db, "SELECT sql FROM sqlite_master WHERE type='table'", stdout_writer, stderr_writer, parsed, use_table, main_table);
@@ -276,7 +276,7 @@ pub fn runRepl(
         };
 
         // Submit when SQLite says the buffered SQL is complete (semicolon kept).
-        // ponytail: dupeZ per line; upgrade to sentinel-terminated ArrayList
+        // ponytail: sentinel-terminated duplicate per line; upgrade to sentinel-terminated ArrayList
         // if this shows up in profiles.
         const sql_z = allocator.dupeSentinel(u8, ml_buf.items, 0) catch {
             break;
