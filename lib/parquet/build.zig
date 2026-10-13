@@ -79,6 +79,9 @@ pub fn build(b: *std.Build) void {
     });
     run_lib_unit_tests.step.dependOn(&check_test_files.step);
 
+    const check_step = b.step("check", "Compile unit tests without running");
+    check_step.dependOn(&lib_unit_tests.step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
 }
