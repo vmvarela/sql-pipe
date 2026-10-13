@@ -268,7 +268,7 @@ fn buildHuffmanTable(allocator: std.mem.Allocator, code_lengths: []const u8, alp
     }
 
     // Compute per-primary-key secondary table bit widths
-    var secondary_table_bits: [PRIMARY_TABLE_SIZE]u8 = .{0} ** PRIMARY_TABLE_SIZE;
+    var secondary_table_bits: [PRIMARY_TABLE_SIZE]u8 = @splat(0);
     var table_size: usize = PRIMARY_TABLE_SIZE;
     if (max_bits > PRIMARY_TABLE_BITS) {
         var temp_codes: [16]u32 = next_code;
@@ -1959,7 +1959,7 @@ fn buildAndEmitComplexCode(
     }
 
     // Build canonical codes for code-length symbols
-    var cl_bl_count = [_]u32{0} ** 6;
+    var cl_bl_count: [6]u32 = @splat(0);
     for (0..18) |i| {
         if (cl_depths[i] > 0 and cl_depths[i] <= 5) {
             cl_bl_count[cl_depths[i]] += 1;
