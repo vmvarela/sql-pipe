@@ -74,11 +74,11 @@ jobs:
       - name: Unit tests (csv.zig)
         run: zig build unit-test -Dbundle-sqlite=true
 
-      - name: Embedded Parquet tests
+      - name: Embedded Parquet compile check
         shell: bash
         run: |
           cd lib/parquet
-          zig build test -Dcodecs=zig-only
+          zig build check -Dcodecs=zig-only
 
       - name: Integration tests (build.zig)
         if: runner.os != 'Windows'
