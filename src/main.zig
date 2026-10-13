@@ -441,7 +441,7 @@ fn printQueryPlan(
     defer eqp_buf.deinit(allocator);
     eqp_buf.appendSlice(allocator, "EXPLAIN QUERY PLAN ") catch
         sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
-    eqp_buf.appendSlice(allocator, query, 0) catch
+    eqp_buf.appendSlice(allocator, query) catch
         sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
     eqp_buf.append(allocator, 0) catch
         sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
@@ -569,7 +569,7 @@ pub fn loadPipelineInputs(
 /// mainTableName(parsed) → []const u8
 pub fn mainTableName(parsed: ParsedArgs) []const u8 {
     if (parsed.urls.len > 0) {
-        if (parsed.urls[0].table_name, 0) |name| return name;
+        if (parsed.urls[0].table_name) |name| return name;
         return "url0";
     }
     if (parsed.files.len > 0) return parsed.files[0].table_name;
