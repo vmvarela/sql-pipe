@@ -257,7 +257,7 @@ pub fn execQuery(
     use_table: bool,
     checksum: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || error{ WriteFailed, StepFailed })!void {
-    const query_z = try allocator.dupeZ(u8, query);
+    const query_z = try allocator.dupeSentinel(u8, query, 0);
     defer allocator.free(query_z);
 
     var stmt: ?*c.sqlite3_stmt = null;
@@ -355,7 +355,7 @@ pub fn execScript(
     use_table: bool,
     checksum: bool,
 ) (SqlPipeError || std.mem.Allocator.Error || error{ WriteFailed, StepFailed })!void {
-    const query_z = try allocator.dupeZ(u8, query);
+    const query_z = try allocator.dupeSentinel(u8, query, 0);
     defer allocator.free(query_z);
 
     var tail: [*c]const u8 = query_z.ptr;
@@ -441,7 +441,7 @@ fn printQueryPlan(
     defer eqp_buf.deinit(allocator);
     eqp_buf.appendSlice(allocator, "EXPLAIN QUERY PLAN ") catch
         sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
-    eqp_buf.appendSlice(allocator, query) catch
+    eqp_buf.appendSlice(allocator, query, 0) catch
         sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
     eqp_buf.append(allocator, 0) catch
         sqlite_mod.fatal("out of memory", stderr_writer, .csv_error, .{});
@@ -509,7 +509,7 @@ pub fn loadPipelineInputs(
         const table_name = url_input.table_name orelse blk: {
             var buf: [16]u8 = undefined;
             const written = std.fmt.bufPrint(&buf, "url{}", .{i}) catch unreachable;
-            break :blk allocator.dupeZ(u8, written) catch unreachable;
+            break :blk allocator.dupeSentinel(u8, written, 0) catch unreachable;
         };
         const rows = loadInput(allocator, io, db, table_name, input_format, &body_reader, parsed, stderr_writer);
         total_rows += rows;
@@ -569,7 +569,7 @@ pub fn loadPipelineInputs(
 /// mainTableName(parsed) → []const u8
 pub fn mainTableName(parsed: ParsedArgs) []const u8 {
     if (parsed.urls.len > 0) {
-        if (parsed.urls[0].table_name) |name| return name;
+        if (parsed.urls[0].table_name, 0) |name| return name;
         return "url0";
     }
     if (parsed.files.len > 0) return parsed.files[0].table_name;
