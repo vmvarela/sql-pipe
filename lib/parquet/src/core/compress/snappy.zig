@@ -351,7 +351,9 @@ test "snappy compress empty data" {
 
 test "snappy round-trip repetitive data" {
     const allocator = std.testing.allocator;
-    const original = "abcdefgh" ** 1000;
+    var original_buf: [8 * 1000]u8 = undefined;
+    for (0..1000) |i| @memcpy(original_buf[i * 8 ..][0..8], "abcdefgh");
+    const original = original_buf[0..];
 
     const compressed = try compress(allocator, original);
     defer allocator.free(compressed);
