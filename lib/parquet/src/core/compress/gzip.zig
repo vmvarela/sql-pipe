@@ -434,8 +434,8 @@ const Deflater = struct {
         const d = try allocator.create(Deflater);
         d.* = .{
             .window = undefined,
-            .head = [_]u16{0} ** HASH_SIZE,
-            .prev = [_]u16{0} ** WINDOW_SIZE,
+            .head = @splat(0),
+            .prev = @splat(0),
         };
         return d;
     }
