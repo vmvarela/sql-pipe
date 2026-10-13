@@ -436,7 +436,7 @@ fn printQueryPlan(
     main_table: []const u8,
     stderr_writer: *std.Io.Writer,
 ) void {
-    // Build null-terminated "EXPLAIN QUERY PLAN <query>" using ArrayList (no allocPrintZ in 0.16).
+    // Build null-terminated "EXPLAIN QUERY PLAN <query>" using ArrayList.
     var eqp_buf: std.ArrayList(u8) = .empty;
     defer eqp_buf.deinit(allocator);
     eqp_buf.appendSlice(allocator, "EXPLAIN QUERY PLAN ") catch
