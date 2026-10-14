@@ -694,7 +694,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InvalidOutputFormat => fatal("unknown output format; supported: csv, tsv, json, ndjson, xml, markdown (md), html, sql", stderr_writer, .usage, .{}),
             // ponytail: ColumnsWithQuery, ValidateWithQuery handled by InspectWithQuery above
             error.InvalidOutputPath => fatal("--output requires a non-empty file path", stderr_writer, .usage, .{}),
-            error.InvalidSampleCount => fatal("--sample requires a positive integer value", stderr_writer, .usage, .{}),
+            error.InvalidSampleCount => fatal("sample count must be a positive integer (--inspect sample or --sample)", stderr_writer, .usage, .{}),
             error.MissingQuery => {
                 stderr_writer.writeAll("error: no SQL query provided\n") catch |werr| std.log.err("failed to write error: {}", .{werr});
                 // Fall through to printUsage + exit below
