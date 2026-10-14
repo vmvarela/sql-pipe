@@ -219,7 +219,9 @@ OPTIONS
 		Inspect input data without running a query. *<mode>* is one of:
 		*columns* (list column names, one per line; with *-v* shows inferred types),
 		*validate* (parse entire input, print summary: OK: <n> rows, <m> columns),
-		*sample* [<n>] (print schema comment block and first <n> rows as CSV, default 10),
+		*sample* [<n>] (print schema comment block and first <n> rows as CSV, default 10; <n> must
+		be a positive integer placed directly after the mode — to sample a file whose name is a
+		number, use ./N or put it after --),
 		*stats* (per-column statistics: type, non-null count, min, max, mean),
 		*schema* (print inferred CREATE TABLE DDL).
 		Mutually exclusive with a query argument, *--output*, *--explain*, and

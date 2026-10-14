@@ -271,6 +271,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\                               columns — list column names (use -v for types)
         \\                               validate — parse and print summary (exit 2 on error)
         \\                               sample [n] — print schema to stderr and n rows to stdout (default: 10)
+        \\                                           n must be a positive integer placed directly after the mode
         \\                               stats — per-column statistics (type, non-null, min, max, mean)
         \\                               schema — print inferred CREATE TABLE DDL
         \\  --sample [<n>]               (deprecated) Print schema and first <n> rows, use --inspect sample
@@ -331,7 +332,7 @@ pub fn printUsage(writer: *std.Io.Writer) !void {
         \\  cat data.json | sql-pipe --input-format json 'SELECT * FROM t'
         \\  cat data.ndjson | sql-pipe -I ndjson -O ndjson 'SELECT name FROM t WHERE age > 18'
         \\  cat data.xml | sql-pipe -I xml --xml-root channel --xml-row item "SELECT title FROM t"
-        \\  cat data.csv | sql-pipe --sample 5
+        \\  cat data.csv | sql-pipe --inspect sample 5
         \\  sql-pipe -f query.sql data.csv
         \\  cat data.csv | sql-pipe -f query.sql
         \\
@@ -428,6 +429,9 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
     var max_body_size: usize = 100 * 1024 * 1024;
     var max_body_size_set = false;
 
+    // When set, the next iteration may consume an optional immediate sample count
+    var consume_sample_count = false;
+
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -488,9 +492,11 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             if (i >= args.len) return error.MissingInspectMode;
             const mode = InspectMode.parse(args[i]) catch return error.InvalidInspectMode;
             inspect_mode = mode;
+            if (mode == .sample) consume_sample_count = true;
         } else if (std.mem.startsWith(u8, arg, "--inspect=")) {
             const mode = InspectMode.parse(arg["--inspect=".len..]) catch return error.InvalidInspectMode;
             inspect_mode = mode;
+            if (mode == .sample) consume_sample_count = true;
         } else if (std.mem.eql(u8, arg, "--columns")) {
             inspect_mode = .columns;
             inspect_deprecated = true;
@@ -500,19 +506,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         } else if (std.mem.eql(u8, arg, "--sample")) {
             inspect_mode = .sample;
             inspect_deprecated = true;
-            // Peek at next arg: if it is a positive integer, consume it as the sample count
-            if (i + 1 < args.len) {
-                const next = args[i + 1];
-                if (next.len > 0 and next[0] != '-') {
-                    if (std.fmt.parseUnsigned(usize, next, 10)) |n| {
-                        if (n == 0) return error.InvalidSampleCount;
-                        inspect_sample_n = n;
-                        i += 1;
-                    } else |_| {
-                        // Not a number — keep default (10)
-                    }
-                }
-            }
+            consume_sample_count = true;
         } else if (std.mem.startsWith(u8, arg, "--sample=")) {
             const val = arg["--sample=".len..];
             const n = std.fmt.parseUnsigned(usize, val, 10) catch return error.InvalidSampleCount;
@@ -787,6 +781,24 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             max_body_size_set = true;
         } else {
             try positional_args.append(allocator, arg);
+        }
+
+        // Consume an optional sample count immediately after the mode, with the
+        // same rules as --sample: no flags, --, or non-numbers; zero is a usage error.
+        if (consume_sample_count) {
+            consume_sample_count = false;
+            if (i + 1 < args.len) {
+                const next = args[i + 1];
+                if (next.len > 0 and next[0] != '-') {
+                    if (std.fmt.parseUnsigned(usize, next, 10)) |n| {
+                        if (n == 0) return error.InvalidSampleCount;
+                        inspect_sample_n = n;
+                        i += 1;
+                    } else |_| {
+                        // Not a number — keep default (10)
+                    }
+                }
+            }
         }
     }
 

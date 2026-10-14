@@ -1095,6 +1095,131 @@ pub fn build(b: *std.Build) void {
     test_sample_fewer_rows.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_sample_fewer_rows.step);
 
+    // ─── --inspect sample count regression tests (#237) ─────────────────────
+
+    // Integration test 237-1: --inspect sample 2 consumes the count (exact stdout, exit 0, schema on stderr, no deprecation warning)
+    const test_inspect_sample_count = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,region,amount\n1,east,100\n2,west,200\n3,north,300\n4,south,400\n' \
+        \\    | ./zig-out/bin/sql-pipe --inspect sample 2 2>/dev/null) || exit 1
+        \\expected=$(printf 'id,region,amount\n1,east,100\n2,west,200')
+        \\[ "$result" = "$expected" ] || exit 1
+        \\stderr=$(printf 'id,region\n1,east\n' | ./zig-out/bin/sql-pipe --inspect sample 1 2>&1 >/dev/null)
+        \\echo "$stderr" | grep -q '^# Schema (2 columns):' || exit 1
+        \\! echo "$stderr" | grep -q 'deprecated' || exit 1
+    });
+    test_inspect_sample_count.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_sample_count.step);
+
+    // Integration test 237-2: --inspect=sample 2 consumes the count
+    const test_inspect_equals_sample_count = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'id,region,amount\n1,east,100\n2,west,200\n3,north,300\n4,south,400\n' \
+        \\    | ./zig-out/bin/sql-pipe --inspect=sample 2 2>/dev/null) || exit 1
+        \\expected=$(printf 'id,region,amount\n1,east,100\n2,west,200')
+        \\[ "$result" = "$expected" ] || exit 1
+    });
+    test_inspect_equals_sample_count.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_equals_sample_count.step);
+
+    // Integration test 237-3: default count is 10 with a 12-row input, for both syntaxes
+    const test_inspect_sample_default_ten = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\input=$(printf 'n\n'; i=1; while [ $i -le 12 ]; do echo "row$i"; i=$((i+1)); done)
+        \\expected=$(printf 'n\n'; i=1; while [ $i -le 10 ]; do echo "row$i"; i=$((i+1)); done)
+        \\for form in '--inspect sample' '--inspect=sample'; do
+        \\  result=$(printf '%s\n' "$input" | ./zig-out/bin/sql-pipe $form 2>/dev/null) || exit 1
+        \\  [ "$result" = "$expected" ] || exit 1
+        \\done
+    });
+    test_inspect_sample_default_ten.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_sample_default_ten.step);
+
+    // Integration test 237-4: the count is not turned into a file (#237)
+    const test_inspect_sample_count_not_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\expected=$(head -3 tests/fixtures/orders.csv)
+        \\for form in '--inspect sample 2' '--inspect=sample 2'; do
+        \\  result=$(./zig-out/bin/sql-pipe $form --no-stdin tests/fixtures/orders.csv 2>/dev/null) || exit 1
+        \\  [ "$result" = "$expected" ] || exit 1
+        \\done
+    });
+    test_inspect_sample_count_not_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_sample_count_not_file.step);
+
+    // Integration test 237-5: flags and files immediately after the mode are not consumed as the count
+    const test_inspect_sample_flag_and_file_after_mode = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a\tb\n1\t2\n3\t4\n' | ./zig-out/bin/sql-pipe --inspect sample --tsv 2>/dev/null) || exit 1
+        \\expected=$(printf 'a\tb\n1\t2\n3\t4')
+        \\[ "$result" = "$expected" ] || exit 1
+        \\expected_file=$(head -11 tests/fixtures/orders.csv)
+        \\result=$(./zig-out/bin/sql-pipe --inspect sample --no-stdin tests/fixtures/orders.csv 2>/dev/null) || exit 1
+        \\[ "$result" = "$expected_file" ] || exit 1
+    });
+    test_inspect_sample_flag_and_file_after_mode.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_sample_flag_and_file_after_mode.step);
+
+    // Integration test 237-6: zero count is a usage error (exit exactly 1) for both syntaxes
+    const test_inspect_sample_zero = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\for form in '--inspect sample 0' '--inspect=sample 0'; do
+        \\  result=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe $form 2>/dev/null)
+        \\  rc=$?
+        \\  [ "$rc" = 1 ] || exit 1
+        \\  [ -z "$result" ] || exit 1
+        \\done
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --inspect sample 0 2>&1 >/dev/null)
+        \\echo "$msg" | grep -q 'positive integer' || exit 1
+    });
+    test_inspect_sample_zero.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_sample_zero.step);
+
+    // Integration test 237-7: --inspect sample 2 --no-stdin with no source reports the missing source (exit 1), does not open '2'
+    const test_inspect_sample_count_no_source = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --inspect sample 2 --no-stdin 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q -- '--inspect requires an input source when --no-stdin is set' || exit 1
+        \\echo "$msg" | grep -Fxq 'EXIT:1' || exit 1
+    });
+    test_inspect_sample_count_no_source.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_sample_count_no_source.step);
+
+    // Integration test 237-8: a file literally named '2' works via -- 2, ./2, and after --no-stdin
+    const test_inspect_sample_file_named_two = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\tmp=$(mktemp -d) || exit 1
+        \\trap 'rm -rf "$tmp"' EXIT
+        \\printf 'x\n10\n20\n' > "$tmp/2"
+        \\bin="$PWD/zig-out/bin/sql-pipe"
+        \\expected=$(printf 'x\n10\n20')
+        \\result=$(cd "$tmp" && "$bin" --inspect sample --no-stdin -- 2 2>/dev/null) || exit 1
+        \\[ "$result" = "$expected" ] || exit 1
+        \\result=$(cd "$tmp" && "$bin" --inspect sample --no-stdin ./2 2>/dev/null) || exit 1
+        \\[ "$result" = "$expected" ] || exit 1
+        \\result=$(cd "$tmp" && "$bin" --inspect sample --no-stdin 2 2>/dev/null) || exit 1
+        \\[ "$result" = "$expected" ] || exit 1
+        \\result=$(cd "$tmp" && printf 'x\n10\n' | "$bin" --inspect columns --no-stdin 2 2>/dev/null) || exit 1
+        \\[ "$result" = "x" ] || exit 1
+    });
+    test_inspect_sample_file_named_two.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_sample_file_named_two.step);
+
+    // Integration test 237-9: --sample aliases keep working (count, warning); canonical form does not warn
+    const test_inspect_sample_aliases_compat = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a,b\n1,2\n3,4\n5,6\n' | ./zig-out/bin/sql-pipe --sample 2 2>/dev/null) || exit 1
+        \\expected=$(printf 'a,b\n1,2\n3,4')
+        \\[ "$result" = "$expected" ] || exit 1
+        \\result=$(printf 'a,b\n1,2\n3,4\n5,6\n' | ./zig-out/bin/sql-pipe --sample=2 2>/dev/null) || exit 1
+        \\[ "$result" = "$expected" ] || exit 1
+        \\msg=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --sample 1 2>&1 >/dev/null)
+        \\echo "$msg" | grep -q 'warning: --sample is deprecated' || exit 1
+    });
+    test_inspect_sample_aliases_compat.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_sample_aliases_compat.step);
+
+
     // Integration test 95: 2-char delimiter (||) splits fields correctly
     const test_delimiter_double_pipe = b.addSystemCommand(&.{
         "bash", "-c",
