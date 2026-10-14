@@ -685,6 +685,7 @@ pub fn main(init: std.process.Init.Minimal) void {
             error.InspectWithQuery => fatal("--inspect cannot be combined with a query argument", stderr_writer, .usage, .{}),
             error.InspectWithOutput => fatal("--inspect cannot be combined with --output", stderr_writer, .usage, .{}),
             error.InspectWithExplain => fatal("--inspect cannot be combined with --explain", stderr_writer, .usage, .{}),
+            error.InspectNoInput => fatal("--inspect requires an input source when --no-stdin is set", stderr_writer, .usage, .{}),
             error.InspectSampleWithJson => fatal("--inspect sample cannot be combined with --json or a JSON output format", stderr_writer, .usage, .{}),
             error.ExplainWithOutput => fatal("--explain cannot be combined with --output", stderr_writer, .usage, .{}),
             error.SilentVerboseConflict => fatal("--silent cannot be combined with --verbose", stderr_writer, .usage, .{}),

@@ -20,7 +20,10 @@ pub fn runStats(
     const db = sqlite_mod.openDb(false, null, stderr_writer);
     defer _ = c.sqlite3_close(db);
 
-    parsed.has_stdin = if (parsed.urls.len > 0) false else !(std.Io.File.isTty(std.Io.File.stdin(), io) catch false);
+    parsed.has_stdin = if (parsed.no_stdin or parsed.urls.len > 0)
+        false
+    else
+        !(std.Io.File.isTty(std.Io.File.stdin(), io) catch false);
 
     const total_rows = main_mod.loadPipelineInputs(allocator, io, db, parsed, stderr_writer);
     if (total_rows == 0 and (parsed.has_stdin or parsed.files.len > 0 or parsed.urls.len > 0))
