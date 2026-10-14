@@ -109,6 +109,7 @@ pub const SqlPipeError = error{
     InspectWithQuery,
     InspectWithOutput,
     InspectWithExplain,
+    InspectNoInput,
     InspectSampleWithJson,
     InvalidInspectMode,
     MissingInspectMode,
@@ -851,6 +852,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         return error.InspectWithOutput;
     if (inspect_mode != null and explain)
         return error.InspectWithExplain;
+    if (inspect_mode != null and no_stdin and files.items.len == 0 and urls.items.len == 0)
+        return error.InspectNoInput;
 
     // -p/--param binds query placeholders; inspect modes and the REPL never
     // run the CLI query, so params would be silently ignored there.

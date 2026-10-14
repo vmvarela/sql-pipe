@@ -3370,6 +3370,36 @@ pub fn build(b: *std.Build) void {
     test_no_stdin.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_no_stdin.step);
 
+    // Integration test 178b: --no-stdin rejects inspect modes with no other input source
+    const test_no_stdin_inspect_requires_source = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\for mode in columns validate sample stats schema; do
+        \\  msg=$(printf 'a,b\\n1,2\\n' | ./zig-out/bin/sql-pipe --inspect "$mode" --no-stdin 2>&1 >/dev/null; echo "EXIT:$?")
+        \\  echo "$msg" | grep -q -- '--inspect requires an input source when --no-stdin is set' || exit 1
+        \\  echo "$msg" | grep -q 'EXIT:1' || exit 1
+        \\done
+    });
+    test_no_stdin_inspect_requires_source.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_no_stdin_inspect_requires_source.step);
+
+    // Integration test 178c: --inspect stats --no-stdin ignores piped stdin when a file is present
+    const test_no_stdin_inspect_stats_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'piped_col\\n999\\n' | ./zig-out/bin/sql-pipe --inspect stats --no-stdin tests/fixtures/customers.csv 2>/dev/null)
+        \\echo "$result" | grep -q 'id' && ! echo "$result" | grep -q 'piped_col'
+    });
+    test_no_stdin_inspect_stats_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_no_stdin_inspect_stats_file.step);
+
+    // Integration test 178d: --inspect schema --no-stdin ignores piped stdin when a file is present
+    const test_no_stdin_inspect_schema_file = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'piped_col\\n999\\n' | ./zig-out/bin/sql-pipe --inspect schema --no-stdin tests/fixtures/customers.csv 2>/dev/null)
+        \\echo "$result" | grep -q 'CREATE TABLE "customers"' && ! echo "$result" | grep -q 'CREATE TABLE "stdin"' && ! echo "$result" | grep -q 'piped_col'
+    });
+    test_no_stdin_inspect_schema_file.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_no_stdin_inspect_schema_file.step);
+
     // Integration test 179: --validate reports mismatched column counts
     const test_validate_ragged = b.addSystemCommand(&.{
         "bash", "-c",
