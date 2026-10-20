@@ -58,13 +58,6 @@ jobs:
           - target: aarch64-freebsd
             asset: sql-pipe-aarch64-freebsd
             ext: ""
-          # NetBSD
-          - target: x86_64-netbsd
-            asset: sql-pipe-x86_64-netbsd
-            ext: ""
-          - target: aarch64-netbsd
-            asset: sql-pipe-aarch64-netbsd
-            ext: ""
 
     steps:
       - uses: actions/checkout@v7
@@ -129,10 +122,11 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # Stages the release as a DRAFT. It stays private until publish-release,
+  # which runs only after every asset, package and checksum is in place.
   release:
-    name: Attach assets to release
+    name: Stage release draft
     needs: build
-    if: ${{ always() && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -144,23 +138,26 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      - name: Create or update GitHub Release
+      - name: Create or reuse draft and upload binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" > /dev/null 2>&1; then
-            gh release edit "${{ github.ref_name }}" --draft=false \
-              --repo "${{ github.repository }}"
-            gh release upload "${{ github.ref_name }}" artifacts/* \
-              --repo "${{ github.repository }}" \
-              --clobber
+          TAG="${{ github.ref_name }}"
+          REPO="${{ github.repository }}"
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release edit "$TAG" --draft=true --repo "$REPO"
+            # A retried draft must not keep assets from an earlier attempt.
+            for name in $(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name'); do
+              [ -e "artifacts/$name" ] || gh release delete-asset "$TAG" "$name" --repo "$REPO" --yes
+            done
           else
-            gh release create "${{ github.ref_name }}" \
-              --title "${{ github.ref_name }}" \
+            gh release create "$TAG" \
+              --title "$TAG" \
               --generate-notes \
-              --repo "${{ github.repository }}" \
-              artifacts/*
+              --draft \
+              --repo "$REPO"
           fi
+          gh release upload "$TAG" artifacts/* --repo "$REPO" --clobber
 
   # ── Publish to npm ─────────────────────────────────────────────────────
   # Requires:
@@ -170,7 +167,7 @@ jobs:
   #   4. No NPM_TOKEN secret needed — uses OIDC (id-token: write)
   publish-npm:
     name: Publish to npm
-    needs: release
+    needs: publish-release
     if: ${{ vars.NPM_TRUSTED_PUBLISHING == 'true' }}
     runs-on: ubuntu-latest
     permissions:
@@ -219,7 +216,7 @@ jobs:
   #      on vmvarela/homebrew-tap, or classic PAT with public_repo scope)
   update-homebrew:
     name: Update Homebrew tap
-    needs: release
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
@@ -324,7 +321,7 @@ jobs:
   #   2. Secret: AUR_SSH_KEY (SSH private key authorized on AUR)
   update-aur:
     name: Update AUR package
-    needs: release
+    needs: publish-release
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -598,7 +595,7 @@ jobs:
   #   3. Secret: WINGET_GITHUB_TOKEN (classic PAT with public_repo scope)
   update-winget:
     name: Update WinGet manifest
-    needs: release
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_WINGET_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN != '' }}
@@ -621,7 +618,7 @@ jobs:
   #   2. Secret: SCOOP_BUCKET_TOKEN (PAT with contents:write on the bucket repo)
   update-scoop:
     name: Update Scoop bucket
-    needs: release
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_SCOOP_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN != '' }}
@@ -699,17 +696,11 @@ jobs:
           git push
 
   # ── Generate final SHA256 checksums ────────────────────────────────
-  # Runs after all packaging jobs so sha256sums.txt covers all assets:
-  # binaries, man page, .deb, .rpm AND .nupkg packages.
+  # Runs after all packaging jobs (all must succeed) so sha256sums.txt covers
+  # all assets: binaries, man page, .deb, .rpm and .apk packages.
   checksums:
     name: Generate SHA256 checksums
     needs: [release, package-deb, package-rpm, package-apk]
-    if: >-
-      always()
-      && needs.release.result == 'success'
-      && (needs.package-deb.result == 'success' || needs.package-deb.result == 'skipped')
-      && (needs.package-rpm.result == 'success' || needs.package-rpm.result == 'skipped')
-      && (needs.package-apk.result == 'success' || needs.package-apk.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -727,6 +718,14 @@ jobs:
       - name: Generate SHA256 checksums
         working-directory: assets
         run: |
+          # Fail before signing the list if an expected native asset is missing
+          for name in sql-pipe-x86_64-linux sql-pipe-aarch64-linux sql-pipe-armv7-linux \
+            sql-pipe-riscv64-linux sql-pipe-x86-linux sql-pipe-x86_64-macos \
+            sql-pipe-aarch64-macos sql-pipe-x86_64-windows.exe sql-pipe-aarch64-windows.exe \
+            sql-pipe-x86-windows.exe sql-pipe-x86_64-freebsd sql-pipe-aarch64-freebsd \
+            sql-pipe.1.gz; do
+            [ -f "$name" ] || { echo "::error::missing asset $name" >&2; exit 1; }
+          done
           # Exclude any pre-existing sha256sums.txt to avoid self-referencing
           sha256sum $(ls | grep -v sha256sums.txt) | tee sha256sums.txt
 
@@ -738,6 +737,37 @@ jobs:
             --repo "${{ github.repository }}" \
             --clobber
 
+  # ── Publish the GitHub Release ─────────────────────────────────────
+  # The only step that makes the release public. It re-downloads every
+  # asset from the draft and checks bytes and file set against sha256sums.txt.
+  publish-release:
+    name: Publish GitHub Release
+    needs: [release, package-deb, package-rpm, package-apk, checksums]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Verify draft assets against sha256sums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERIFY_DIR="$(mktemp -d)"
+          gh release download "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --dir "$VERIFY_DIR"
+          cd "$VERIFY_DIR"
+          sha256sum --check sha256sums.txt
+          diff <(find . -maxdepth 1 -type f ! -name sha256sums.txt -exec basename {} \; | sort) \
+               <(awk '{ print $2 }' sha256sums.txt | sort)
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.ref_name }}" --draft=false \
+            --repo "${{ github.repository }}"
+
   # ── Update Nix package versions ────────────────────────────────────
   # Pushes updated pkgs/sql-pipe/versions.json directly to
   # vmvarela/nix-packages so `nix run github:vmvarela/nix-packages#sql-pipe`
@@ -747,7 +777,7 @@ jobs:
   #   2. Secret: NIX_PACKAGES_TOKEN (PAT with contents:write on vmvarela/nix-packages)
   update-nix:
     name: Update Nix package
-    needs: checksums
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_NIX_TOKEN: ${{ secrets.NIX_PACKAGES_TOKEN != '' }}
@@ -822,10 +852,7 @@ jobs:
   #   2. Secret: APT_PACKAGES_TOKEN (PAT with contents:write on vmvarela/apt-packages)
   update-apt:
     name: Update APT repository
-    needs: package-deb
-    if: >-
-      always()
-      && needs.package-deb.result == 'success'
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_APT_TOKEN: ${{ secrets.APT_PACKAGES_TOKEN != '' }}
@@ -850,10 +877,7 @@ jobs:
   #   2. Secret: RPM_PACKAGES_TOKEN (PAT with contents:write on vmvarela/rpm-packages)
   update-rpm:
     name: Update RPM repository
-    needs: package-rpm
-    if: >-
-      always()
-      && needs.package-rpm.result == 'success'
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_RPM_TOKEN: ${{ secrets.RPM_PACKAGES_TOKEN != '' }}
@@ -878,10 +902,7 @@ jobs:
   #   2. Secret: APK_PACKAGES_TOKEN (PAT with contents:write on vmvarela/apk-packages)
   update-apk:
     name: Update APK repository
-    needs: package-apk
-    if: >-
-      always()
-      && needs.package-apk.result == 'success'
+    needs: publish-release
     runs-on: ubuntu-latest
     env:
       HAS_APK_TOKEN: ${{ secrets.APK_PACKAGES_TOKEN != '' }}
