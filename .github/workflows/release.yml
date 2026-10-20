@@ -212,14 +212,14 @@ jobs:
   # ── Update Homebrew tap ─────────────────────────────────────────────
   # Requires:
   #   1. Repository: vmvarela/homebrew-tap (with a Formula/ directory)
-  #   2. Secret: HOMEBREW_TAP_TOKEN (fine-grained PAT with contents:write
+  #   2. Secret: PACKAGE_DISTRIBUTION_TOKEN (fine-grained PAT with contents:write
   #      on vmvarela/homebrew-tap, or classic PAT with public_repo scope)
   update-homebrew:
     name: Update Homebrew tap
     needs: publish-release
     runs-on: ubuntu-latest
     env:
-      HAS_HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+      HAS_HOMEBREW_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN != '' }}
     steps:
       - name: Download all artifacts
         if: ${{ env.HAS_HOMEBREW_TOKEN == 'true' }}
@@ -231,7 +231,7 @@ jobs:
       - name: Generate formula and push to tap
         if: ${{ env.HAS_HOMEBREW_TOKEN == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
 
@@ -592,13 +592,13 @@ jobs:
   #   1. At least one version already in microsoft/winget-pkgs (initial
   #      submission must be done manually via wingetcreate or PR)
   #   2. Fork of microsoft/winget-pkgs under the vmvarela account
-  #   3. Secret: WINGET_GITHUB_TOKEN (classic PAT with public_repo scope)
+  #   3. Secret: PACKAGE_DISTRIBUTION_TOKEN (classic PAT with public_repo scope)
   update-winget:
     name: Update WinGet manifest
     needs: publish-release
     runs-on: ubuntu-latest
     env:
-      HAS_WINGET_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN != '' }}
+      HAS_WINGET_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN != '' }}
     steps:
       - name: Submit WinGet manifest
         if: ${{ env.HAS_WINGET_TOKEN == 'true' }}
@@ -606,7 +606,7 @@ jobs:
         with:
           identifier: vmvarela.sql-pipe
           installers-regex: 'sql-pipe-.*-windows\.exe$'
-          token: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          token: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
 
   # ── Update Scoop bucket ──────────────────────────────────────────────
   # Pushes an updated Scoop manifest to the vmvarela/scoop-bucket
@@ -615,13 +615,13 @@ jobs:
   #   scoop install sql-pipe
   # Requires:
   #   1. Repository: vmvarela/scoop-bucket (with bucket/sql-pipe.json)
-  #   2. Secret: SCOOP_BUCKET_TOKEN (PAT with contents:write on the bucket repo)
+  #   2. Secret: PACKAGE_DISTRIBUTION_TOKEN (PAT with contents:write on the target repository)
   update-scoop:
     name: Update Scoop bucket
     needs: publish-release
     runs-on: ubuntu-latest
     env:
-      HAS_SCOOP_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN != '' }}
+      HAS_SCOOP_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN != '' }}
     steps:
       - name: Download Windows artifacts
         if: ${{ env.HAS_SCOOP_TOKEN == 'true' }}
@@ -633,7 +633,7 @@ jobs:
       - name: Generate manifest and push to bucket
         if: ${{ env.HAS_SCOOP_TOKEN == 'true' }}
         env:
-          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          PACKAGE_DISTRIBUTION_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
 
@@ -685,7 +685,7 @@ jobs:
           echo "==> Generated Scoop manifest for sql-pipe ${VERSION}:"
           cat sql-pipe.json
 
-          git clone "https://x-access-token:${SCOOP_BUCKET_TOKEN}@github.com/vmvarela/scoop-bucket.git" scoop-repo
+          git clone "https://x-access-token:${PACKAGE_DISTRIBUTION_TOKEN}@github.com/vmvarela/scoop-bucket.git" scoop-repo
           mkdir -p scoop-repo/bucket
           cp sql-pipe.json scoop-repo/bucket/sql-pipe.json
           cd scoop-repo
@@ -774,13 +774,13 @@ jobs:
   # always points to the latest release.
   # Requires:
   #   1. Repository: vmvarela/nix-packages
-  #   2. Secret: NIX_PACKAGES_TOKEN (PAT with contents:write on vmvarela/nix-packages)
+  #   2. Secret: PACKAGE_DISTRIBUTION_TOKEN (PAT with contents:write on the target repository)
   update-nix:
     name: Update Nix package
     needs: publish-release
     runs-on: ubuntu-latest
     env:
-      HAS_NIX_TOKEN: ${{ secrets.NIX_PACKAGES_TOKEN != '' }}
+      HAS_NIX_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN != '' }}
     steps:
       - name: Download sha256sums.txt
         if: ${{ env.HAS_NIX_TOKEN == 'true' }}
@@ -795,7 +795,7 @@ jobs:
       - name: Push updated versions.json to nix-packages
         if: ${{ env.HAS_NIX_TOKEN == 'true' }}
         env:
-          NIX_PACKAGES_TOKEN: ${{ secrets.NIX_PACKAGES_TOKEN }}
+          PACKAGE_DISTRIBUTION_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
 
@@ -833,7 +833,7 @@ jobs:
           cat versions.json
 
           git clone \
-            "https://x-access-token:${NIX_PACKAGES_TOKEN}@github.com/vmvarela/nix-packages.git" \
+            "https://x-access-token:${PACKAGE_DISTRIBUTION_TOKEN}@github.com/vmvarela/nix-packages.git" \
             nix-repo
           cp versions.json nix-repo/pkgs/sql-pipe/versions.json
           cd nix-repo
@@ -849,18 +849,18 @@ jobs:
   # and deploys to GitHub Pages so users can install via apt.
   # Requires:
   #   1. Repository: vmvarela/apt-packages (GitHub Pages enabled)
-  #   2. Secret: APT_PACKAGES_TOKEN (PAT with contents:write on vmvarela/apt-packages)
+  #   2. Secret: PACKAGE_DISTRIBUTION_TOKEN (PAT with contents:write on the target repository)
   update-apt:
     name: Update APT repository
     needs: publish-release
     runs-on: ubuntu-latest
     env:
-      HAS_APT_TOKEN: ${{ secrets.APT_PACKAGES_TOKEN != '' }}
+      HAS_APT_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN != '' }}
     steps:
       - name: Dispatch to apt-packages
         if: ${{ env.HAS_APT_TOKEN == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.APT_PACKAGES_TOKEN }}
+          GH_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           gh api repos/vmvarela/apt-packages/dispatches \
@@ -874,18 +874,18 @@ jobs:
   # and deploys to GitHub Pages so users can install via dnf/yum.
   # Requires:
   #   1. Repository: vmvarela/rpm-packages (GitHub Pages enabled)
-  #   2. Secret: RPM_PACKAGES_TOKEN (PAT with contents:write on vmvarela/rpm-packages)
+  #   2. Secret: PACKAGE_DISTRIBUTION_TOKEN (PAT with contents:write on the target repository)
   update-rpm:
     name: Update RPM repository
     needs: publish-release
     runs-on: ubuntu-latest
     env:
-      HAS_RPM_TOKEN: ${{ secrets.RPM_PACKAGES_TOKEN != '' }}
+      HAS_RPM_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN != '' }}
     steps:
       - name: Dispatch to rpm-packages
         if: ${{ env.HAS_RPM_TOKEN == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.RPM_PACKAGES_TOKEN }}
+          GH_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           gh api repos/vmvarela/rpm-packages/dispatches \
@@ -899,18 +899,18 @@ jobs:
   # and deploys to GitHub Pages so Alpine Linux users can install via apk.
   # Requires:
   #   1. Repository: vmvarela/apk-packages (GitHub Pages enabled)
-  #   2. Secret: APK_PACKAGES_TOKEN (PAT with contents:write on vmvarela/apk-packages)
+  #   2. Secret: PACKAGE_DISTRIBUTION_TOKEN (PAT with contents:write on the target repository)
   update-apk:
     name: Update APK repository
     needs: publish-release
     runs-on: ubuntu-latest
     env:
-      HAS_APK_TOKEN: ${{ secrets.APK_PACKAGES_TOKEN != '' }}
+      HAS_APK_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN != '' }}
     steps:
       - name: Dispatch to apk-packages
         if: ${{ env.HAS_APK_TOKEN == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.APK_PACKAGES_TOKEN }}
+          GH_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           gh api repos/vmvarela/apk-packages/dispatches \
