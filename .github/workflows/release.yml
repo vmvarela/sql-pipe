@@ -318,7 +318,7 @@ jobs:
   # ── Update AUR package ──────────────────────────────────────────────
   # Requires:
   #   1. AUR package registered: https://aur.archlinux.org/packages/sql-pipe
-  #   2. Secret: AUR_SSH_KEY (SSH private key authorized on AUR)
+  #   2. Secret: PACKAGE_SSH_KEY (SSH private key authorized on AUR)
   update-aur:
     name: Update AUR package
     needs: publish-release
@@ -384,7 +384,7 @@ jobs:
           pkgbuild: ./PKGBUILD
           commit_username: vmvarela
           commit_email: vmvarela@gmail.com
-          ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
+          ssh_private_key: ${{ secrets.PACKAGE_SSH_KEY }}
           commit_message: "Update to ${{ github.ref_name }}"
 
   # ── Build and upload .deb packages ─────────────────────────────────
