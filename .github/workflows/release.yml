@@ -58,13 +58,6 @@ jobs:
           - target: aarch64-freebsd
             asset: sql-pipe-aarch64-freebsd
             ext: ""
-          # NetBSD
-          - target: x86_64-netbsd
-            asset: sql-pipe-x86_64-netbsd
-            ext: ""
-          - target: aarch64-netbsd
-            asset: sql-pipe-aarch64-netbsd
-            ext: ""
 
     steps:
       - uses: actions/checkout@v7
@@ -730,7 +723,7 @@ jobs:
             sql-pipe-riscv64-linux sql-pipe-x86-linux sql-pipe-x86_64-macos \
             sql-pipe-aarch64-macos sql-pipe-x86_64-windows.exe sql-pipe-aarch64-windows.exe \
             sql-pipe-x86-windows.exe sql-pipe-x86_64-freebsd sql-pipe-aarch64-freebsd \
-            sql-pipe-x86_64-netbsd sql-pipe-aarch64-netbsd sql-pipe.1.gz; do
+            sql-pipe.1.gz; do
             [ -f "$name" ] || { echo "::error::missing asset $name" >&2; exit 1; }
           done
           # Exclude any pre-existing sha256sums.txt to avoid self-referencing
