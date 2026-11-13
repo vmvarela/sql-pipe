@@ -609,13 +609,11 @@ jobs:
           token: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
 
   # ── Update Scoop bucket ──────────────────────────────────────────────
-  # Pushes an updated Scoop manifest to the vmvarela/scoop-bucket
-  # centralized bucket repository so Windows users can install via:
+  # Dispatches to vmvarela/scoop-bucket, which regenerates bucket/sql-pipe.json with
+  # the shared publisher and commits it, so Windows users can install via:
   #   scoop bucket add vmvarela https://github.com/vmvarela/scoop-bucket
   #   scoop install sql-pipe
-  # Requires:
-  #   1. Repository: vmvarela/scoop-bucket (with bucket/sql-pipe.json)
-  #   2. Secret: PACKAGE_DISTRIBUTION_TOKEN (PAT with contents:write on the target repository)
+  # Requires: secret PACKAGE_DISTRIBUTION_TOKEN (contents:write on the bucket).
   update-scoop:
     name: Update Scoop bucket
     needs: publish-release
@@ -623,77 +621,17 @@ jobs:
     env:
       HAS_SCOOP_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN != '' }}
     steps:
-      - name: Download Windows artifacts
-        if: ${{ env.HAS_SCOOP_TOKEN == 'true' }}
-        uses: actions/download-artifact@v8
-        with:
-          path: artifacts/
-          merge-multiple: true
-
-      - name: Generate manifest and push to bucket
+      - name: Dispatch to scoop-bucket
         if: ${{ env.HAS_SCOOP_TOKEN == 'true' }}
         env:
-          PACKAGE_DISTRIBUTION_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
+          GH_TOKEN: ${{ secrets.PACKAGE_DISTRIBUTION_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-
-          SHA_X64=$(sha256sum artifacts/sql-pipe-x86_64-windows.exe   | awk '{print $1}')
-          SHA_X86=$(sha256sum artifacts/sql-pipe-x86-windows.exe      | awk '{print $1}')
-          SHA_ARM64=$(sha256sum artifacts/sql-pipe-aarch64-windows.exe | awk '{print $1}')
-
-          cat > sql-pipe.json <<MANIFEST
-          {
-              "version": "${VERSION}",
-              "description": "Read CSV from stdin, query with SQL, write CSV to stdout",
-              "homepage": "https://github.com/vmvarela/sql-pipe",
-              "license": "MIT",
-              "architecture": {
-                  "64bit": {
-                      "url": "https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/sql-pipe-x86_64-windows.exe#/sql-pipe.exe",
-                      "hash": "${SHA_X64}"
-                  },
-                  "32bit": {
-                      "url": "https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/sql-pipe-x86-windows.exe#/sql-pipe.exe",
-                      "hash": "${SHA_X86}"
-                  },
-                  "arm64": {
-                      "url": "https://github.com/vmvarela/sql-pipe/releases/download/v${VERSION}/sql-pipe-aarch64-windows.exe#/sql-pipe.exe",
-                      "hash": "${SHA_ARM64}"
-                  }
-              },
-              "bin": "sql-pipe.exe",
-              "checkver": "github",
-              "autoupdate": {
-                  "architecture": {
-                      "64bit": {
-                          "url": "https://github.com/vmvarela/sql-pipe/releases/download/v\$version/sql-pipe-x86_64-windows.exe#/sql-pipe.exe"
-                      },
-                      "32bit": {
-                          "url": "https://github.com/vmvarela/sql-pipe/releases/download/v\$version/sql-pipe-x86-windows.exe#/sql-pipe.exe"
-                      },
-                      "arm64": {
-                          "url": "https://github.com/vmvarela/sql-pipe/releases/download/v\$version/sql-pipe-aarch64-windows.exe#/sql-pipe.exe"
-                      }
-                  },
-                  "hash": {
-                      "url": "https://github.com/vmvarela/sql-pipe/releases/download/v\$version/sha256sums.txt"
-                  }
-              }
-          }
-          MANIFEST
-
-          echo "==> Generated Scoop manifest for sql-pipe ${VERSION}:"
-          cat sql-pipe.json
-
-          git clone "https://x-access-token:${PACKAGE_DISTRIBUTION_TOKEN}@github.com/vmvarela/scoop-bucket.git" scoop-repo
-          mkdir -p scoop-repo/bucket
-          cp sql-pipe.json scoop-repo/bucket/sql-pipe.json
-          cd scoop-repo
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add bucket/sql-pipe.json
-          git diff --cached --quiet || git commit -m "sql-pipe ${VERSION}"
-          git push
+          gh api repos/vmvarela/scoop-bucket/dispatches \
+            --method POST \
+            -f event_type=update-sql-pipe \
+            -F client_payload[version]="${VERSION}"
+          echo "Dispatched update-sql-pipe v${VERSION} to vmvarela/scoop-bucket"
 
   # ── Generate final SHA256 checksums ────────────────────────────────
   # Runs after all packaging jobs (all must succeed) so sha256sums.txt covers
