@@ -954,7 +954,11 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
             .no_stdin = no_stdin,
             .delimiter = delimiter,
             .header = header,
-            .input_format = effective_input_format,
+            .input_format = switch (mode) {
+                // Pipeline modes use this for stdin; files carry their own resolved formats.
+                .stats, .schema => input_format,
+                else => effective_input_format,
+            },
             .input_format_explicit = input_format_explicit,
             .output_format = output_format,
             .max_rows = max_rows,

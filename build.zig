@@ -3825,6 +3825,33 @@ pub fn build(b: *std.Build) void {
     test_repl_incompat_inspect.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_incompat_inspect.step);
 
+    // Integration test 240a: inspect stats uses the global format for stdin with a JSON file
+    const test_inspect_stats_mixed_formats = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --inspect stats tests/fixtures/products.json 2>/dev/null) || exit 1
+        \\echo "$result" | grep -q 'category' && echo "$result" | grep -q '│ a' && echo "$result" | grep -q '│ b'
+    });
+    test_inspect_stats_mixed_formats.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_stats_mixed_formats.step);
+
+    // Integration test 240b: inspect schema loads a mixed-format stdin and file
+    const test_inspect_schema_mixed_formats = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(printf 'a,b\n1,2\n' | ./zig-out/bin/sql-pipe --inspect schema tests/fixtures/products.json 2>/dev/null) || exit 1
+        \\echo "$result" | grep -Fq 'CREATE TABLE "products"' && echo "$result" | grep -Fq 'CREATE TABLE "stdin" ("a" INTEGER, "b" INTEGER);'
+    });
+    test_inspect_schema_mixed_formats.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_schema_mixed_formats.step);
+
+    // Integration test 240c: streaming inspect modes still use the file's inferred format
+    const test_inspect_columns_file_format = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\result=$(./zig-out/bin/sql-pipe --inspect columns tests/fixtures/products.json 2>/dev/null) || exit 1
+        \\echo "$result" | diff - <(printf 'name\nprice\ncategory\nstock\n')
+    });
+    test_inspect_columns_file_format.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_inspect_columns_file_format.step);
+
     // Integration test 203: --repl incompatible with -f
     const test_repl_incompat_file = b.addSystemCommand(&.{
         "bash", "-c",
