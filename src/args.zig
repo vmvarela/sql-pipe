@@ -940,6 +940,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
         if (gop.found_existing) return error.DuplicateTableName;
     }
 
+    // Reject the conflict before --inspect dispatch returns.
+    if (repl_mode and inspect_mode != null)
+        return error.ReplIncompatibleMode;
+
     // --inspect mode: dispatch to the appropriate inspect sub-mode
     if (inspect_mode) |mode| {
         return .{ .inspect = ParsedArgs{
@@ -977,9 +981,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) (SqlP
 
     // --repl validation: reject incompatible flags
     if (repl_mode) {
-        if (inspect_mode != null) {
-            return error.ReplIncompatibleMode;
-        }
         if (query_file != null) {
             return error.ReplWithQueryFile;
         }
