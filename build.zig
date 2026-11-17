@@ -3807,13 +3807,23 @@ pub fn build(b: *std.Build) void {
     test_repl_table_flag.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_table_flag.step);
 
-    // Integration test 202: --repl incompatible with --columns
+    // Integration test 202: --repl with --columns returns the usage error
     const test_repl_incompat_columns = b.addSystemCommand(&.{
         "bash", "-c",
-        \\! ./zig-out/bin/sql-pipe --repl --columns >/dev/null 2>/dev/null
+        \\msg=$(./zig-out/bin/sql-pipe --repl --columns </dev/null 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q '^error: --repl cannot be combined with other special modes$' && echo "$msg" | grep -q '^EXIT:1$'
     });
     test_repl_incompat_columns.step.dependOn(b.getInstallStep());
     test_step.dependOn(&test_repl_incompat_columns.step);
+
+    // Integration test 238: --repl with --inspect returns the usage error
+    const test_repl_incompat_inspect = b.addSystemCommand(&.{
+        "bash", "-c",
+        \\msg=$(./zig-out/bin/sql-pipe --repl --inspect columns </dev/null 2>&1 >/dev/null; echo "EXIT:$?")
+        \\echo "$msg" | grep -q '^error: --repl cannot be combined with other special modes$' && echo "$msg" | grep -q '^EXIT:1$'
+    });
+    test_repl_incompat_inspect.step.dependOn(b.getInstallStep());
+    test_step.dependOn(&test_repl_incompat_inspect.step);
 
     // Integration test 203: --repl incompatible with -f
     const test_repl_incompat_file = b.addSystemCommand(&.{
